@@ -1,6 +1,6 @@
 # fff-router
 
-`fff-router` is the V2 shared search service for FFF-backed code search.
+`fff-router` is the shared search service for FFF-backed code search.
 
 It exposes exactly three public tools:
 
@@ -10,7 +10,7 @@ It exposes exactly three public tools:
 
 The repo now contains:
 
-- a public V2 API surface
+- a public API surface
 - `within` resolution helpers
 - generic routing/lifecycle planning
 - a shared runtime manager
@@ -39,7 +39,7 @@ Supported output modes:
 - `compact` (default)
 - `json`
 
-Initial V2 pagination is intentionally deferred:
+Initial pagination is intentionally deferred:
 
 - request `cursor` must be omitted or `null`
 - responses always return `next_cursor: null`
@@ -90,7 +90,7 @@ Direct raw stdio execution of `fff-router-mcp` is for debugging only.
 
 ## Repo layout
 
-### Core V2 modules
+### Core modules
 
 - `lib/fff-router/public-api.ts` — public tool schemas and input normalization
 - `lib/fff-router/resolve-within.ts` — client/server `within` helpers
@@ -196,7 +196,7 @@ Do **not** bypass mcporter if shared reuse is desired.
 
 ## Pi integration
 
-The supported Pi path for V2 is a thin forwarder at:
+The supported Pi path is a thin forwarder at:
 
 - `~/.pi/agent/extensions/pi-fff-search/index.ts`
 
@@ -213,18 +213,7 @@ It should **not** own:
 - runtime caches
 - upstream FFF process management
 
-Direct Pi connection to raw `fff-router-mcp` is not the intended initial V2 path.
-
-## Notes on older V1 files
-
-The repo still contains V1 planning files and tests while V2 is being completed, but the active V2 path is centered on:
-
-- `public-api.ts`
-- `resolve-within.ts`
-- `runtime-manager.ts`
-- `adapters/*`
-- `coordinator.ts`
-- `mcp-server.ts`
+Direct Pi connection to raw `fff-router-mcp` is not the intended initial path.
 
 ## Current tool names
 

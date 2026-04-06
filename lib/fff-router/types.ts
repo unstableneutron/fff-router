@@ -1,6 +1,3 @@
-export type RouterTool = "search_code" | "find_files";
-export type OutputMode = "content" | "files" | "count";
-
 export type RouterErrorCode =
 	| "SEARCH_PATH_NOT_ABSOLUTE"
 	| "SEARCH_PATH_NOT_FOUND"
