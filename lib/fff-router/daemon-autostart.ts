@@ -82,7 +82,7 @@ async function withStartupLock<T>(callback: () => Promise<T>, env?: NodeJS.Proce
         continue;
       }
 
-      if (Date.now() - startedAt > 5_000) {
+      if (Date.now() - startedAt > 15_000) {
         throw new Error("timed out while waiting for the daemon startup lock");
       }
 
@@ -91,13 +91,31 @@ async function withStartupLock<T>(callback: () => Promise<T>, env?: NodeJS.Proce
   }
 }
 
-function spawnDaemon(env?: NodeJS.ProcessEnv): void {
+function isRecoverableHealthError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  const code = typeof error === "object" && error && "code" in error ? String(error.code) : "";
+  return (
+    code === "ECONNREFUSED" ||
+    code === "ConnectionRefused" ||
+    error.message.includes("fetch") ||
+    error.message.includes("ECONNREFUSED") ||
+    error.message.includes("ConnectionRefused") ||
+    error.message.includes("Unable to connect") ||
+    error.message.includes("healthcheck failed")
+  );
+}
+
+function spawnDaemon(env?: NodeJS.ProcessEnv) {
   const child = spawnChildProcess(process.execPath, [daemonEntrypointPath()], {
     env: env ?? process.env,
-    detached: true,
-    stdio: "ignore",
+    stdio: ["ignore", "pipe", "pipe"],
   });
-  child.unref();
+  child.stdout?.destroy();
+  child.stderr?.destroy();
+  return child;
 }
 
 async function waitForDaemonReady(env?: NodeJS.ProcessEnv): Promise<void> {
@@ -119,20 +137,28 @@ export async function ensureDaemonRunning(env?: NodeJS.ProcessEnv): Promise<void
   try {
     await checkDaemonHealth(env);
     return;
-  } catch {
-    // continue
+  } catch (error) {
+    if (!isRecoverableHealthError(error)) {
+      throw error;
+    }
   }
 
   await withStartupLock(async () => {
     try {
       await checkDaemonHealth(env);
       return;
-    } catch {
-      // continue
+    } catch (error) {
+      if (!isRecoverableHealthError(error)) {
+        throw error;
+      }
     }
 
-    spawnDaemon(env);
-    await waitForDaemonReady(env);
+    const child = spawnDaemon(env);
+    try {
+      await waitForDaemonReady(env);
+    } finally {
+      child.unref();
+    }
   }, env);
 }
 

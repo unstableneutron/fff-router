@@ -105,6 +105,26 @@ describe("buildWrapperInvocation", () => {
       }),
     ).rejects.toThrow(/no longer supported/i);
   });
+
+  test("rejects legacy mcporter target env override explicitly", async () => {
+    const original = process.env.FFF_ROUTER_MCPORTER_TARGET;
+    process.env.FFF_ROUTER_MCPORTER_TARGET = "legacy";
+    try {
+      await expect(
+        buildWrapperInvocation({
+          tool: "fff_find_files",
+          argv: ["router"],
+          callerCwd: "/repo",
+        }),
+      ).rejects.toThrow(/no longer supported/i);
+    } finally {
+      if (original === undefined) {
+        delete process.env.FFF_ROUTER_MCPORTER_TARGET;
+      } else {
+        process.env.FFF_ROUTER_MCPORTER_TARGET = original;
+      }
+    }
+  });
 });
 
 describe("runWrapper", () => {

@@ -56,9 +56,9 @@ async function writeDaemonMetadata(path: string, metadata: DaemonMetadata): Prom
   await writeFile(path, `${JSON.stringify(metadata, null, 2)}\n`);
 }
 
-function defaultCoordinator(): SearchCoordinator {
+function defaultCoordinator(env?: NodeJS.ProcessEnv): SearchCoordinator {
   return createSearchCoordinator({
-    config: loadRouterConfig(),
+    config: loadRouterConfig({ env }),
     primaryAdapter: createFffMcpAdapter(),
     fallbackAdapter: createRgFdAdapter(),
     runtimeManager: new RuntimeManager(),
@@ -72,7 +72,7 @@ export async function startHttpDaemon(args: StartHttpDaemonArgs = {}) {
     port: args.port ?? baseConfig.port,
     mcpPath: args.mcpPath ?? baseConfig.mcpPath,
   };
-  const coordinator = args.coordinator ?? defaultCoordinator();
+  const coordinator = args.coordinator ?? defaultCoordinator(args.env);
   const paths = getDaemonPaths({ env: args.env });
   let metadata: DaemonMetadata | null = null;
 
@@ -115,6 +115,9 @@ export async function startHttpDaemon(args: StartHttpDaemonArgs = {}) {
       await mcpServer.connect(transport);
       const parsedBody = req.method === "POST" ? await readJsonBody(req) : undefined;
       await transport.handleRequest(req, res, parsedBody);
+      if (res.writableEnded || res.destroyed) {
+        cleanup();
+      }
     } catch (error) {
       if (!res.headersSent) {
         res.writeHead(500, { "content-type": "application/json" });
