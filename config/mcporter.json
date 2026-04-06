@@ -1,0 +1,11 @@
+{
+	"mcpServers": {
+		"fff-router": {
+			"command": "bun",
+			"args": ["run", "bin/fff-router-mcp.ts"],
+			"cwd": "/Users/thinh/Projects/fff-router",
+			"lifecycle": "keep-alive",
+			"description": "Shared fff-router MCP target for machine-wide search reuse."
+		}
+	}
+}

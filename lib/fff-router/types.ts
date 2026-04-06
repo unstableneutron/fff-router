@@ -223,6 +223,12 @@ export type RoutingLifecyclePlan = {
 	evicted: string[];
 };
 
+export type SearchCoordinatorResult = Result<PublicToolResult, PublicError>;
+
+export interface SearchCoordinatorLike {
+	execute(request: PublicToolRequest): Promise<SearchCoordinatorResult>;
+}
+
 export type RouterResponse = {
 	backend_mode: "persistent" | "ephemeral";
 	root_type: "git" | "non-git";

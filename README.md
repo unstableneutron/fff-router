@@ -1,94 +1,122 @@
 # fff-router
 
-A planner for routing FFF-style search requests to repo-scoped or allowlisted non-git search backends.
+`fff-router` is the V2 shared search service for FFF-backed code search.
 
-## What this project is
+It exposes exactly three public tools:
 
-`fff-router` is the **planning layer** for an AI-agent-friendly search system.
+- `fff_find_files`
+- `fff_search_terms`
+- `fff_grep`
 
-Given a raw request like:
+The repo now contains:
 
-- `search_code` with an absolute `search_path` and `any_of` literals, or
-- `find_files` with an absolute `search_path` and a fuzzy `query`
+- a public V2 API surface
+- `within` resolution helpers
+- generic routing/lifecycle planning
+- a shared runtime manager
+- pluggable backend adapters
+- a search coordinator
+- an MCP stdio server: `fff-router-mcp`
+- thin CLI wrappers that call the shared service through `mcporter`
 
-it will:
+## Architecture
 
-1. validate and normalize the request
-2. canonicalize the filesystem path
-3. decide which persistence root should own the search
-4. decide whether the request should:
-   - reuse a persistent daemon
-   - start a persistent daemon
-   - run ephemerally
-5. return the **next planner state** plus the routing decision
+### Public contract
 
-## What this project is not
+The public tool shapes are structured, not stringly.
 
-This repo currently does **not**:
+Common fields:
 
-- spawn `fff-mcp`
-- manage real subprocesses
-- execute the actual search
-- persist planner state to disk
+- `within`
+- `extensions`
+- `exclude_paths`
+- `limit`
+- `cursor`
+- `output_mode`
 
-It is intentionally a **pure planner**.
+Supported output modes:
 
-That means the caller owns:
+- `compact` (default)
+- `json`
 
-- the in-memory state store
-- serialization / locking around state updates
-- process execution
-- daemon lifecycle side effects
+Initial V2 pagination is intentionally deferred:
 
-## Current V1 policy
+- request `cursor` must be omitted or `null`
+- responses always return `next_cursor: null`
 
-### Request shape
+### `within` semantics
 
-Agent-facing request surface:
+`within` is a client-side scope field.
 
-- `search_path` — required absolute path
-- `search_code.any_of` — required list of literal strings
-- `find_files.query` — required string
-- `exclude_paths` — optional literal descendant paths
-- `extensions` — optional literal suffix filters
-- pagination / output fields where applicable
+Clients must:
 
-V1 intentionally does **not** support:
+- default omitted `within` to the caller cwd
+- resolve relative `within` against the caller cwd
+- send the already-resolved absolute value to `fff-router-mcp`
 
-- `cwd`
-- include globs
-- exclude globs
-- include paths
-- regex mode in the main search request shape
+Server-side behavior:
 
-### Routing / persistence policy
+- validate/canonicalize the already-resolved absolute `within`
+- if `within` is a file:
+  - `base_path` becomes the file’s parent directory
+  - the coordinator applies an implicit single-file restriction internally
 
-- **Git roots**
-  - routed to the top-level git root
-  - persistent immediately
-  - TTL: **60 minutes**
+### Backend policy
 
-- **Allowlisted non-git roots**
-  - routed by allowlist prefix + `first-child-root`
-  - first hit is ephemeral
-  - promote to persistent after **2 hits in 10 minutes**
-  - TTL: **15 minutes**
+Primary path:
 
-- **Outside git + outside allowlist**
-  - explicitly blocked
+- `fff-mcp` / FFF-backed execution
 
-- **Exact allowlist prefix**
-  - blocked in V1
-  - only first-child roots are valid persistence roots
+Fallback path:
 
-## Project layout
+- `rg` / `fd`
 
-- `lib/fff-router/schema.ts` — request validation and normalization
-- `lib/fff-router/resolve-path.ts` — `search_path` canonicalization and git-root discovery
-- `lib/fff-router/routing.ts` — root derivation and allowlist policy
-- `lib/fff-router/daemon-state.ts` — promotion, TTL, and eviction planning
-- `lib/fff-router/router.ts` — top-level `planRequest()` orchestration
-- `lib/fff-router/*.test.ts` — unit and planner tests
+Fallback happens only on backend failure, not on zero results.
+
+### Shared runtime topology
+
+`fff-router-mcp` remains a plain stdio MCP server.
+
+Shared machine-wide reuse happens through `mcporter` with the canonical target name:
+
+- `fff-router`
+
+All supported clients should use that same target if they want shared warm reuse:
+
+- the CLI wrappers in this repo
+- the Pi thin forwarder
+
+Direct raw stdio execution of `fff-router-mcp` is for debugging only.
+
+## Repo layout
+
+### Core V2 modules
+
+- `lib/fff-router/public-api.ts` — public tool schemas and input normalization
+- `lib/fff-router/resolve-within.ts` — client/server `within` helpers
+- `lib/fff-router/routing.ts` — persistence root derivation
+- `lib/fff-router/daemon-state.ts` — lifecycle planning and eviction policy
+- `lib/fff-router/runtime-manager.ts` — shared runtime registry and startup dedupe
+- `lib/fff-router/adapters/fff-mcp.ts` — primary FFF-backed adapter
+- `lib/fff-router/adapters/rg-fd.ts` — fallback adapter
+- `lib/fff-router/coordinator.ts` — top-level search coordinator
+- `lib/fff-router/mcp-tools.ts` — MCP tool definitions and execution bridge
+- `lib/fff-router/mcp-server.ts` — MCP server assembly
+
+### Entrypoints
+
+- `bin/fff-router-mcp.ts` — stdio MCP server
+- `bin/fff-find-files.ts` — mcporter-backed wrapper
+- `bin/fff-search-terms.ts` — mcporter-backed wrapper
+- `bin/fff-grep.ts` — mcporter-backed wrapper
+
+### Shared mcporter target config
+
+- `config/mcporter.json`
+
+This repo config defines the shared target name:
+
+- `fff-router`
 
 ## Install
 
@@ -96,260 +124,107 @@ V1 intentionally does **not** support:
 bun install
 ```
 
-## Run tests
+## Verify
 
 ```bash
 bun test
 ```
 
-## Core API
+## Debug-run the MCP server directly
 
-### `planRequest()`
+This is useful for local debugging only.
 
-Main entry point:
-
-```ts
-import { planRequest } from "./lib/fff-router/router";
-import { resolveSearchPath } from "./lib/fff-router/resolve-path";
-import type { DaemonRegistryState, RouterConfig } from "./lib/fff-router/types";
+```bash
+bun run bin/fff-router-mcp.ts
 ```
 
-It takes:
+## CLI wrappers
 
-- `rawRequest` — JSON-like input from a caller
-- `config` — allowlist + promotion/TTL/cap policy
-- `state` — current planner state
-- `resolvePath` — async dependency used to canonicalize `search_path`
+These wrappers are thin clients.
 
-It returns either:
+They:
 
-- `{ ok: true, value: { request, response, action, nextState, evicted } }`, or
-- `{ ok: false, error: { code, message } }`
+- default omitted `within` to the wrapper caller cwd
+- resolve relative `within` against the wrapper caller cwd
+- call the shared mcporter target `fff-router`
 
-## Example configuration
+They do **not** own search policy or backend management.
 
-```ts
-import type { RouterConfig } from "./lib/fff-router/types";
+### Help
 
-const config: RouterConfig = {
-  allowlistedNonGitPrefixes: [
-    {
-      prefix: "/Users/thinh/.local/share/mise/installs",
-      mode: "first-child-root",
-    },
-  ],
-  promotion: {
-    windowMs: 10 * 60 * 1000,
-    requiredHits: 2,
-  },
-  ttl: {
-    gitMs: 60 * 60 * 1000,
-    nonGitMs: 15 * 60 * 1000,
-  },
-  limits: {
-    maxPersistentDaemons: 12,
-    maxPersistentNonGitDaemons: 4,
-  },
-};
+```bash
+bun run bin/fff-find-files.ts --help
+bun run bin/fff-search-terms.ts --help
+bun run bin/fff-grep.ts --help
 ```
 
-## Example: planning a `search_code` request inside a git repo
+### Example usage
 
-```ts
-import { planRequest } from "./lib/fff-router/router";
-import { resolveSearchPath } from "./lib/fff-router/resolve-path";
-import type { DaemonRegistryState } from "./lib/fff-router/types";
-
-const state: DaemonRegistryState = {
-  daemons: {},
-  nonGitRecentHits: {},
-  now: Date.now(),
-};
-
-const result = await planRequest({
-  rawRequest: {
-    tool: "search_code",
-    search_path: "/Users/thinh/Projects/fff-router/lib",
-    any_of: ["planRequest", "resolveSearchPath"],
-    exclude_paths: ["generated"],
-    extensions: ["ts"],
-    context_lines: 1,
-    max_results: 20,
-    output_mode: "content",
-  },
-  config,
-  state,
-  resolvePath: resolveSearchPath,
-});
-
-if (!result.ok) {
-  console.error(result.error);
-} else {
-  console.log(result.value.action);
-  console.log(result.value.response);
-  console.log(result.value.nextState);
-}
+```bash
+bun run bin/fff-find-files.ts router --within src --extension ts
+bun run bin/fff-search-terms.ts router coordinator --within lib --context-lines 1
+bun run bin/fff-grep.ts 'plan(Request)?' --within lib --case-sensitive
 ```
 
-Typical shape of a successful response:
+### Shared mcporter target
 
-```ts
-{
-  action: { type: "start-persistent", key: "/Users/thinh/Projects/fff-router" },
-  response: {
-    backend_mode: "persistent",
-    root_type: "git",
-    persistence_root: "/Users/thinh/Projects/fff-router",
-    search_scope: "/Users/thinh/Projects/fff-router/lib"
-  },
-  nextState: {
-    daemons: {
-      "/Users/thinh/Projects/fff-router": {
-        key: "/Users/thinh/Projects/fff-router",
-        persistenceRoot: "/Users/thinh/Projects/fff-router",
-        rootType: "git",
-        status: "running",
-        createdAt: 1712345678901,
-        lastUsedAt: 1712345678901,
-        ttlMs: 3600000
-      }
-    },
-    nonGitRecentHits: {},
-    now: 1712345678901
-  }
-}
-```
+The wrappers use:
 
-## Example: planning a `find_files` request in an allowlisted non-git tree
+- target name `fff-router`
+- config file `config/mcporter.json`
 
-```ts
-import { planRequest } from "./lib/fff-router/router";
-import { resolveSearchPath } from "./lib/fff-router/resolve-path";
-import type { DaemonRegistryState } from "./lib/fff-router/types";
+If you override the target, use:
 
-let state: DaemonRegistryState = {
-  daemons: {},
-  nonGitRecentHits: {},
-  now: Date.now(),
-};
+- `--target <name>` or
+- `FFF_ROUTER_MCPORTER_TARGET=<name>`
 
-const first = await planRequest({
-  rawRequest: {
-    tool: "find_files",
-    search_path: "/Users/thinh/.local/share/mise/installs/npm-gitchamber/latest",
-    query: "finder",
-    extensions: ["ts"],
-  },
-  config,
-  state,
-  resolvePath: resolveSearchPath,
-});
+## mcporter topology
 
-if (!first.ok) {
-  throw new Error(first.error.message);
-}
+If you want machine-wide shared reuse, all clients must use the same mcporter-managed target definition.
 
-console.log(first.value.action.type);
-// => "run-ephemeral"
+In this repo that means:
 
-state = {
-  ...first.value.nextState,
-  now: state.now + 5 * 60 * 1000,
-};
+- target name: `fff-router`
+- config: `config/mcporter.json`
 
-const second = await planRequest({
-  rawRequest: {
-    tool: "find_files",
-    search_path: "/Users/thinh/.local/share/mise/installs/npm-gitchamber/latest",
-    query: "finder",
-    extensions: ["ts"],
-  },
-  config,
-  state,
-  resolvePath: resolveSearchPath,
-});
+The wrappers and the Pi forwarder should both use that same target/config path.
 
-if (!second.ok) {
-  throw new Error(second.error.message);
-}
+Do **not** bypass mcporter if shared reuse is desired.
 
-console.log(second.value.action.type);
-// => "start-persistent"
-```
+## Pi integration
 
-## Lower-level APIs
+The supported Pi path for V2 is a thin forwarder.
 
-You can also use the modules independently.
+It should:
 
-### Validate / normalize only
+- default omitted `within` to the Pi start cwd
+- resolve relative `within` against the Pi start cwd
+- forward the already-resolved request to the shared mcporter target `fff-router`
 
-```ts
-import { parseRouterRequest } from "./lib/fff-router/schema";
+It should **not** own:
 
-const parsed = parseRouterRequest({
-  tool: "find_files",
-  search_path: "/tmp/project",
-  query: "auth model",
-});
-```
+- public schemas
+- search policy
+- runtime caches
+- upstream FFF process management
 
-### Resolve filesystem path only
+Direct Pi connection to raw `fff-router-mcp` is not the intended initial V2 path.
 
-```ts
-import { resolveSearchPath } from "./lib/fff-router/resolve-path";
+## Notes on older V1 files
 
-const resolved = await resolveSearchPath("/Users/thinh/Projects/fff-router/lib");
-```
+The repo still contains V1 planning files and tests while V2 is being completed, but the active V2 path is centered on:
 
-### Plan daemon action only
+- `public-api.ts`
+- `resolve-within.ts`
+- `runtime-manager.ts`
+- `adapters/*`
+- `coordinator.ts`
+- `mcp-server.ts`
 
-```ts
-import { planDaemonAction } from "./lib/fff-router/daemon-state";
-```
+## Current tool names
 
-Useful when a higher layer already knows the routing target and only wants TTL / promotion / eviction planning.
+The public names are locked:
 
-## Error codes
-
-Current structured error codes:
-
-- `SEARCH_PATH_NOT_ABSOLUTE`
-- `SEARCH_PATH_NOT_FOUND`
-- `SEARCH_PATH_REALPATH_FAILED`
-- `INVALID_REQUEST`
-- `OUTSIDE_ALLOWED_SCOPE`
-- `DAEMON_START_FAILED`
-- `DAEMON_UNAVAILABLE`
-
-## Important integration note
-
-`planRequest()` is intentionally pure.
-
-If two callers plan from the same stale `state`, they can both decide to start or reuse inconsistent daemons. The caller must therefore **serialize planner state updates** around:
-
-1. read current state
-2. call `planRequest()`
-3. apply returned `nextState`
-4. run any side effects
-
-This repo does not implement that lock/serialization layer yet.
-
-## Current status
-
-The planner implementation is covered by Bun tests and currently verifies:
-
-- strict request validation
-- path canonicalization
-- git-root discovery
-- exact-prefix allowlist blocking
-- non-git promotion windows
-- TTL expiration boundary behavior
-- mixed-cap eviction behavior
-- planner-level error propagation
-
----
-
-If you want, the next natural step is to add either:
-
-1. a small CLI demo around `planRequest()`, or
-2. a real daemon/executor layer that turns planner decisions into `fff-mcp` process actions.
+- `fff_find_files`
+- `fff_search_terms`
+- `fff_grep`
