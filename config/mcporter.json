@@ -1,10 +1,10 @@
 {
-	"mcpServers": {
-		"fff-router": {
-			"command": "bun",
-			"args": ["../bin/fff-router-mcp.ts"],
-			"lifecycle": "keep-alive",
-			"description": "Shared fff-router MCP target for machine-wide search reuse."
-		}
-	}
+  "mcpServers": {
+    "fff-router": {
+      "command": "bun",
+      "args": ["../bin/fff-router-mcp.ts"],
+      "lifecycle": "ephemeral",
+      "description": "fff-router MCP target for wrapper and Pi integration."
+    }
+  }
 }

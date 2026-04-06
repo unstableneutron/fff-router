@@ -180,7 +180,7 @@ If you override the target, use:
 
 ## mcporter topology
 
-If you want machine-wide shared reuse, all clients must use the same mcporter-managed target definition.
+The wrappers and the Pi forwarder should use the same mcporter-managed target definition.
 
 In this repo that means:
 
@@ -192,7 +192,7 @@ The wrappers and the Pi forwarder should both use that same target/config path:
 - target: `fff-router`
 - config: `/Users/thinh/Projects/fff-router/config/mcporter.json`
 
-Do **not** bypass mcporter if shared reuse is desired.
+This target is currently configured as **ephemeral** for stability, so do not assume daemon-backed shared reuse.
 
 ## Pi integration
 
@@ -204,7 +204,7 @@ It should:
 
 - default omitted `within` to the Pi start cwd
 - resolve relative `within` against the Pi start cwd
-- forward the already-resolved request to the shared mcporter target `fff-router`
+- forward the already-resolved request to the mcporter target `fff-router`
 
 It should **not** own:
 
