@@ -3,7 +3,7 @@ import {
 	normalizePublicToolInput,
 	PUBLIC_TOOL_DEFINITIONS,
 } from "./public-api";
-import type { PublicToolName, SearchCoordinatorLike } from "./types";
+import type { PublicToolName, SearchCoordinator } from "./types";
 
 const zodInputShapes = {
 	fff_find_files: {
@@ -53,7 +53,7 @@ export function listMcpTools() {
 }
 
 export async function executeMcpTool(args: {
-	coordinator: SearchCoordinatorLike;
+	coordinator: SearchCoordinator;
 	name: PublicToolName;
 	input: unknown;
 }) {

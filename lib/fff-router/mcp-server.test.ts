@@ -1,13 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { createMcpServer } from "./mcp-server";
-import type { PublicToolRequest, SearchCoordinatorLike } from "./types";
+import type { PublicToolRequest, SearchCoordinator } from "./types";
 
 function makeCoordinator(
-	result: Awaited<ReturnType<SearchCoordinatorLike["execute"]>>,
+	result: Awaited<ReturnType<SearchCoordinator["execute"]>>,
 ) {
 	const calls: PublicToolRequest[] = [];
 
-	const coordinator: SearchCoordinatorLike = {
+	const coordinator: SearchCoordinator = {
 		async execute(request) {
 			calls.push(request);
 			return result;

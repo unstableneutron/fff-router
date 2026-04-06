@@ -1,11 +1,11 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { executeMcpTool, listMcpTools, MCP_TOOLS } from "./mcp-tools";
-import type { PublicToolName, SearchCoordinatorLike } from "./types";
+import type { PublicToolName, SearchCoordinator } from "./types";
 
 export type McpToolResponse = Awaited<ReturnType<typeof executeMcpTool>>;
 
-export function createMcpServer(args: { coordinator: SearchCoordinatorLike }) {
+export function createMcpServer(args: { coordinator: SearchCoordinator }) {
 	async function callTool(
 		name: PublicToolName,
 		input: unknown,

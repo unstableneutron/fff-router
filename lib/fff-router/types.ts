@@ -222,7 +222,7 @@ export type RoutingLifecyclePlan = {
 
 export type SearchCoordinatorResult = Result<PublicToolResult, PublicError>;
 
-export interface SearchCoordinatorLike {
+export interface SearchCoordinator {
 	execute(request: PublicToolRequest): Promise<SearchCoordinatorResult>;
 }
 

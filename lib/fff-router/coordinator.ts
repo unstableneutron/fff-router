@@ -6,7 +6,7 @@ import type {
 	SearchBackendAdapter,
 	SearchBackendRuntime,
 } from "./adapters/types";
-import { planRoutingLifecycle } from "./daemon-state";
+import { planRoutingLifecycle } from "./lifecycle";
 import { resolveSearchPath } from "./resolve-path";
 import { validateResolvedWithin } from "./resolve-within";
 import type { RuntimeManager } from "./runtime-manager";
@@ -16,7 +16,7 @@ import type {
 	PublicToolResult,
 	RouterConfig,
 	RoutingLifecyclePlan,
-	SearchCoordinatorLike,
+	SearchCoordinator,
 	SearchCoordinatorResult,
 	SearchQueryKind,
 	ValidatedWithin,
@@ -196,7 +196,7 @@ function normalizeBackendItems(
 	});
 }
 
-export class SearchCoordinator implements SearchCoordinatorLike {
+export class SearchCoordinatorImpl implements SearchCoordinator {
 	private lifecycleState: DaemonRegistryState = {
 		daemons: {},
 		nonGitRecentHits: {},
@@ -519,6 +519,6 @@ export class SearchCoordinator implements SearchCoordinatorLike {
 
 export function createSearchCoordinator(
 	deps: CoordinatorDeps,
-): SearchCoordinatorLike {
-	return new SearchCoordinator(deps);
+): SearchCoordinator {
+	return new SearchCoordinatorImpl(deps);
 }
