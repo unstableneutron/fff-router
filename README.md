@@ -187,13 +187,18 @@ In this repo that means:
 - target name: `fff-router`
 - config: `config/mcporter.json`
 
-The wrappers and the Pi forwarder should both use that same target/config path.
+The wrappers and the Pi forwarder should both use that same target/config path:
+
+- target: `fff-router`
+- config: `/Users/thinh/Projects/fff-router/config/mcporter.json`
 
 Do **not** bypass mcporter if shared reuse is desired.
 
 ## Pi integration
 
-The supported Pi path for V2 is a thin forwarder.
+The supported Pi path for V2 is a thin forwarder at:
+
+- `~/.pi/agent/extensions/pi-fff-search/index.ts`
 
 It should:
 

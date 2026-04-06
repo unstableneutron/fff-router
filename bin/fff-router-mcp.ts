@@ -57,7 +57,20 @@ const coordinator = createSearchCoordinator({
 
 const server = createMcpServer({ coordinator });
 
-server.connectStdio().catch((error) => {
+async function main() {
+	await server.connectStdio();
+	const keepAlive = setInterval(() => {}, 1 << 30);
+	await new Promise<void>((resolve) => {
+		const shutdown = () => {
+			clearInterval(keepAlive);
+			resolve();
+		};
+		process.once("SIGINT", shutdown);
+		process.once("SIGTERM", shutdown);
+	});
+}
+
+main().catch((error) => {
 	console.error("fff-router-mcp failed:", error);
 	process.exit(1);
 });
