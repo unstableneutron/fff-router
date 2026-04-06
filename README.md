@@ -95,7 +95,7 @@ Direct raw stdio execution of `fff-router-mcp` is for debugging only.
 - `lib/fff-router/public-api.ts` — public tool schemas and input normalization
 - `lib/fff-router/resolve-within.ts` — client/server `within` helpers
 - `lib/fff-router/routing.ts` — persistence root derivation
-- `lib/fff-router/daemon-state.ts` — lifecycle planning and eviction policy
+- `lib/fff-router/lifecycle.ts` — lifecycle planning and eviction policy
 - `lib/fff-router/runtime-manager.ts` — shared runtime registry and startup dedupe
 - `lib/fff-router/adapters/fff-mcp.ts` — primary FFF-backed adapter
 - `lib/fff-router/adapters/rg-fd.ts` — fallback adapter
@@ -127,7 +127,7 @@ bun install
 ## Verify
 
 ```bash
-bun test
+bun run test
 ```
 
 ## Debug-run the MCP server directly

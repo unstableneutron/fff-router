@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test } from "vitest";
 import { createMcpServer } from "./mcp-server";
 import type { PublicToolRequest, SearchCoordinator } from "./types";
 

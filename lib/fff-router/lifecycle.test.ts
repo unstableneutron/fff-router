@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test } from "vitest";
 import { planDaemonAction, planRoutingLifecycle } from "./lifecycle";
 import type { DaemonRegistryState, RouterConfig, RoutingTarget } from "./types";
 

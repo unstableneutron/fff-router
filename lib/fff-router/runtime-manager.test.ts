@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test } from "vitest";
 import type { SearchBackendRuntime } from "./adapters/types";
 import { RuntimeManager, runtimeRegistryKey } from "./runtime-manager";
 
