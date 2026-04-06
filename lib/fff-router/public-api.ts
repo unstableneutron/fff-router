@@ -233,20 +233,6 @@ function rejectUnknownFields(
 	return { ok: true, value: true };
 }
 
-function withWithin<T extends { within?: string }>(
-	request: T,
-	within: string | undefined,
-): T {
-	if (within === undefined) {
-		return request;
-	}
-
-	return {
-		...request,
-		within,
-	};
-}
-
 export const findFilesInputSchema = Type.Object(
 	{
 		query: Type.String({ minLength: 1 }),
@@ -396,20 +382,31 @@ function normalizeFindFilesInput(
 		return outputMode;
 	}
 
+	const value: PublicFindFilesRequest =
+		within.value === undefined
+			? {
+					tool: "fff_find_files",
+					query: query.value,
+					extensions: extensions.value,
+					excludePaths: excludePaths.value,
+					limit: limit.value,
+					cursor: cursor.value,
+					outputMode: outputMode.value,
+				}
+			: {
+					tool: "fff_find_files",
+					query: query.value,
+					within: within.value,
+					extensions: extensions.value,
+					excludePaths: excludePaths.value,
+					limit: limit.value,
+					cursor: cursor.value,
+					outputMode: outputMode.value,
+				};
+
 	return {
 		ok: true,
-		value: withWithin(
-			{
-				tool: "fff_find_files",
-				query: query.value,
-				extensions: extensions.value,
-				excludePaths: excludePaths.value,
-				limit: limit.value,
-				cursor: cursor.value,
-				outputMode: outputMode.value,
-			},
-			within.value,
-		),
+		value,
 	};
 }
 
@@ -469,21 +466,33 @@ function normalizeSearchTermsInput(
 		return outputMode;
 	}
 
+	const value: PublicSearchTermsRequest =
+		within.value === undefined
+			? {
+					tool: "fff_search_terms",
+					terms: terms.value,
+					extensions: extensions.value,
+					excludePaths: excludePaths.value,
+					contextLines: contextLines.value,
+					limit: limit.value,
+					cursor: cursor.value,
+					outputMode: outputMode.value,
+				}
+			: {
+					tool: "fff_search_terms",
+					terms: terms.value,
+					within: within.value,
+					extensions: extensions.value,
+					excludePaths: excludePaths.value,
+					contextLines: contextLines.value,
+					limit: limit.value,
+					cursor: cursor.value,
+					outputMode: outputMode.value,
+				};
+
 	return {
 		ok: true,
-		value: withWithin(
-			{
-				tool: "fff_search_terms",
-				terms: terms.value,
-				extensions: extensions.value,
-				excludePaths: excludePaths.value,
-				contextLines: contextLines.value,
-				limit: limit.value,
-				cursor: cursor.value,
-				outputMode: outputMode.value,
-			},
-			within.value,
-		),
+		value,
 	};
 }
 
@@ -550,22 +559,35 @@ function normalizeGrepInput(
 		return outputMode;
 	}
 
+	const value: PublicGrepRequest =
+		within.value === undefined
+			? {
+					tool: "fff_grep",
+					pattern: pattern.value,
+					caseSensitive: input.case_sensitive ?? false,
+					extensions: extensions.value,
+					excludePaths: excludePaths.value,
+					contextLines: contextLines.value,
+					limit: limit.value,
+					cursor: cursor.value,
+					outputMode: outputMode.value,
+				}
+			: {
+					tool: "fff_grep",
+					pattern: pattern.value,
+					within: within.value,
+					caseSensitive: input.case_sensitive ?? false,
+					extensions: extensions.value,
+					excludePaths: excludePaths.value,
+					contextLines: contextLines.value,
+					limit: limit.value,
+					cursor: cursor.value,
+					outputMode: outputMode.value,
+				};
+
 	return {
 		ok: true,
-		value: withWithin(
-			{
-				tool: "fff_grep",
-				pattern: pattern.value,
-				caseSensitive: input.case_sensitive ?? false,
-				extensions: extensions.value,
-				excludePaths: excludePaths.value,
-				contextLines: contextLines.value,
-				limit: limit.value,
-				cursor: cursor.value,
-				outputMode: outputMode.value,
-			},
-			within.value,
-		),
+		value,
 	};
 }
 

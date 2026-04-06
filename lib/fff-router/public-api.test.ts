@@ -13,7 +13,7 @@ import {
 } from "./public-api";
 
 describe("public-api", () => {
-	test("exports exactly the 3 V2 public tools with snippets", () => {
+	test("exports exactly the 3 public tools with snippets", () => {
 		expect(PUBLIC_TOOL_DEFINITIONS.map((tool) => tool.name)).toEqual([
 			"fff_find_files",
 			"fff_search_terms",
@@ -118,6 +118,10 @@ describe("public-api", () => {
 			throw new Error("expected success");
 		}
 
+		expect(result.value.tool).toBe("fff_grep");
+		if (result.value.tool !== "fff_grep") {
+			throw new Error("expected grep request");
+		}
 		expect(result.value.caseSensitive).toBe(false);
 	});
 
@@ -130,6 +134,10 @@ describe("public-api", () => {
 		if (!grep.ok) {
 			throw new Error("expected success");
 		}
+		expect(grep.value.tool).toBe("fff_grep");
+		if (grep.value.tool !== "fff_grep") {
+			throw new Error("expected grep request");
+		}
 		expect(grep.value.pattern).toBe("  plan(Request)?  ");
 
 		const terms = normalizePublicToolInput("fff_search_terms", {
@@ -139,6 +147,10 @@ describe("public-api", () => {
 		expect(terms.ok).toBe(true);
 		if (!terms.ok) {
 			throw new Error("expected success");
+		}
+		expect(terms.value.tool).toBe("fff_search_terms");
+		if (terms.value.tool !== "fff_search_terms") {
+			throw new Error("expected search terms request");
 		}
 		expect(terms.value.terms).toEqual(["  router  ", "coordinator"]);
 

@@ -1,4 +1,5 @@
 import path from "node:path";
+import type { Result } from "../types";
 import { filterItems, toRelativePath } from "./common";
 import type {
 	BackendResultItem,
@@ -122,7 +123,10 @@ function fuzzyMatch(relativePath: string, query: string): boolean {
 function parseRgJsonMatches(
 	stdout: string,
 	persistenceRoot: string,
-): BackendSearchResult | { ok: true; items: BackendResultItem[] } {
+): Result<
+	BackendResultItem[],
+	{ code: "SEARCH_FAILED"; message: string; backendId: "rg-fd" }
+> {
 	const items: BackendResultItem[] = [];
 
 	for (const line of stdout.split(/\r?\n/)) {
@@ -142,7 +146,14 @@ function parseRgJsonMatches(
 		try {
 			event = JSON.parse(line);
 		} catch {
-			return searchFailed("rg returned invalid JSON output");
+			return {
+				ok: false,
+				error: {
+					code: "SEARCH_FAILED",
+					backendId: "rg-fd",
+					message: "rg returned invalid JSON output",
+				},
+			};
 		}
 
 		if (event.type !== "match" || !event.data?.path?.text) {
@@ -159,7 +170,7 @@ function parseRgJsonMatches(
 		});
 	}
 
-	return { ok: true, items };
+	return { ok: true, value: items };
 }
 
 export function createRgFdAdapter(deps?: {
@@ -173,34 +184,33 @@ export function createRgFdAdapter(deps?: {
 		async execute(args) {
 			switch (args.request.queryKind) {
 				case "find_files": {
+					const request = args.request;
 					const command = await runCommand(
 						"fd",
 						[
 							"--type",
 							"f",
 							"--base-directory",
-							args.request.persistenceRoot,
+							request.persistenceRoot,
 							".",
-							buildFdTarget(args.request),
+							buildFdTarget(request),
 						],
-						args.request.persistenceRoot,
+						request.persistenceRoot,
 					);
 					if (!command.ok) {
 						return mapCommandFailure("fd", command);
 					}
 
 					const items = filterItems(
-						args.request,
+						request,
 						command.stdout
 							.split(/\r?\n/)
 							.filter(Boolean)
 							.map((relativePath) => ({
-								path: path.join(args.request.persistenceRoot, relativePath),
+								path: path.join(request.persistenceRoot, relativePath),
 								relativePath: relativePath.replace(/\\/g, "/"),
 							}))
-							.filter((item) =>
-								fuzzyMatch(item.relativePath, args.request.query),
-							),
+							.filter((item) => fuzzyMatch(item.relativePath, request.query)),
 					);
 
 					return {
@@ -214,18 +224,19 @@ export function createRgFdAdapter(deps?: {
 					};
 				}
 				case "search_terms": {
+					const request = args.request;
 					const command = await runCommand(
 						"rg",
 						[
 							"--json",
 							"--fixed-strings",
 							"--context",
-							String(args.request.contextLines),
-							...buildGlobArgs(args.request),
-							...args.request.terms.flatMap((term) => ["-e", term] as const),
-							buildSearchTarget(args.request),
+							String(request.contextLines),
+							...buildGlobArgs(request),
+							...request.terms.flatMap((term) => ["-e", term] as const),
+							buildSearchTarget(request),
 						],
-						args.request.persistenceRoot,
+						request.persistenceRoot,
 					);
 					if (!command.ok) {
 						return mapCommandFailure("rg", command);
@@ -233,7 +244,7 @@ export function createRgFdAdapter(deps?: {
 
 					const parsed = parseRgJsonMatches(
 						command.stdout,
-						args.request.persistenceRoot,
+						request.persistenceRoot,
 					);
 					if (!parsed.ok) {
 						return parsed;
@@ -244,31 +255,28 @@ export function createRgFdAdapter(deps?: {
 						value: {
 							backendId: "rg-fd",
 							queryKind: "search_terms",
-							items: filterItems(args.request, parsed.items),
+							items: filterItems(request, parsed.value),
 							nextCursor: null,
 						},
 					};
 				}
 				case "grep": {
+					const request = args.request;
 					const rgArgs = [
 						"--json",
 						"--context",
-						String(args.request.contextLines),
-						...buildGlobArgs(args.request),
+						String(request.contextLines),
+						...buildGlobArgs(request),
 					];
-					if (!args.request.caseSensitive) {
+					if (!request.caseSensitive) {
 						rgArgs.push("--ignore-case");
 					}
-					rgArgs.push(
-						"-e",
-						args.request.pattern,
-						buildSearchTarget(args.request),
-					);
+					rgArgs.push("-e", request.pattern, buildSearchTarget(request));
 
 					const command = await runCommand(
 						"rg",
 						rgArgs,
-						args.request.persistenceRoot,
+						request.persistenceRoot,
 					);
 					if (!command.ok) {
 						return mapCommandFailure("rg", command);
@@ -276,7 +284,7 @@ export function createRgFdAdapter(deps?: {
 
 					const parsed = parseRgJsonMatches(
 						command.stdout,
-						args.request.persistenceRoot,
+						request.persistenceRoot,
 					);
 					if (!parsed.ok) {
 						return parsed;
@@ -287,7 +295,7 @@ export function createRgFdAdapter(deps?: {
 						value: {
 							backendId: "rg-fd",
 							queryKind: "grep",
-							items: filterItems(args.request, parsed.items),
+							items: filterItems(request, parsed.value),
 							nextCursor: null,
 						},
 					};

@@ -1,6 +1,8 @@
 import { describe, expect, test } from "vitest";
 import type {
+	BackendResultItem,
 	BackendSearchRequest,
+	BackendSearchResult,
 	SearchBackendAdapter,
 	SearchBackendRuntime,
 } from "./adapters/types";
@@ -39,13 +41,7 @@ function makePublicRequest(
 function makeAdapter(args: {
 	backendId: "fff-mcp" | "rg-fd";
 	supportedQueryKinds?: SearchQueryKind[];
-	execute: (
-		request: BackendSearchRequest,
-	) => Promise<
-		ReturnType<SearchBackendAdapter["execute"]> extends Promise<infer T>
-			? T
-			: never
-	>;
+	execute: (request: BackendSearchRequest) => Promise<BackendSearchResult>;
 }) {
 	const calls: BackendSearchRequest[] = [];
 	let startCount = 0;
@@ -81,12 +77,12 @@ function makeAdapter(args: {
 
 function okResult(
 	queryKind: SearchQueryKind,
-	items: Array<Record<string, unknown>>,
-) {
+	items: BackendResultItem[],
+): BackendSearchResult {
 	return {
-		ok: true as const,
+		ok: true,
 		value: {
-			backendId: "fff-mcp" as const,
+			backendId: "fff-mcp",
 			queryKind,
 			items,
 			nextCursor: null,
@@ -577,7 +573,7 @@ describe("createSearchCoordinator", () => {
 			primaryAdapter: primary.adapter,
 			fallbackAdapter: fallback.adapter,
 			runtimeManager: new RuntimeManager(),
-			validateWithin: async ({ within }) => ({
+			validateWithin: async ({ within: _within }) => ({
 				ok: true,
 				value: {
 					resolvedWithin: "/repo/src/router.ts",

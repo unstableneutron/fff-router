@@ -131,30 +131,6 @@ export type ValidatedWithin = {
 	fileRestriction?: string;
 };
 
-export type SearchCodeRequest = {
-	tool: "search_code";
-	searchPath: string;
-	anyOf: string[];
-	excludePaths: string[];
-	extensions: string[];
-	contextLines: number;
-	maxResults: number;
-	cursor: string | null;
-	outputMode: OutputMode;
-};
-
-export type FindFilesRequest = {
-	tool: "find_files";
-	searchPath: string;
-	query: string;
-	excludePaths: string[];
-	extensions: string[];
-	maxResults: number;
-	cursor: string | null;
-};
-
-export type RouterRequest = SearchCodeRequest | FindFilesRequest;
-
 export type ResolvedSearchPath = {
 	realPath: string;
 	statType: "file" | "directory";
@@ -225,10 +201,3 @@ export type SearchCoordinatorResult = Result<PublicToolResult, PublicError>;
 export interface SearchCoordinator {
 	execute(request: PublicToolRequest): Promise<SearchCoordinatorResult>;
 }
-
-export type RouterResponse = {
-	backend_mode: "persistent" | "ephemeral";
-	root_type: "git" | "non-git";
-	persistence_root: string;
-	search_scope: string;
-};

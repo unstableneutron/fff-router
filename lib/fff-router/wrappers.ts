@@ -50,6 +50,10 @@ function parseCommonArgs(argv: string[]) {
 		const token = argv[index];
 		const next = argv[index + 1];
 
+		if (token === undefined) {
+			continue;
+		}
+
 		switch (token) {
 			case "--help":
 			case "-h":

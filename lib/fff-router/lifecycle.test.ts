@@ -53,7 +53,7 @@ describe("planDaemonAction", () => {
 	test("creates persistent daemon immediately for git roots", () => {
 		const result = planDaemonAction(emptyState(1_000), gitTargetA, config);
 		expect(result.action.type).toBe("start-persistent");
-		expect(result.nextState.daemons["/repo/a"].ttlMs).toBe(60 * 60 * 1000);
+		expect(result.nextState.daemons["/repo/a"]?.ttlMs).toBe(60 * 60 * 1000);
 	});
 
 	test("reuses existing persistent daemons and refreshes lastUsedAt", () => {
@@ -75,7 +75,7 @@ describe("planDaemonAction", () => {
 
 		const result = planDaemonAction(state, gitTargetA, config);
 		expect(result.action.type).toBe("reuse-persistent");
-		expect(result.nextState.daemons["/repo/a"].lastUsedAt).toBe(500);
+		expect(result.nextState.daemons["/repo/a"]?.lastUsedAt).toBe(500);
 	});
 
 	test("keeps first non-git hit ephemeral", () => {
@@ -110,7 +110,7 @@ describe("planDaemonAction", () => {
 			config,
 		);
 		expect(result.action.type).toBe("start-persistent");
-		expect(result.nextState.daemons["/allow/pkg-a"].rootType).toBe("non-git");
+		expect(result.nextState.daemons["/allow/pkg-a"]?.rootType).toBe("non-git");
 		expect(result.nextState.nonGitRecentHits["/allow/pkg-a"]).toBeUndefined();
 	});
 

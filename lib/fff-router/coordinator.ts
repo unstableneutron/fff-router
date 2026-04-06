@@ -4,7 +4,6 @@ import type {
 	BackendSearchRequest,
 	BackendSearchResult,
 	SearchBackendAdapter,
-	SearchBackendRuntime,
 } from "./adapters/types";
 import { planRoutingLifecycle } from "./lifecycle";
 import { resolveSearchPath } from "./resolve-path";
@@ -24,9 +23,9 @@ import type {
 
 type CoordinatorDeps = {
 	config: RouterConfig;
-	primaryAdapter: SearchBackendAdapter;
-	fallbackAdapter: SearchBackendAdapter;
-	runtimeManager: RuntimeManager<SearchBackendRuntime>;
+	primaryAdapter: SearchBackendAdapter<any>;
+	fallbackAdapter: SearchBackendAdapter<any>;
+	runtimeManager: RuntimeManager<any>;
 	validateWithin?: typeof validateResolvedWithin;
 	resolveRoutingPath?: typeof resolveSearchPath;
 	planLifecycle?: typeof planRoutingLifecycle;
@@ -420,7 +419,10 @@ export class SearchCoordinatorImpl implements SearchCoordinator {
 			return {
 				ok: false,
 				error: {
-					code: lifecyclePlan.error.code,
+					code:
+						lifecyclePlan.error.code === "OUTSIDE_ALLOWED_SCOPE"
+							? "OUTSIDE_ALLOWED_SCOPE"
+							: "INVALID_REQUEST",
 					message: lifecyclePlan.error.message,
 				},
 			};

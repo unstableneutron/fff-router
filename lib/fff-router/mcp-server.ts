@@ -30,7 +30,7 @@ export function createMcpServer(args: { coordinator: SearchCoordinator }) {
 					description: tool.description,
 					inputSchema: tool.zodInputShape,
 				},
-				async (input) => {
+				async (input: unknown) => {
 					return await callTool(tool.name, input);
 				},
 			);

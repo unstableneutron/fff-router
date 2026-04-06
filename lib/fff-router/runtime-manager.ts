@@ -72,8 +72,7 @@ export class RuntimeManager<
 
 			const token = Symbol(key);
 
-			let created: Promise<TRuntime>;
-			created = Promise.resolve(spec.start())
+			const created = Promise.resolve(spec.start())
 				.then(async (runtime) => {
 					let shouldClose = false;
 					await this.withMutationLock(() => {
@@ -113,7 +112,7 @@ export class RuntimeManager<
 			return created;
 		});
 
-		return await startup;
+		return startup;
 	}
 
 	async withRuntime<TResult>(
