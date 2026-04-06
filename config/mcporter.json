@@ -4,7 +4,7 @@
       "command": "bun",
       "args": ["../bin/fff-router-mcp.ts"],
       "lifecycle": "ephemeral",
-      "description": "fff-router MCP target for wrapper and Pi integration."
+      "description": "Compatibility stdio MCP target that proxies to the HTTP daemon."
     }
   }
 }

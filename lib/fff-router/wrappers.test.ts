@@ -1,13 +1,8 @@
 import { describe, expect, test, vi } from "vitest";
-import {
-  buildWrapperInvocation,
-  DEFAULT_MCPORTER_TARGET,
-  MCPORTER_CONFIG_PATH,
-  runWrapper,
-} from "./wrappers";
+import { buildWrapperInvocation, runWrapper } from "./wrappers";
 
 describe("buildWrapperInvocation", () => {
-  test("defaults the mcporter target to fff-router and resolves within for find_files", async () => {
+  test("resolves within for find_files and builds a public request", async () => {
     const invocation = await buildWrapperInvocation({
       tool: "fff_find_files",
       argv: ["router", "--within", "src", "--extension", "ts"],
@@ -17,22 +12,20 @@ describe("buildWrapperInvocation", () => {
     expect(invocation).toEqual({
       kind: "call",
       toolName: "fff_find_files",
-      target: DEFAULT_MCPORTER_TARGET,
-      publicArgs: {
+      publicRequest: {
+        tool: "fff_find_files",
         query: "router",
         within: "/repo/src",
         extensions: ["ts"],
+        excludePaths: [],
+        limit: 20,
+        cursor: null,
+        outputMode: "compact",
       },
-      mcporterArgs: [
-        "call",
-        "--config",
-        MCPORTER_CONFIG_PATH,
-        'fff-router.fff_find_files(query: "router", within: "/repo/src", extensions: ["ts"])',
-      ],
     });
   });
 
-  test("builds search_terms invocations with structured args", async () => {
+  test("builds search_terms invocations with normalized public args", async () => {
     const invocation = await buildWrapperInvocation({
       tool: "fff_search_terms",
       argv: [
@@ -48,57 +41,46 @@ describe("buildWrapperInvocation", () => {
       callerCwd: "/repo",
     });
 
-    expect(invocation.kind).toBe("call");
-    if (invocation.kind !== "call") throw new Error("expected call");
-    expect(invocation.target).toBe("fff-router");
-    expect(invocation.publicArgs).toEqual({
-      terms: ["router", "coordinator"],
-      context_lines: 2,
-      within: "/repo",
-      limit: 5,
-      output_mode: "json",
+    expect(invocation).toEqual({
+      kind: "call",
+      toolName: "fff_search_terms",
+      publicRequest: {
+        tool: "fff_search_terms",
+        terms: ["router", "coordinator"],
+        contextLines: 2,
+        within: "/repo",
+        extensions: [],
+        excludePaths: [],
+        limit: 5,
+        cursor: null,
+        outputMode: "json",
+      },
     });
-    expect(invocation.mcporterArgs[3]).toBe(
-      'fff-router.fff_search_terms(terms: ["router","coordinator"], context_lines: 2, within: "/repo", limit: 5, output_mode: "json")',
-    );
   });
 
-  test("builds grep invocations with case-sensitive flag and target override", async () => {
+  test("builds grep invocations with case-sensitive flag", async () => {
     const invocation = await buildWrapperInvocation({
       tool: "fff_grep",
-      argv: ["plan(Request)?", "--case-sensitive", "--target", "custom-router"],
+      argv: ["plan(Request)?", "--case-sensitive"],
       callerCwd: "/repo",
     });
 
-    expect(invocation.kind).toBe("call");
-    if (invocation.kind !== "call") throw new Error("expected call");
-    expect(invocation.target).toBe("custom-router");
-    expect(invocation.publicArgs).toEqual({
-      pattern: "plan(Request)?",
-      case_sensitive: true,
-      within: "/repo",
+    expect(invocation).toEqual({
+      kind: "call",
+      toolName: "fff_grep",
+      publicRequest: {
+        tool: "fff_grep",
+        pattern: "plan(Request)?",
+        caseSensitive: true,
+        contextLines: 0,
+        within: "/repo",
+        extensions: [],
+        excludePaths: [],
+        limit: 20,
+        cursor: null,
+        outputMode: "compact",
+      },
     });
-    expect(invocation.mcporterArgs[3]).toBe(
-      'custom-router.fff_grep(pattern: "plan(Request)?", case_sensitive: true, within: "/repo")',
-    );
-  });
-
-  test("omits explicit compact output mode because compact is the server default", async () => {
-    const invocation = await buildWrapperInvocation({
-      tool: "fff_find_files",
-      argv: ["router", "--output-mode", "compact"],
-      callerCwd: "/repo",
-    });
-
-    expect(invocation.kind).toBe("call");
-    if (invocation.kind !== "call") throw new Error("expected call");
-    expect(invocation.publicArgs).toEqual({
-      query: "router",
-      within: "/repo",
-    });
-    expect(invocation.mcporterArgs[3]).toBe(
-      'fff-router.fff_find_files(query: "router", within: "/repo")',
-    );
   });
 
   test("renders wrapper help text", async () => {
@@ -110,24 +92,34 @@ describe("buildWrapperInvocation", () => {
 
     expect(invocation).toEqual({
       kind: "help",
-      text: "Usage: fff-grep <pattern> [--within PATH] [--case-sensitive] [--extension EXT] [--exclude-path PATH] [--context-lines N] [--limit N] [--output-mode compact|json] [--target NAME]",
+      text: "Usage: fff-grep <pattern> [--within PATH] [--case-sensitive] [--extension EXT] [--exclude-path PATH] [--context-lines N] [--limit N] [--output-mode compact|json]",
     });
+  });
+
+  test("rejects legacy mcporter target overrides explicitly", async () => {
+    await expect(
+      buildWrapperInvocation({
+        tool: "fff_find_files",
+        argv: ["router", "--target", "other"],
+        callerCwd: "/repo",
+      }),
+    ).rejects.toThrow(/no longer supported/i);
   });
 });
 
 describe("runWrapper", () => {
-  test("spawns mcporter externally with a sanitized child environment", async () => {
-    const spawn = vi.fn(
-      (
-        _argv: string[],
-        _options: {
-          stdin: "ignore";
-          stdout: "pipe";
-          stderr: "pipe";
-          env: Record<string, string | undefined>;
-        },
-      ) => ({ exited: Promise.resolve(0) }),
-    );
+  test("ensures the daemon is running and prints the HTTP MCP result", async () => {
+    const ensureDaemon = vi.fn(async () => {});
+    const callTool = vi.fn(async () => ({
+      ok: true as const,
+      value: {
+        mode: "compact" as const,
+        base_path: "/repo",
+        next_cursor: null,
+        items: [{ path: "router.ts" }],
+      },
+    }));
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
 
     await runWrapper(
       {
@@ -136,42 +128,30 @@ describe("runWrapper", () => {
         callerCwd: "/repo",
       },
       {
-        env: {
-          PATH: "/usr/bin",
-          MCPORTER_DISABLE_AUTORUN: "1",
-          MCPORTER_DAEMON_CHILD: "0",
-          MCPORTER_DAEMON_SOCKET: "/tmp/socket",
-          MCPORTER_DAEMON_METADATA: "/tmp/meta",
-        },
-        spawn,
-        resolveMcporterCliPath: () => "/tmp/mcporter/dist/cli.js",
+        ensureDaemon,
+        callTool,
       },
     );
 
-    expect(spawn).toHaveBeenCalledTimes(1);
-    const call = spawn.mock.calls[0];
-    expect(call).toBeDefined();
-    const argv = call?.[0] as string[];
-    const options = call?.[1] as {
-      env: Record<string, string | undefined>;
-    };
-    expect(argv[0]).toBe("/bin/sh");
-    expect(argv[1]).toBe("-lc");
-    expect(argv[2]).toContain(process.execPath);
-    expect(argv[2]).toContain("/tmp/mcporter/dist/cli.js");
-    expect(argv[2]).toContain("call");
-    expect(argv[2]).toContain(MCPORTER_CONFIG_PATH);
-    expect(argv[2]).toContain("fff-router.fff_find_files(");
-    expect(argv[2]).toContain('query: "router"');
-    expect(argv[2]).toContain('within: "/repo"');
-    expect(options.env.MCPORTER_DISABLE_AUTORUN).toBeUndefined();
-    expect(options.env.MCPORTER_DAEMON_CHILD).toBeUndefined();
-    expect(options.env.MCPORTER_DAEMON_SOCKET).toBeUndefined();
-    expect(options.env.MCPORTER_DAEMON_METADATA).toBeUndefined();
-    expect(options.env.FFF_ROUTER_WRAPPER_RECURSION_GUARD).toBe("1");
+    expect(ensureDaemon).toHaveBeenCalledTimes(1);
+    expect(callTool).toHaveBeenCalledTimes(1);
+    expect(stdout).toHaveBeenCalledWith(
+      `${JSON.stringify(
+        {
+          mode: "compact",
+          base_path: "/repo",
+          next_cursor: null,
+          items: [{ path: "router.ts" }],
+        },
+        null,
+        2,
+      )}\n`,
+    );
+
+    stdout.mockRestore();
   });
 
-  test("refuses to run when invoked in a daemon child context", async () => {
+  test("throws a formatted public error when the daemon call fails", async () => {
     await expect(
       runWrapper(
         {
@@ -180,11 +160,16 @@ describe("runWrapper", () => {
           callerCwd: "/repo",
         },
         {
-          env: { MCPORTER_DAEMON_CHILD: "1" },
-          spawn: vi.fn(() => ({ exited: Promise.resolve(0) })),
-          resolveMcporterCliPath: () => "/tmp/mcporter/dist/cli.js",
+          ensureDaemon: async () => {},
+          callTool: async () => ({
+            ok: false,
+            error: {
+              code: "BACKEND_UNAVAILABLE",
+              message: "daemon offline",
+            },
+          }),
         },
       ),
-    ).rejects.toThrow(/recursion|daemon child/i);
+    ).rejects.toThrow(/BACKEND_UNAVAILABLE: daemon offline/);
   });
 });

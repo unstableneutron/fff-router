@@ -3,7 +3,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { LATEST_PROTOCOL_VERSION } from "@modelcontextprotocol/sdk/types.js";
 import { ReadBuffer, serializeMessage } from "@modelcontextprotocol/sdk/shared/stdio.js";
-import { describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test } from "vitest";
+import { startHttpDaemon } from "./http-daemon";
+import type { SearchCoordinator } from "./types";
 
 const binPath = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -18,6 +20,30 @@ type JsonRpcMessage = {
   result?: unknown;
   error?: unknown;
 };
+
+const startedDaemons: Array<Awaited<ReturnType<typeof startHttpDaemon>>> = [];
+
+afterEach(async () => {
+  while (startedDaemons.length > 0) {
+    await startedDaemons.pop()?.close();
+  }
+});
+
+function makeCoordinator(): SearchCoordinator {
+  return {
+    async execute(request) {
+      return {
+        ok: true,
+        value: {
+          mode: "compact",
+          base_path: request.within || "/repo",
+          next_cursor: null,
+          items: [{ path: "router.ts" }],
+        },
+      };
+    },
+  };
+}
 
 function createMessageReader(child: ReturnType<typeof spawn>) {
   const buffer = new ReadBuffer();
@@ -59,8 +85,20 @@ function createMessageReader(child: ReturnType<typeof spawn>) {
 }
 
 describe("fff-router-mcp entrypoint", () => {
-  test("exits promptly after stdin closes following a real MCP request", async () => {
+  test("proxies stdio MCP requests through the HTTP daemon and exits on stdin close", async () => {
+    const daemon = await startHttpDaemon({
+      host: "127.0.0.1",
+      port: 0,
+      coordinator: makeCoordinator(),
+    });
+    startedDaemons.push(daemon);
+
     const child = spawn("bun", [binPath], {
+      env: {
+        ...process.env,
+        FFF_ROUTER_HOST: daemon.metadata.host,
+        FFF_ROUTER_PORT: String(daemon.metadata.port),
+      },
       stdio: ["pipe", "pipe", "pipe"],
     });
     const reader = createMessageReader(child);
@@ -91,26 +129,25 @@ describe("fff-router-mcp entrypoint", () => {
     const initializeResponse = await reader.waitFor((message) => message.id === 1);
     expect(initializeResponse.error).toBeUndefined();
 
-    child.stdin.write(
-      serializeMessage({
-        jsonrpc: "2.0",
-        method: "notifications/initialized",
-      }),
-    );
+    child.stdin.write(serializeMessage({ jsonrpc: "2.0", method: "notifications/initialized" }));
     child.stdin.write(
       serializeMessage({
         jsonrpc: "2.0",
         id: 2,
-        method: "tools/list",
-        params: {},
+        method: "tools/call",
+        params: {
+          name: "fff_find_files",
+          arguments: {
+            query: "router",
+            within: "/repo/lib",
+          },
+        },
       }),
     );
 
-    const toolsResponse = await reader.waitFor((message) => message.id === 2);
-    expect(toolsResponse.error).toBeUndefined();
-    expect(
-      (toolsResponse.result as { tools?: Array<{ name: string }> }).tools?.map((tool) => tool.name),
-    ).toEqual(["fff_find_files", "fff_search_terms", "fff_grep"]);
+    const callResponse = await reader.waitFor((message) => message.id === 2);
+    expect(callResponse.error).toBeUndefined();
+    expect(JSON.stringify(callResponse.result)).toContain("router.ts");
 
     const startedAt = Date.now();
     child.stdin.end();

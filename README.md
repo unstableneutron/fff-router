@@ -1,6 +1,6 @@
 # fff-router
 
-`fff-router` is the shared search service for FFF-backed code search.
+`fff-router` is a shared FFF-backed search service.
 
 It exposes exactly three public tools:
 
@@ -8,24 +8,20 @@ It exposes exactly three public tools:
 - `fff_search_terms`
 - `fff_grep`
 
-The repo now contains:
+## Current architecture
 
-- a public API surface
-- `within` resolution helpers
-- generic routing/lifecycle planning
-- a shared runtime manager
-- pluggable backend adapters
-- a search coordinator
-- an MCP stdio server: `fff-router-mcp`
-- thin CLI wrappers that call the shared service through `mcporter`
+The primary architecture is now:
 
-## Architecture
+- one machine-local HTTP MCP daemon: `fff-routerd`
+- one shared in-process runtime map inside that daemon
+- thin CLI wrappers that call the daemon over MCP HTTP
+- an optional stdio compatibility proxy: `fff-router-mcp`
 
-### Public contract
+This means machine-wide warm reuse now comes from the long-lived daemon process, not from `mcporter` lifecycle behavior.
 
-The public tool shapes are structured, not stringly.
+## Public contract
 
-Common fields:
+Common public fields:
 
 - `within`
 - `extensions`
@@ -39,33 +35,33 @@ Supported output modes:
 - `compact` (default)
 - `json`
 
-Initial pagination is intentionally deferred:
+Pagination is intentionally deferred for now:
 
 - request `cursor` must be omitted or `null`
 - responses always return `next_cursor: null`
 
-### `within` semantics
+## `within` semantics
 
-`within` is a client-side scope field.
+`within` is resolved client-side.
 
-Clients must:
+Clients should:
 
 - default omitted `within` to the caller cwd
 - resolve relative `within` against the caller cwd
-- send the already-resolved absolute value to `fff-router-mcp`
+- send the resolved absolute value to the daemon
 
 Server-side behavior:
 
-- validate/canonicalize the already-resolved absolute `within`
+- validate and canonicalize the absolute `within`
 - if `within` is a file:
   - `base_path` becomes the file’s parent directory
   - the coordinator applies an implicit single-file restriction internally
 
-### Backend policy
+## Backend policy
 
 Primary path:
 
-- `fff-mcp` / FFF-backed execution
+- FFF-backed execution via `@ff-labs/fff-node`
 
 Fallback path:
 
@@ -73,20 +69,21 @@ Fallback path:
 
 Fallback happens only on backend failure, not on zero results.
 
-### Shared runtime topology
+## Runtime reuse model
 
-`fff-router-mcp` remains a plain stdio MCP server.
+The daemon owns the shared runtime state.
 
-Shared machine-wide reuse happens through `mcporter` with the canonical target name:
+That shared state is still keyed by the routed `persistenceRoot`, so:
 
-- `fff-router`
+- same root => same warm runtime reused
+- different root => different runtime entry
 
-All supported clients should use that same target if they want shared warm reuse:
+Routing and lifecycle policy still come from:
 
-- the CLI wrappers in this repo
-- the Pi thin forwarder
-
-Direct raw stdio execution of `fff-router-mcp` is for debugging only.
+- `lib/fff-router/routing.ts`
+- `lib/fff-router/lifecycle.ts`
+- `lib/fff-router/runtime-manager.ts`
+- `lib/fff-router/coordinator.ts`
 
 ## Repo layout
 
@@ -102,21 +99,17 @@ Direct raw stdio execution of `fff-router-mcp` is for debugging only.
 - `lib/fff-router/coordinator.ts` — top-level search coordinator
 - `lib/fff-router/mcp-tools.ts` — MCP tool definitions and execution bridge
 - `lib/fff-router/mcp-server.ts` — MCP server assembly
+- `lib/fff-router/http-daemon.ts` — HTTP daemon host
+- `lib/fff-router/http-client.ts` — HTTP MCP client helper for wrappers/proxies
+- `lib/fff-router/daemon-autostart.ts` — daemon health and auto-start helper
 
 ### Entrypoints
 
-- `bin/fff-router-mcp.ts` — stdio MCP server
-- `bin/fff-find-files.ts` — mcporter-backed wrapper
-- `bin/fff-search-terms.ts` — mcporter-backed wrapper
-- `bin/fff-grep.ts` — mcporter-backed wrapper
-
-### Shared mcporter target config
-
-- `config/mcporter.json`
-
-This repo config defines the shared target name:
-
-- `fff-router`
+- `bin/fff-routerd.ts` — explicit HTTP MCP daemon
+- `bin/fff-router-mcp.ts` — stdio compatibility proxy to the daemon
+- `bin/fff-find-files.ts` — HTTP MCP wrapper
+- `bin/fff-search-terms.ts` — HTTP MCP wrapper
+- `bin/fff-grep.ts` — HTTP MCP wrapper
 
 ## Install
 
@@ -128,25 +121,39 @@ bun install
 
 ```bash
 bun run test
+bun run check
 ```
 
-## Debug-run the MCP server directly
+## Start the daemon explicitly
 
-This is useful for local debugging only.
+Default bind:
+
+- host: `127.0.0.1`
+- port: `4319`
+- MCP path: `/mcp`
+
+You can override these with:
+
+- `FFF_ROUTER_HOST`
+- `FFF_ROUTER_PORT`
+- `FFF_ROUTER_MCP_PATH`
+
+Run:
 
 ```bash
-bun run bin/fff-router-mcp.ts
+bun run bin/fff-routerd.ts
 ```
 
 ## CLI wrappers
 
-These wrappers are thin clients.
+The wrappers are thin clients.
 
 They:
 
 - default omitted `within` to the wrapper caller cwd
 - resolve relative `within` against the wrapper caller cwd
-- call the shared mcporter target `fff-router`
+- auto-start the daemon if it is missing
+- call the daemon over MCP HTTP
 
 They do **not** own search policy or backend management.
 
@@ -166,58 +173,37 @@ bun run bin/fff-search-terms.ts router coordinator --within lib --context-lines 
 bun run bin/fff-grep.ts 'plan(Request)?' --within lib --case-sensitive
 ```
 
-### Shared mcporter target
+## HTTP MCP endpoint
 
-The wrappers use:
+The canonical MCP endpoint is:
 
-- target name `fff-router`
-- config file `config/mcporter.json`
+- `http://127.0.0.1:4319/mcp`
 
-If you override the target, use:
+Other local agents and future extensions should talk to that same endpoint if they want shared warm reuse.
 
-- `--target <name>` or
-- `FFF_ROUTER_MCPORTER_TARGET=<name>`
+## `fff-router-mcp`
 
-## mcporter topology
+`fff-router-mcp` is no longer the primary runtime owner.
 
-The wrappers and the Pi forwarder should use the same mcporter-managed target definition.
+It is now a thin stdio compatibility proxy that forwards MCP tool calls to the HTTP daemon. The shared runtime state lives in `fff-routerd`.
 
-In this repo that means:
+## `mcporter` compatibility
 
-- target name: `fff-router`
-- config: `config/mcporter.json`
+`config/mcporter.json` is retained only as a compatibility artifact for environments that still expect a stdio MCP target definition.
 
-The wrappers and the Pi forwarder should both use that same target/config path:
+The CLI wrappers in this repo no longer use `mcporter`, and `--target` / `FFF_ROUTER_MCPORTER_TARGET` are no longer supported.
 
-- target: `fff-router`
-- config: `/Users/thinh/Projects/fff-router/config/mcporter.json`
+## Pi integration direction
 
-This target is currently configured as **ephemeral** for stability, so do not assume daemon-backed shared reuse.
+The long-term intended integration is:
 
-## Pi integration
+- Pi / extensions / wrappers talk directly to the same HTTP MCP daemon
 
-The supported Pi path is a thin forwarder at:
-
-- `~/.pi/agent/extensions/pi-fff-search/index.ts`
-
-It should:
-
-- default omitted `within` to the Pi start cwd
-- resolve relative `within` against the Pi start cwd
-- forward the already-resolved request to the mcporter target `fff-router`
-
-It should **not** own:
-
-- public schemas
-- search policy
-- runtime caches
-- upstream FFF process management
-
-Direct Pi connection to raw `fff-router-mcp` is not the intended initial path.
+That keeps one shared runtime pool for the whole machine instead of creating per-client warm state.
 
 ## Current tool names
 
-The public names are locked:
+The public names remain locked:
 
 - `fff_find_files`
 - `fff_search_terms`
