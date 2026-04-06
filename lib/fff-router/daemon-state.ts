@@ -1,9 +1,13 @@
+import { deriveRoutingTarget } from "./routing";
 import type {
 	DaemonAction,
 	DaemonRecord,
 	DaemonRegistryState,
+	Result,
 	RouterConfig,
+	RoutingLifecyclePlan,
 	RoutingTarget,
+	SearchQueryKind,
 } from "./types";
 
 function pruneExpired(state: DaemonRegistryState): {
@@ -216,5 +220,36 @@ export function planDaemonAction(
 		nextState: limited.state,
 		action: { type: "start-persistent", key },
 		evicted: [...evicted, ...limited.evicted],
+	};
+}
+
+export function planRoutingLifecycle(args: {
+	queryKind: SearchQueryKind;
+	realPath: string;
+	statType: "file" | "directory";
+	gitRoot: string | null;
+	config: RouterConfig;
+	state: DaemonRegistryState;
+}): Result<RoutingLifecyclePlan> {
+	const target = deriveRoutingTarget({
+		realPath: args.realPath,
+		statType: args.statType,
+		gitRoot: args.gitRoot,
+		config: args.config,
+	});
+	if (!target.ok) {
+		return target;
+	}
+
+	const daemonPlan = planDaemonAction(args.state, target.value, args.config);
+	return {
+		ok: true,
+		value: {
+			queryKind: args.queryKind,
+			target: target.value,
+			nextState: daemonPlan.nextState,
+			action: daemonPlan.action,
+			evicted: daemonPlan.evicted,
+		},
 	};
 }

@@ -15,9 +15,124 @@ export type RouterError = {
 	message: string;
 };
 
-export type Result<T> =
-	| { ok: true; value: T }
-	| { ok: false; error: RouterError };
+export type Result<
+	T,
+	TError extends { code: string; message: string } = RouterError,
+> = { ok: true; value: T } | { ok: false; error: TError };
+
+export type PublicToolName = "fff_find_files" | "fff_search_terms" | "fff_grep";
+
+export type PublicOutputMode = "compact" | "json";
+
+export type PublicErrorCode =
+	| "INVALID_REQUEST"
+	| "WITHIN_NOT_FOUND"
+	| "OUTSIDE_ALLOWED_SCOPE"
+	| "BACKEND_UNAVAILABLE"
+	| "SEARCH_FAILED"
+	| "INTERNAL_ERROR";
+
+export type PublicError = {
+	code: PublicErrorCode;
+	message: string;
+};
+
+export type PublicRequestBase = {
+	within?: string;
+	extensions: string[];
+	excludePaths: string[];
+	limit: number;
+	cursor: null;
+	outputMode: PublicOutputMode;
+};
+
+export type PublicFindFilesRequest = PublicRequestBase & {
+	tool: "fff_find_files";
+	query: string;
+};
+
+export type PublicSearchTermsRequest = PublicRequestBase & {
+	tool: "fff_search_terms";
+	terms: string[];
+	contextLines: number;
+};
+
+export type PublicGrepRequest = PublicRequestBase & {
+	tool: "fff_grep";
+	pattern: string;
+	caseSensitive: boolean;
+	contextLines: number;
+};
+
+export type PublicToolRequest =
+	| PublicFindFilesRequest
+	| PublicSearchTermsRequest
+	| PublicGrepRequest;
+
+export type PublicCompactFindFilesResult = {
+	mode: "compact";
+	base_path: string;
+	next_cursor: null;
+	items: Array<{ path: string }>;
+};
+
+export type PublicCompactTextMatch = {
+	path: string;
+	line: number;
+	text: string;
+};
+
+export type PublicCompactSearchTermsResult = {
+	mode: "compact";
+	base_path: string;
+	next_cursor: null;
+	items: PublicCompactTextMatch[];
+};
+
+export type PublicCompactGrepResult = {
+	mode: "compact";
+	base_path: string;
+	next_cursor: null;
+	items: PublicCompactTextMatch[];
+};
+
+export type PublicJsonItem = Record<string, unknown>;
+
+export type PublicJsonResult<TItem extends PublicJsonItem = PublicJsonItem> = {
+	mode: "json";
+	base_path: string;
+	next_cursor: null;
+	backend_used: string;
+	fallback_applied: boolean;
+	fallback_reason?: "backend_error";
+	stats: {
+		result_count: number;
+	};
+	items: TItem[];
+};
+
+export type PublicToolResult =
+	| PublicCompactFindFilesResult
+	| PublicCompactSearchTermsResult
+	| PublicCompactGrepResult
+	| PublicJsonResult<PublicJsonItem>;
+
+export type PublicToolDefinition<TSchema = unknown> = {
+	name: PublicToolName;
+	description: string;
+	snippet: string;
+	inputSchema: TSchema;
+};
+
+export type ResolvedWithinFromCaller = {
+	resolvedWithin: string;
+};
+
+export type ValidatedWithin = {
+	resolvedWithin: string;
+	basePath: string;
+	fileRestriction?: string;
+};
 
 export type SearchCodeRequest = {
 	tool: "search_code";
@@ -52,6 +167,16 @@ export type ResolvedSearchPath = {
 export type AllowlistedPrefix = {
 	prefix: string;
 	mode: "first-child-root";
+};
+
+export type SearchQueryKind = "find_files" | "search_terms" | "grep";
+export type SearchBackendId = "fff-mcp" | "rg-fd";
+
+export type RuntimeRegistryKey = string;
+
+export type RuntimeRequestKey = {
+	backendId: SearchBackendId;
+	persistenceRoot: string;
 };
 
 export type RouterConfig = {
@@ -89,6 +214,14 @@ export type DaemonAction =
 	| { type: "reuse-persistent"; key: string }
 	| { type: "start-persistent"; key: string }
 	| { type: "run-ephemeral"; key: string };
+
+export type RoutingLifecyclePlan = {
+	queryKind: SearchQueryKind;
+	target: RoutingTarget;
+	nextState: DaemonRegistryState;
+	action: DaemonAction;
+	evicted: string[];
+};
 
 export type RouterResponse = {
 	backend_mode: "persistent" | "ephemeral";
