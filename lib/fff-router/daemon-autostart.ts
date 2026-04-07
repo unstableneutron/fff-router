@@ -195,6 +195,8 @@ export async function ensureDaemonRunningWithDeps(
     withStartupLock: (callback: () => Promise<void>, env?: NodeJS.ProcessEnv) => Promise<void>;
   },
 ): Promise<void> {
+  getDaemonConfigFingerprint({ env });
+
   try {
     await deps.checkDaemonHealth(env);
     return;

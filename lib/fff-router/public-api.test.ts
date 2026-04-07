@@ -237,6 +237,48 @@ describe("public-api", () => {
     expect(result.error.code).toBe("INVALID_REQUEST");
   });
 
+  test("expands HOME-based direct-MCP within values", () => {
+    expect(normalizeWithin("~/.config", { HOME: "/home/tester" } as NodeJS.ProcessEnv)).toEqual({
+      ok: true,
+      value: "/home/tester/.config",
+    });
+
+    expect(normalizeWithin("$HOME/.config", { HOME: "/home/tester" } as NodeJS.ProcessEnv)).toEqual(
+      {
+        ok: true,
+        value: "/home/tester/.config",
+      },
+    );
+
+    expect(normalizeWithin("${HOME}/src", { HOME: "/home/tester" } as NodeJS.ProcessEnv)).toEqual({
+      ok: true,
+      value: "/home/tester/src",
+    });
+  });
+
+  test("keeps rejecting non-HOME relative within values for direct callers", () => {
+    const result = normalizeWithin("src", { HOME: "/home/tester" } as NodeJS.ProcessEnv);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("expected failure");
+    }
+    expect(result.error.code).toBe("INVALID_REQUEST");
+  });
+
+  test("fails clearly when direct-MCP HOME expansion is requested without HOME", () => {
+    const result = normalizeWithin("~/.config", {} as NodeJS.ProcessEnv);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("expected failure");
+    }
+    expect(result.error).toEqual({
+      code: "INVALID_REQUEST",
+      message: "HOME must be set to expand '~', '$HOME', or '${HOME}' paths",
+    });
+  });
+
   test("rejects unknown fields so schemas and helpers agree", () => {
     const payload = {
       query: "router",

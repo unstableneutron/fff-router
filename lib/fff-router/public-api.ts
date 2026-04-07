@@ -1,5 +1,6 @@
 import path from "node:path";
 import { type TSchema, Type } from "@sinclair/typebox";
+import { expandHomePath } from "./home-path";
 import type {
   PublicError,
   PublicErrorCode,
@@ -69,7 +70,10 @@ function parseOptionalNonNegativeInt(
   return { ok: true, value };
 }
 
-export function normalizeWithin(value: unknown): Result<string | undefined, PublicError> {
+export function normalizeWithin(
+  value: unknown,
+  env: NodeJS.ProcessEnv = process.env,
+): Result<string | undefined, PublicError> {
   if (value === undefined) {
     return { ok: true, value: undefined };
   }
@@ -78,12 +82,16 @@ export function normalizeWithin(value: unknown): Result<string | undefined, Publ
     return invalid("within must be a non-empty string when provided");
   }
 
-  const trimmed = value.trim();
-  if (!path.isAbsolute(trimmed)) {
+  const expanded = expandHomePath(value, env);
+  if (!expanded.ok) {
+    return expanded;
+  }
+
+  if (!path.isAbsolute(expanded.value)) {
     return invalid("within must be absolute for direct MCP callers");
   }
 
-  return { ok: true, value: trimmed };
+  return { ok: true, value: expanded.value };
 }
 
 export function normalizeExtensions(input: unknown): Result<string[], PublicError> {
@@ -263,20 +271,20 @@ export const grepInputSchema = Type.Object(
 export const PUBLIC_TOOL_DEFINITIONS = [
   defineTool(
     "fff_find_files",
-    "Find files by fuzzy name/path under an already-resolved within scope.",
-    '{"query":"router","within":"/absolute/path"}',
+    "Find files by fuzzy name/path under an already-resolved within scope (absolute or HOME-based).",
+    '{"query":"router","within":"~/.config"}',
     findFilesInputSchema,
   ),
   defineTool(
     "fff_search_terms",
-    "Search for one or more literal terms under an already-resolved within scope.",
-    '{"terms":["router","coordinator"],"within":"/absolute/path"}',
+    "Search for one or more literal terms under an already-resolved within scope (absolute or HOME-based).",
+    '{"terms":["router","coordinator"],"within":"$HOME/.config"}',
     searchTermsInputSchema,
   ),
   defineTool(
     "fff_grep",
-    "Run structured grep under an already-resolved within scope.",
-    '{"pattern":"plan(Request)?","within":"/absolute/path"}',
+    "Run structured grep under an already-resolved within scope (absolute or HOME-based).",
+    '{"pattern":"plan(Request)?","within":"${HOME}/src"}',
     grepInputSchema,
   ),
 ] as const;

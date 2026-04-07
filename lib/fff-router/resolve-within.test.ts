@@ -88,6 +88,48 @@ describe("resolve-within", () => {
     });
   });
 
+  test("expands HOME-based within values before wrapper-side resolution", async () => {
+    const home = path.join(tmpDir, "home");
+    const target = path.join(home, ".config", "zellij");
+    await fs.mkdir(target, { recursive: true });
+
+    const tilde = await resolveWithinFromCaller({
+      callerCwd: path.join(tmpDir, "project"),
+      within: "~/.config/zellij",
+      env: { HOME: home } as NodeJS.ProcessEnv,
+    });
+    expect(tilde).toEqual({ ok: true, value: { resolvedWithin: target } });
+
+    const shellVar = await resolveWithinFromCaller({
+      callerCwd: path.join(tmpDir, "project"),
+      within: "$HOME/.config/zellij",
+      env: { HOME: home } as NodeJS.ProcessEnv,
+    });
+    expect(shellVar).toEqual({ ok: true, value: { resolvedWithin: target } });
+
+    const braced = await resolveWithinFromCaller({
+      callerCwd: path.join(tmpDir, "project"),
+      within: "${HOME}/.config/zellij",
+      env: { HOME: home } as NodeJS.ProcessEnv,
+    });
+    expect(braced).toEqual({ ok: true, value: { resolvedWithin: target } });
+  });
+
+  test("fails clearly when wrapper-side HOME expansion is requested without HOME", async () => {
+    const result = await resolveWithinFromCaller({
+      callerCwd: path.join(tmpDir, "project"),
+      within: "~/.config",
+      env: {} as NodeJS.ProcessEnv,
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected failure");
+    expect(result.error).toEqual({
+      code: "INVALID_REQUEST",
+      message: "HOME must be set to expand '~', '$HOME', or '${HOME}' paths",
+    });
+  });
+
   test("accepts already-resolved absolute within values on the server", async () => {
     const dir = path.join(tmpDir, "project", "src");
     await fs.mkdir(dir, { recursive: true });

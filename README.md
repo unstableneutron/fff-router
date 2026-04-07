@@ -48,6 +48,7 @@ Clients should:
 
 - default omitted `within` to the caller cwd
 - resolve relative `within` against the caller cwd
+- expand `~/...`, `$HOME/...`, and `${HOME}/...` before absolute-path validation or relative resolution
 - send the resolved absolute value to the daemon
 
 Server-side behavior:
@@ -62,6 +63,17 @@ Server-side behavior:
 The daemon keeps the public API stable while letting you choose the backend with:
 
 - `FFF_ROUTER_BACKEND=fff-node|fff-mcp|rg`
+- `FFF_ROUTER_ALLOWLIST=<colon-separated non-git prefixes>`
+
+## Non-git allowlist
+
+Set `FFF_ROUTER_ALLOWLIST` to a colon-separated list of absolute or HOME-based prefixes:
+
+```bash
+export FFF_ROUTER_ALLOWLIST="~/.config:$HOME/.local/share:${HOME}/src"
+```
+
+Each prefix is matched recursively for allowlisting. Non-git routing still derives the persistence root using the first child under the matched prefix, while Git repositories under an allowlisted path still take precedence.
 
 Current default:
 
@@ -168,6 +180,7 @@ They:
 
 - default omitted `within` to the wrapper caller cwd
 - resolve relative `within` against the wrapper caller cwd
+- expand `~/...`, `$HOME/...`, and `${HOME}/...` before resolution
 - auto-start the daemon if it is missing
 - call the daemon over MCP HTTP
 

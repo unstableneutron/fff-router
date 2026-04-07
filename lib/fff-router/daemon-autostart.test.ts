@@ -62,6 +62,32 @@ describe("ensureDaemonRunningWithDeps", () => {
     expect(spawnDaemon).toHaveBeenCalledTimes(1);
     expect(waitForDaemonReady).toHaveBeenCalledTimes(1);
   });
+
+  test("surfaces invalid HOME-based allowlist config before spawn", async () => {
+    const checkHealth = vi.fn<() => Promise<void>>(async () => {
+      throw new Error("fetch failed");
+    });
+    const spawnDaemon = vi.fn(() => ({ unref() {} }));
+
+    await expect(
+      ensureDaemonRunningWithDeps(
+        {
+          FFF_ROUTER_ALLOWLIST: "~/.config",
+        } as NodeJS.ProcessEnv,
+        {
+          checkDaemonHealth: checkHealth,
+          readRunningDaemonMetadata: async () => null,
+          terminateProcess: async () => {},
+          spawnDaemon,
+          waitForDaemonReady: async () => {},
+          withStartupLock: async (callback) => await callback(),
+        },
+      ),
+    ).rejects.toThrow(/HOME must be set/i);
+
+    expect(checkHealth).not.toHaveBeenCalled();
+    expect(spawnDaemon).not.toHaveBeenCalled();
+  });
 });
 
 describe("checkDaemonHealth", () => {

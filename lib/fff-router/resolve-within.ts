@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expandHomePath } from "./home-path";
 import type { PublicError, ResolvedWithinFromCaller, Result, ValidatedWithin } from "./types";
 
 function invalid(message: string): Result<never, PublicError> {
@@ -62,7 +63,9 @@ function resolveStatType(
 export async function resolveWithinFromCaller(args: {
   callerCwd: string;
   within?: string | null;
+  env?: NodeJS.ProcessEnv;
 }): Promise<Result<ResolvedWithinFromCaller, PublicError>> {
+  const env = args.env ?? process.env;
   const callerCwd = validateAbsolutePath(args.callerCwd, "callerCwd");
   if (!callerCwd.ok) {
     return callerCwd;
@@ -72,7 +75,12 @@ export async function resolveWithinFromCaller(args: {
     return { ok: true, value: { resolvedWithin: callerCwd.value } };
   }
 
-  const within = args.within.trim();
+  const expandedWithin = expandHomePath(args.within, env);
+  if (!expandedWithin.ok) {
+    return expandedWithin;
+  }
+
+  const within = expandedWithin.value;
   if (within === "") {
     return invalid("within must be a non-empty string when provided");
   }

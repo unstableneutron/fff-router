@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { getBackendSelection } from "./backend-config";
+import { expandHomePath } from "./home-path";
 import type { RouterConfig } from "./types";
 
 export const DEFAULT_DAEMON_HOST = "127.0.0.1";
@@ -45,14 +46,24 @@ function parseNumber(raw: string | undefined, fallback: number): number {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
-function parseAllowlist(raw: string | undefined): RouterConfig["allowlistedNonGitPrefixes"] {
+function parseAllowlist(
+  raw: string | undefined,
+  env: NodeJS.ProcessEnv,
+): RouterConfig["allowlistedNonGitPrefixes"] {
   if (!raw) {
     return [];
   }
 
   return raw
     .split(":")
-    .map((prefix) => prefix.trim())
+    .map((prefix) => expandHomePath(prefix, env))
+    .map((result) => {
+      if (!result.ok) {
+        throw new Error(result.error.message);
+      }
+
+      return result.value;
+    })
     .filter(Boolean)
     .map((prefix) => ({ prefix, mode: "first-child-root" as const }));
 }
@@ -60,7 +71,7 @@ function parseAllowlist(raw: string | undefined): RouterConfig["allowlistedNonGi
 export function loadRouterConfig(args: { env?: NodeJS.ProcessEnv } = {}): RouterConfig {
   const env = args.env ?? process.env;
   return {
-    allowlistedNonGitPrefixes: parseAllowlist(env.FFF_ROUTER_ALLOWLIST),
+    allowlistedNonGitPrefixes: parseAllowlist(env.FFF_ROUTER_ALLOWLIST, env),
     promotion: {
       windowMs: parseNumber(env.FFF_ROUTER_PROMOTION_WINDOW_MS, 10 * 60 * 1000),
       requiredHits: parseNumber(env.FFF_ROUTER_PROMOTION_REQUIRED_HITS, 2),
