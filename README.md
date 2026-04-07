@@ -150,6 +150,25 @@ bun run test
 bun run check
 ```
 
+## Docker validation
+
+A container-oriented end-to-end validator lives at:
+
+```bash
+scripts/docker-validate-wrappers.sh
+```
+
+Run it from a Dockerized checkout rooted at `/workspace` with an isolated container `node_modules` volume:
+
+```bash
+docker run --rm \
+  -v "$PWD":/workspace \
+  -v /workspace/node_modules \
+  -w /workspace \
+  oven/bun:1 \
+  bash -lc 'bun install && bash scripts/docker-validate-wrappers.sh'
+```
+
 ## Start the daemon explicitly
 
 Default bind:
