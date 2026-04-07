@@ -92,6 +92,19 @@ export type PublicCompactGrepResult = {
   items: PublicCompactTextMatch[];
 };
 
+export type PublicCompactRenderedTextResult = {
+  mode: "compact";
+  base_path: string;
+  next_cursor: null;
+  text: string;
+};
+
+export type PublicJsonReadRecommendation = {
+  path: string;
+  absolute_path: string;
+  reason?: string;
+};
+
 export type PublicJsonItem = Record<string, unknown>;
 
 export type PublicJsonResult<TItem extends PublicJsonItem = PublicJsonItem> = {
@@ -103,7 +116,10 @@ export type PublicJsonResult<TItem extends PublicJsonItem = PublicJsonItem> = {
   fallback_reason?: "backend_error";
   stats: {
     result_count: number;
+    shown_count?: number;
+    total_count?: number;
   };
+  read_recommendation?: PublicJsonReadRecommendation;
   items: TItem[];
 };
 
@@ -111,6 +127,7 @@ export type PublicToolResult =
   | PublicCompactFindFilesResult
   | PublicCompactSearchTermsResult
   | PublicCompactGrepResult
+  | PublicCompactRenderedTextResult
   | PublicJsonResult<PublicJsonItem>;
 
 export type PublicToolDefinition<TSchema = unknown> = {

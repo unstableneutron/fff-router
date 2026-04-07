@@ -55,6 +55,8 @@ export type BackendTextMatch = {
   column?: number;
   contextBefore?: string[];
   contextAfter?: string[];
+  isDefinition?: boolean;
+  definitionBody?: string[];
 };
 
 export type BackendResultItem = BackendFileItem | BackendTextMatch;
@@ -65,11 +67,22 @@ export type BackendSearchError = {
   backendId: SearchBackendId;
 };
 
+export type BackendSearchSummary = {
+  shownCount?: number;
+  totalCount?: number;
+  readRecommendation?: {
+    relativePath: string;
+    reason?: string;
+  };
+};
+
 export type BackendSearchSuccess = {
   backendId: SearchBackendId;
   queryKind: SearchQueryKind;
   items: BackendResultItem[];
   nextCursor: null;
+  renderedCompact?: string;
+  summary?: BackendSearchSummary;
 };
 
 export type BackendSearchResult = Result<BackendSearchSuccess, BackendSearchError>;

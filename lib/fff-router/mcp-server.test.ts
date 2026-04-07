@@ -114,6 +114,44 @@ describe("createMcpServer", () => {
     expect(json.content[0]?.text).toContain('"backend_used": "rg"');
   });
 
+  test("serializes compact passthrough text results unchanged", async () => {
+    const server = createMcpServer({
+      coordinator: makeCoordinator({
+        ok: true,
+        value: {
+          mode: "compact",
+          base_path: "/repo/src",
+          next_cursor: null,
+          text: "→ Read src/router.ts (only match)\nsrc/router.ts [def]",
+        },
+      }).coordinator,
+    });
+
+    const result = await server.callTool("fff_grep", {
+      pattern: "router",
+      within: "/repo/src",
+    });
+
+    expect(result).toEqual({
+      isError: false,
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify(
+            {
+              mode: "compact",
+              base_path: "/repo/src",
+              next_cursor: null,
+              text: "→ Read src/router.ts (only match)\nsrc/router.ts [def]",
+            },
+            null,
+            2,
+          ),
+        },
+      ],
+    });
+  });
+
   test("maps public errors through MCP tool failures", async () => {
     const { coordinator } = makeCoordinator({
       ok: false,

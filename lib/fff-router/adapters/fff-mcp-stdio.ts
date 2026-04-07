@@ -2,7 +2,12 @@ import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { filterItems } from "./common";
-import type { BackendSearchResult, SearchBackendAdapter, SearchBackendRuntime } from "./types";
+import type {
+  BackendSearchResult,
+  BackendSearchSummary,
+  SearchBackendAdapter,
+  SearchBackendRuntime,
+} from "./types";
 
 type FffMcpRuntime = SearchBackendRuntime & {
   callTool: (name: string, args: Record<string, unknown>) => Promise<string>;
@@ -159,6 +164,38 @@ function parseFindFilesOutput(text: string, persistenceRoot: string) {
   return items;
 }
 
+function parseReadRecommendation(
+  line: string,
+): BackendSearchSummary["readRecommendation"] | undefined {
+  const match = line.match(/^→\s+Read\s+(.+?)(?:\s+\((.+)\))?$/);
+  if (!match) {
+    return undefined;
+  }
+
+  const relativePath = match[1];
+  const reason = match[2];
+  if (!relativePath) {
+    return undefined;
+  }
+
+  return {
+    relativePath: normalizeRelative(relativePath.trim().replace(/\s+\[def\]$/, "")),
+    ...(reason ? { reason: reason.trim() } : {}),
+  };
+}
+
+function parseShownSummary(line: string): Pick<BackendSearchSummary, "shownCount" | "totalCount"> {
+  const match = line.match(/^(\d+)\/(\d+)\s+matches\s+shown$/);
+  if (!match) {
+    return {};
+  }
+
+  return {
+    shownCount: Number(match[1]),
+    totalCount: Number(match[2]),
+  };
+}
+
 function parseTextMatchOutput(text: string, persistenceRoot: string) {
   const items: Array<{
     path: string;
@@ -167,9 +204,13 @@ function parseTextMatchOutput(text: string, persistenceRoot: string) {
     text: string;
     contextBefore?: string[];
     contextAfter?: string[];
+    isDefinition?: boolean;
+    definitionBody?: string[];
   }> = [];
 
+  const summary: BackendSearchSummary = {};
   let currentPath: string | null = null;
+  let currentPathIsDefinition = false;
   let pendingBefore: string[] = [];
   let currentMatch: {
     path: string;
@@ -178,18 +219,29 @@ function parseTextMatchOutput(text: string, persistenceRoot: string) {
     text: string;
     contextBefore?: string[];
     contextAfter?: string[];
+    isDefinition?: boolean;
+    definitionBody?: string[];
   } | null = null;
 
   for (const rawLine of text.split(/\r?\n/)) {
     const line = rawLine.trimEnd();
-    if (
-      !line ||
-      line.startsWith("→") ||
-      line.startsWith("cursor:") ||
-      /^\d+\/\d+\s+matches/.test(line) ||
-      /^0\s+matches/.test(line) ||
-      /^0\s+exact\s+matches/.test(line)
-    ) {
+    if (!line || line.startsWith("cursor:")) {
+      continue;
+    }
+
+    const readRecommendation = parseReadRecommendation(line);
+    if (readRecommendation) {
+      summary.readRecommendation = readRecommendation;
+      continue;
+    }
+
+    const shownSummary = parseShownSummary(line);
+    if (shownSummary.shownCount !== undefined || shownSummary.totalCount !== undefined) {
+      Object.assign(summary, shownSummary);
+      continue;
+    }
+
+    if (/^0\s+matches/.test(line) || /^0\s+exact\s+matches/.test(line)) {
       continue;
     }
 
@@ -215,6 +267,7 @@ function parseTextMatchOutput(text: string, persistenceRoot: string) {
           line: lineNumber,
           text: content,
           ...(pendingBefore.length > 0 ? { contextBefore: [...pendingBefore] } : {}),
+          ...(currentPathIsDefinition ? { isDefinition: true } : {}),
         };
         items.push(currentMatch);
         pendingBefore = [];
@@ -232,18 +285,23 @@ function parseTextMatchOutput(text: string, persistenceRoot: string) {
 
       if (kind === "|") {
         if (currentMatch) {
-          currentMatch.contextAfter = [...(currentMatch.contextAfter ?? []), content];
+          if (currentMatch.isDefinition) {
+            currentMatch.definitionBody = [...(currentMatch.definitionBody ?? []), content];
+          } else {
+            currentMatch.contextAfter = [...(currentMatch.contextAfter ?? []), content];
+          }
         }
         continue;
       }
     }
 
+    currentPathIsDefinition = /\s+\[def\]$/.test(line);
     currentPath = normalizeRelative(line.replace(/\s+\[[^\]]+\]$/, ""));
     currentMatch = null;
     pendingBefore = [];
   }
 
-  return items;
+  return { items, summary };
 }
 
 async function callToolText(
@@ -341,16 +399,16 @@ export function createFffMcpStdioAdapter(): SearchBackendAdapter<FffMcpRuntime> 
               maxResults: args.request.limit,
               context: args.request.contextLines,
             });
+            const parsed = parseTextMatchOutput(text, args.request.persistenceRoot);
             return {
               ok: true,
               value: {
                 backendId: "fff-mcp",
                 queryKind: "search_terms",
-                items: filterItems(
-                  args.request,
-                  parseTextMatchOutput(text, args.request.persistenceRoot),
-                ),
+                items: filterItems(args.request, parsed.items),
                 nextCursor: null,
+                renderedCompact: text,
+                summary: parsed.summary,
               },
             };
           }
@@ -359,16 +417,16 @@ export function createFffMcpStdioAdapter(): SearchBackendAdapter<FffMcpRuntime> 
               query: compileGrepQuery(args.request),
               maxResults: args.request.limit,
             });
+            const parsed = parseTextMatchOutput(text, args.request.persistenceRoot);
             return {
               ok: true,
               value: {
                 backendId: "fff-mcp",
                 queryKind: "grep",
-                items: filterItems(
-                  args.request,
-                  parseTextMatchOutput(text, args.request.persistenceRoot),
-                ),
+                items: filterItems(args.request, parsed.items),
                 nextCursor: null,
+                renderedCompact: text,
+                summary: parsed.summary,
               },
             };
           }

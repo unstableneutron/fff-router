@@ -121,11 +121,37 @@ function buildBackendRequest(args: {
 function shapePublicResult(args: {
   request: PublicToolRequest;
   basePath: string;
+  persistenceRoot: string;
   backendUsed: SearchBackendId;
   fallbackApplied: boolean;
   items: Array<Record<string, unknown>>;
+  renderedCompact?: string;
+  summary?: {
+    shownCount?: number;
+    totalCount?: number;
+    readRecommendation?: {
+      relativePath: string;
+      reason?: string;
+    };
+  };
 }): PublicToolResult {
   if (args.request.outputMode === "json") {
+    const readRecommendation = args.summary?.readRecommendation
+      ? (() => {
+          const absolutePath = path.join(
+            args.persistenceRoot,
+            args.summary!.readRecommendation!.relativePath,
+          );
+          return {
+            path: normalizeCoordinatorPath(path.relative(args.basePath, absolutePath)),
+            absolute_path: absolutePath,
+            ...(args.summary?.readRecommendation?.reason
+              ? { reason: args.summary.readRecommendation.reason }
+              : {}),
+          };
+        })()
+      : undefined;
+
     return {
       mode: "json",
       base_path: args.basePath,
@@ -133,8 +159,31 @@ function shapePublicResult(args: {
       backend_used: args.backendUsed,
       fallback_applied: args.fallbackApplied,
       ...(args.fallbackApplied ? { fallback_reason: "backend_error" as const } : {}),
-      stats: { result_count: args.items.length },
+      stats: {
+        result_count: args.items.length,
+        ...(typeof args.summary?.shownCount === "number"
+          ? { shown_count: args.summary.shownCount }
+          : {}),
+        ...(typeof args.summary?.totalCount === "number"
+          ? { total_count: args.summary.totalCount }
+          : {}),
+      },
+      ...(readRecommendation ? { read_recommendation: readRecommendation } : {}),
       items: args.items,
+    };
+  }
+
+  if (
+    args.backendUsed === "fff-mcp" &&
+    (args.request.tool === "fff_search_terms" || args.request.tool === "fff_grep") &&
+    typeof args.renderedCompact === "string" &&
+    args.renderedCompact.length > 0
+  ) {
+    return {
+      mode: "compact",
+      base_path: args.basePath,
+      next_cursor: null,
+      text: args.renderedCompact,
     };
   }
 
@@ -181,6 +230,8 @@ function normalizeBackendItems(
         ...(typeof item.column === "number" ? { column: item.column } : {}),
         ...(Array.isArray(item.contextBefore) ? { context_before: item.contextBefore } : {}),
         ...(Array.isArray(item.contextAfter) ? { context_after: item.contextAfter } : {}),
+        ...(item.isDefinition === true ? { is_definition: true } : {}),
+        ...(Array.isArray(item.definitionBody) ? { definition_body: item.definitionBody } : {}),
       };
     }
 
@@ -456,9 +507,12 @@ export class SearchCoordinatorImpl implements SearchCoordinator {
         value: shapePublicResult({
           request,
           basePath: validatedWithin.value.basePath,
+          persistenceRoot: lifecyclePlan.value.target.persistenceRoot,
           backendUsed: primaryResult.value.backendId,
           fallbackApplied: false,
           items: normalizedItems,
+          renderedCompact: primaryResult.value.renderedCompact,
+          summary: primaryResult.value.summary,
         }),
       };
     }
@@ -528,9 +582,12 @@ export class SearchCoordinatorImpl implements SearchCoordinator {
       value: shapePublicResult({
         request,
         basePath: validatedWithin.value.basePath,
+        persistenceRoot: lifecyclePlan.value.target.persistenceRoot,
         backendUsed: fallbackResult.value.backendId,
         fallbackApplied: true,
         items: normalizedItems,
+        renderedCompact: fallbackResult.value.renderedCompact,
+        summary: fallbackResult.value.summary,
       }),
     };
   }

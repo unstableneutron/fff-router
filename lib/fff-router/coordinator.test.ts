@@ -8,7 +8,7 @@ import type {
 } from "./adapters/types";
 import { createSearchCoordinator } from "./coordinator";
 import { RuntimeManager } from "./runtime-manager";
-import type { PublicToolRequest, RouterConfig, SearchQueryKind } from "./types";
+import type { PublicToolRequest, RouterConfig, SearchBackendId, SearchQueryKind } from "./types";
 
 const config: RouterConfig = {
   allowlistedNonGitPrefixes: [
@@ -37,7 +37,7 @@ function makePublicRequest(overrides: Partial<PublicToolRequest> = {}): PublicTo
 }
 
 function makeAdapter(args: {
-  backendId: "fff-node" | "rg";
+  backendId: SearchBackendId;
   supportedQueryKinds?: SearchQueryKind[];
   execute: (request: BackendSearchRequest) => Promise<BackendSearchResult>;
 }) {
@@ -72,7 +72,7 @@ function makeAdapter(args: {
 function okResult(
   queryKind: SearchQueryKind,
   items: BackendResultItem[],
-  backendId: "fff-node" | "rg" = "fff-node",
+  backendId: SearchBackendId = "fff-node",
 ): BackendSearchResult {
   return {
     ok: true,
@@ -230,6 +230,199 @@ describe("createSearchCoordinator", () => {
     });
     expect(primary.startCount).toBe(1);
     expect(fallback.calls).toHaveLength(0);
+  });
+
+  test("preserves compact passthrough text from fff-mcp grep", async () => {
+    const primary = makeAdapter({
+      backendId: "fff-mcp",
+      execute: async () => ({
+        ok: true as const,
+        value: {
+          backendId: "fff-mcp" as const,
+          queryKind: "grep" as const,
+          items: [],
+          nextCursor: null,
+          renderedCompact: [
+            "→ Read lib/fff-router/coordinator.ts (only match)",
+            "lib/fff-router/coordinator.ts [def]",
+            " 539: export function createSearchCoordinator(deps: CoordinatorDeps): SearchCoordinator {",
+            " 540| return new SearchCoordinatorImpl(deps);",
+          ].join("\n"),
+        },
+      }),
+    });
+
+    const coordinator = createSearchCoordinator({
+      config,
+      adapters: { "fff-mcp": primary.adapter },
+      primaryBackendId: "fff-mcp",
+      fallbackBackendId: null,
+      runtimeManager: new RuntimeManager(),
+      validateWithin: async ({ within }) => ({
+        ok: true,
+        value: { resolvedWithin: within, basePath: within },
+      }),
+      resolveRoutingPath: async (within) => ({
+        ok: true,
+        value: { realPath: within, statType: "directory", gitRoot: "/repo" },
+      }),
+    });
+
+    const result = await coordinator.execute(
+      makePublicRequest({
+        tool: "fff_grep",
+        pattern: "createSearchCoordinator",
+        caseSensitive: true,
+        contextLines: 0,
+      }),
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected success");
+    expect(result.value).toEqual({
+      mode: "compact",
+      base_path: "/repo/src",
+      next_cursor: null,
+      text: [
+        "→ Read lib/fff-router/coordinator.ts (only match)",
+        "lib/fff-router/coordinator.ts [def]",
+        " 539: export function createSearchCoordinator(deps: CoordinatorDeps): SearchCoordinator {",
+        " 540| return new SearchCoordinatorImpl(deps);",
+      ].join("\n"),
+    });
+  });
+
+  test("preserves compact passthrough text from fff-mcp search_terms", async () => {
+    const primary = makeAdapter({
+      backendId: "fff-mcp",
+      execute: async () => ({
+        ok: true as const,
+        value: {
+          backendId: "fff-mcp" as const,
+          queryKind: "search_terms" as const,
+          items: [],
+          nextCursor: null,
+          renderedCompact: "→ Read lib/fff-router/coordinator.ts (only match)",
+        },
+      }),
+    });
+
+    const coordinator = createSearchCoordinator({
+      config,
+      adapters: { "fff-mcp": primary.adapter },
+      primaryBackendId: "fff-mcp",
+      fallbackBackendId: null,
+      runtimeManager: new RuntimeManager(),
+      validateWithin: async ({ within }) => ({
+        ok: true,
+        value: { resolvedWithin: within, basePath: within },
+      }),
+      resolveRoutingPath: async (within) => ({
+        ok: true,
+        value: { realPath: within, statType: "directory", gitRoot: "/repo" },
+      }),
+    });
+
+    const result = await coordinator.execute(
+      makePublicRequest({
+        tool: "fff_search_terms",
+        terms: ["createSearchCoordinator"],
+        contextLines: 0,
+      }),
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected success");
+    expect(result.value).toEqual({
+      mode: "compact",
+      base_path: "/repo/src",
+      next_cursor: null,
+      text: "→ Read lib/fff-router/coordinator.ts (only match)",
+    });
+  });
+
+  test("adds fff-mcp summary and item metadata to json results", async () => {
+    const primary = makeAdapter({
+      backendId: "fff-mcp",
+      execute: async () => ({
+        ok: true as const,
+        value: {
+          backendId: "fff-mcp" as const,
+          queryKind: "grep" as const,
+          items: [
+            {
+              path: "/repo/src/coordinator.ts",
+              relativePath: "src/coordinator.ts",
+              line: 539,
+              text: "export function createSearchCoordinator(deps: CoordinatorDeps): SearchCoordinator {",
+              isDefinition: true,
+              definitionBody: ["return new SearchCoordinatorImpl(deps);", "}"],
+            },
+          ],
+          nextCursor: null,
+          summary: {
+            shownCount: 1,
+            totalCount: 1,
+            readRecommendation: {
+              relativePath: "src/coordinator.ts",
+              reason: "only match",
+            },
+          },
+        },
+      }),
+    });
+
+    const coordinator = createSearchCoordinator({
+      config,
+      adapters: { "fff-mcp": primary.adapter },
+      primaryBackendId: "fff-mcp",
+      fallbackBackendId: null,
+      runtimeManager: new RuntimeManager(),
+      validateWithin: async ({ within }) => ({
+        ok: true,
+        value: { resolvedWithin: within, basePath: within },
+      }),
+      resolveRoutingPath: async (within) => ({
+        ok: true,
+        value: { realPath: within, statType: "directory", gitRoot: "/repo" },
+      }),
+    });
+
+    const result = await coordinator.execute(
+      makePublicRequest({
+        tool: "fff_grep",
+        pattern: "createSearchCoordinator",
+        caseSensitive: true,
+        contextLines: 0,
+        outputMode: "json",
+      }),
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected success");
+    expect(result.value).toEqual({
+      mode: "json",
+      base_path: "/repo/src",
+      next_cursor: null,
+      backend_used: "fff-mcp",
+      fallback_applied: false,
+      stats: { result_count: 1, shown_count: 1, total_count: 1 },
+      read_recommendation: {
+        path: "coordinator.ts",
+        absolute_path: "/repo/src/coordinator.ts",
+        reason: "only match",
+      },
+      items: [
+        {
+          path: "coordinator.ts",
+          absolute_path: "/repo/src/coordinator.ts",
+          line: 539,
+          text: "export function createSearchCoordinator(deps: CoordinatorDeps): SearchCoordinator {",
+          is_definition: true,
+          definition_body: ["return new SearchCoordinatorImpl(deps);", "}"],
+        },
+      ],
+    });
   });
 
   test("invokes routing lifecycle planning and reuses persistent runtimes", async () => {

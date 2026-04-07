@@ -4,6 +4,7 @@ import { getDaemonEndpoint } from "./daemon-config";
 import type {
   PublicCompactFindFilesResult,
   PublicCompactGrepResult,
+  PublicCompactRenderedTextResult,
   PublicCompactSearchTermsResult,
   PublicErrorCode,
   PublicFindFilesRequest,
@@ -65,7 +66,7 @@ function toToolCall(request: PublicToolRequest): {
   }
 }
 
-function unwrapToolResponse(response: {
+export function unwrapToolResponse(response: {
   isError?: boolean;
   content?: Array<{ type: string; text?: string }>;
 }): SearchCoordinatorResult {
@@ -84,6 +85,7 @@ function unwrapToolResponse(response: {
     | PublicCompactFindFilesResult
     | PublicCompactSearchTermsResult
     | PublicCompactGrepResult
+    | PublicCompactRenderedTextResult
     | PublicJsonResult
     | { code?: PublicErrorCode; message?: string };
   if (response.isError) {
