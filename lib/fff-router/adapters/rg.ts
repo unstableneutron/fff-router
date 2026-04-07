@@ -53,7 +53,7 @@ function backendUnavailable(message: string): BackendSearchResult {
     ok: false,
     error: {
       code: "BACKEND_UNAVAILABLE",
-      backendId: "rg-fd",
+      backendId: "rg",
       message,
     },
   };
@@ -64,7 +64,7 @@ function searchFailed(message: string): BackendSearchResult {
     ok: false,
     error: {
       code: "SEARCH_FAILED",
-      backendId: "rg-fd",
+      backendId: "rg",
       message,
     },
   };
@@ -114,11 +114,23 @@ function fuzzyMatch(relativePath: string, query: string): boolean {
   return parts.every((part) => haystack.includes(part));
 }
 
+type ParsedRgMatch = {
+  path: string;
+  relativePath: string;
+  line: number;
+  text: string;
+  column?: number;
+  contextBefore?: string[];
+  contextAfter?: string[];
+};
+
 function parseRgJsonMatches(
   stdout: string,
   persistenceRoot: string,
-): Result<BackendResultItem[], { code: "SEARCH_FAILED"; message: string; backendId: "rg-fd" }> {
-  const items: BackendResultItem[] = [];
+): Result<BackendResultItem[], { code: "SEARCH_FAILED"; message: string; backendId: "rg" }> {
+  const items: ParsedRgMatch[] = [];
+  const pendingBefore = new Map<string, string[]>();
+  const lastMatchIndexByPath = new Map<string, number>();
 
   for (const line of stdout.split(/\r?\n/)) {
     if (!line.trim()) {
@@ -141,34 +153,63 @@ function parseRgJsonMatches(
         ok: false,
         error: {
           code: "SEARCH_FAILED",
-          backendId: "rg-fd",
+          backendId: "rg",
           message: "rg returned invalid JSON output",
         },
       };
     }
 
-    if (event.type !== "match" || !event.data?.path?.text) {
+    const data = event.data;
+    const absolutePath = data?.path?.text;
+    if (!absolutePath || !data) {
       continue;
     }
 
-    const absolutePath = event.data.path.text;
+    const cleanText = (data.lines?.text ?? "").replace(/\r?\n$/, "");
+    const before = pendingBefore.get(absolutePath) ?? [];
+
+    if (event.type === "context") {
+      if (cleanText) {
+        before.push(cleanText);
+        pendingBefore.set(absolutePath, before);
+
+        const lastMatchIndex = lastMatchIndexByPath.get(absolutePath);
+        if (typeof lastMatchIndex === "number") {
+          const lastMatch = items[lastMatchIndex];
+          if (lastMatch) {
+            const contextAfter = lastMatch.contextAfter ?? [];
+            contextAfter.push(cleanText);
+            lastMatch.contextAfter = contextAfter;
+          }
+        }
+      }
+      continue;
+    }
+
+    if (event.type !== "match") {
+      continue;
+    }
+
     items.push({
       path: absolutePath,
       relativePath: toRelativePath(persistenceRoot, absolutePath),
-      line: event.data.line_number ?? 0,
-      text: (event.data.lines?.text ?? "").replace(/\r?\n$/, ""),
-      column: event.data.submatches?.[0]?.start,
+      line: data.line_number ?? 0,
+      text: cleanText,
+      column: data.submatches?.[0]?.start,
+      ...(before.length > 0 ? { contextBefore: [...before] } : {}),
     });
+    pendingBefore.set(absolutePath, []);
+    lastMatchIndexByPath.set(absolutePath, items.length - 1);
   }
 
   return { ok: true, value: items };
 }
 
-export function createRgFdAdapter(deps?: { runCommand?: RunCommand }): SearchBackendAdapter {
+export function createRgAdapter(deps?: { runCommand?: RunCommand }): SearchBackendAdapter {
   const runCommand = deps?.runCommand ?? defaultRunCommand;
 
   return {
-    backendId: "rg-fd",
+    backendId: "rg",
     supportedQueryKinds: ["find_files", "search_terms", "grep"],
     async execute(args) {
       switch (args.request.queryKind) {
@@ -205,7 +246,7 @@ export function createRgFdAdapter(deps?: { runCommand?: RunCommand }): SearchBac
           return {
             ok: true,
             value: {
-              backendId: "rg-fd",
+              backendId: "rg",
               queryKind: "find_files",
               items,
               nextCursor: null,
@@ -239,7 +280,7 @@ export function createRgFdAdapter(deps?: { runCommand?: RunCommand }): SearchBac
           return {
             ok: true,
             value: {
-              backendId: "rg-fd",
+              backendId: "rg",
               queryKind: "search_terms",
               items: filterItems(request, parsed.value),
               nextCursor: null,
@@ -272,7 +313,7 @@ export function createRgFdAdapter(deps?: { runCommand?: RunCommand }): SearchBac
           return {
             ok: true,
             value: {
-              backendId: "rg-fd",
+              backendId: "rg",
               queryKind: "grep",
               items: filterItems(request, parsed.value),
               nextCursor: null,

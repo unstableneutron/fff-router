@@ -1,5 +1,6 @@
 .cursor/rules/
 docs/superpowers/
+scratch/
 
 # dependencies (bun install)
 node_modules

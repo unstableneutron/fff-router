@@ -15,6 +15,7 @@ import type {
   PublicToolResult,
   RouterConfig,
   RoutingLifecyclePlan,
+  SearchBackendId,
   SearchCoordinator,
   SearchCoordinatorResult,
   SearchQueryKind,
@@ -23,8 +24,9 @@ import type {
 
 type CoordinatorDeps = {
   config: RouterConfig;
-  primaryAdapter: SearchBackendAdapter<any>;
-  fallbackAdapter: SearchBackendAdapter<any>;
+  adapters: Partial<Record<SearchBackendId, SearchBackendAdapter<any>>>;
+  primaryBackendId: SearchBackendId;
+  fallbackBackendId: SearchBackendId | null;
   runtimeManager: RuntimeManager<any>;
   validateWithin?: typeof validateResolvedWithin;
   resolveRoutingPath?: typeof resolveSearchPath;
@@ -78,7 +80,7 @@ function buildBackendRequest(args: {
   request: PublicToolRequest;
   validatedWithin: ValidatedWithin;
   persistenceRoot: string;
-  backendId: "fff-mcp" | "rg-fd";
+  backendId: SearchBackendId;
 }): BackendSearchRequest {
   const base = {
     backendId: args.backendId,
@@ -119,7 +121,7 @@ function buildBackendRequest(args: {
 function shapePublicResult(args: {
   request: PublicToolRequest;
   basePath: string;
-  backendUsed: "fff-mcp" | "rg-fd";
+  backendUsed: SearchBackendId;
   fallbackApplied: boolean;
   items: Array<Record<string, unknown>>;
 }): PublicToolResult {
@@ -247,14 +249,28 @@ export class SearchCoordinatorImpl implements SearchCoordinator {
   }
 
   private async applyLifecycleEvictions(evicted: string[]): Promise<void> {
+    const persistentBackendIds = Object.values(this.deps.adapters)
+      .filter((adapter) => typeof adapter.startRuntime === "function")
+      .map((adapter) => adapter.backendId);
+
     await Promise.all(
-      evicted.map((persistenceRoot) =>
-        this.deps.runtimeManager.evictRuntime({
-          backendId: this.deps.primaryAdapter.backendId,
-          persistenceRoot,
-        }),
+      evicted.flatMap((persistenceRoot) =>
+        persistentBackendIds.map((backendId) =>
+          this.deps.runtimeManager.evictRuntime({
+            backendId,
+            persistenceRoot,
+          }),
+        ),
       ),
     );
+  }
+
+  private getAdapter(backendId: SearchBackendId): SearchBackendAdapter<any> {
+    const adapter = this.deps.adapters[backendId];
+    if (!adapter) {
+      throw new Error(`No adapter registered for backend '${backendId}'`);
+    }
+    return adapter;
   }
 
   private async executeWithAdapter(args: {
@@ -341,12 +357,13 @@ export class SearchCoordinatorImpl implements SearchCoordinator {
     }
 
     const queryKind = queryKindForRequest(request);
-    if (!this.deps.primaryAdapter.supportedQueryKinds.includes(queryKind)) {
+    const primaryAdapter = this.getAdapter(this.deps.primaryBackendId);
+    if (!primaryAdapter.supportedQueryKinds.includes(queryKind)) {
       return {
         ok: false,
         error: {
           code: "SEARCH_FAILED",
-          message: `${this.deps.primaryAdapter.backendId} does not support ${queryKind}`,
+          message: `${primaryAdapter.backendId} does not support ${queryKind}`,
         },
       };
     }
@@ -421,10 +438,10 @@ export class SearchCoordinatorImpl implements SearchCoordinator {
       request,
       validatedWithin: validatedWithin.value,
       persistenceRoot: lifecyclePlan.value.target.persistenceRoot,
-      backendId: this.deps.primaryAdapter.backendId,
+      backendId: primaryAdapter.backendId,
     });
     const primaryResult = await this.executeWithAdapter({
-      adapter: this.deps.primaryAdapter,
+      adapter: primaryAdapter,
       request: primaryRequest,
       lifecyclePlan: lifecyclePlan.value,
     });
@@ -463,14 +480,25 @@ export class SearchCoordinatorImpl implements SearchCoordinator {
       };
     }
 
+    if (!this.deps.fallbackBackendId) {
+      return {
+        ok: false,
+        error: {
+          code: primaryResult.error.code,
+          message: primaryResult.error.message,
+        },
+      };
+    }
+
+    const fallbackAdapter = this.getAdapter(this.deps.fallbackBackendId);
     const fallbackRequest = buildBackendRequest({
       request,
       validatedWithin: validatedWithin.value,
       persistenceRoot: lifecyclePlan.value.target.persistenceRoot,
-      backendId: this.deps.fallbackAdapter.backendId,
+      backendId: fallbackAdapter.backendId,
     });
     const fallbackResult = await this.executeWithAdapter({
-      adapter: this.deps.fallbackAdapter,
+      adapter: fallbackAdapter,
       request: fallbackRequest,
       lifecyclePlan: {
         ...lifecyclePlan.value,

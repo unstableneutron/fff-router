@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
+import { getBackendSelection } from "./backend-config";
 import type { RouterConfig } from "./types";
 
 export const DEFAULT_DAEMON_HOST = "127.0.0.1";
@@ -87,6 +88,7 @@ export function getDaemonConfigFingerprint(
       ...getDaemonConfig({ env }),
       ...args.daemonConfig,
     },
+    backend: getBackendSelection({ env }),
     router: loadRouterConfig({ env }),
   });
   return createHash("sha256").update(fingerprintSource).digest("hex").slice(0, 16);

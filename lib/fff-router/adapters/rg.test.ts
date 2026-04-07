@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { createRgFdAdapter } from "./rg-fd";
+import { createRgAdapter } from "./rg";
 import type {
   FindFilesBackendRequest,
   GrepBackendRequest,
@@ -13,7 +13,7 @@ type CommandCall = {
 };
 
 const findFilesRequest: FindFilesBackendRequest = {
-  backendId: "rg-fd",
+  backendId: "rg",
   persistenceRoot: "/repo",
   queryKind: "find_files",
   within: "/repo/src",
@@ -25,7 +25,7 @@ const findFilesRequest: FindFilesBackendRequest = {
 };
 
 const searchTermsRequest: SearchTermsBackendRequest = {
-  backendId: "rg-fd",
+  backendId: "rg",
   persistenceRoot: "/repo",
   queryKind: "search_terms",
   within: "/repo/src",
@@ -38,7 +38,7 @@ const searchTermsRequest: SearchTermsBackendRequest = {
 };
 
 const grepRequest: GrepBackendRequest = {
-  backendId: "rg-fd",
+  backendId: "rg",
   persistenceRoot: "/repo",
   queryKind: "grep",
   within: "/repo/src",
@@ -51,10 +51,10 @@ const grepRequest: GrepBackendRequest = {
   contextLines: 1,
 };
 
-describe("createRgFdAdapter", () => {
+describe("createRgAdapter", () => {
   test("maps fallback find_files results into normalized file items", async () => {
     const calls: CommandCall[] = [];
-    const adapter = createRgFdAdapter({
+    const adapter = createRgAdapter({
       runCommand: async (command, args, cwd) => {
         calls.push({ command, args, cwd });
         return {
@@ -82,7 +82,7 @@ describe("createRgFdAdapter", () => {
 
   test("lowers search_terms requests into literal rg alternation with context", async () => {
     const calls: CommandCall[] = [];
-    const adapter = createRgFdAdapter({
+    const adapter = createRgAdapter({
       runCommand: async (command, args, cwd) => {
         calls.push({ command, args, cwd });
         return {
@@ -136,8 +136,62 @@ describe("createRgFdAdapter", () => {
     ]);
   });
 
+  test("preserves context lines from rg json events", async () => {
+    const adapter = createRgAdapter({
+      runCommand: async () => ({
+        ok: true,
+        stdout: [
+          JSON.stringify({
+            type: "context",
+            data: {
+              path: { text: "/repo/src/router.ts" },
+              line_number: 7,
+              lines: { text: "const before = true;\n" },
+              submatches: [],
+            },
+          }),
+          JSON.stringify({
+            type: "match",
+            data: {
+              path: { text: "/repo/src/router.ts" },
+              line_number: 8,
+              lines: { text: "const router = createRouter();\n" },
+              submatches: [{ start: 6 }],
+            },
+          }),
+          JSON.stringify({
+            type: "context",
+            data: {
+              path: { text: "/repo/src/router.ts" },
+              line_number: 9,
+              lines: { text: "const after = true;\n" },
+              submatches: [],
+            },
+          }),
+          "",
+        ].join("\n"),
+      }),
+    });
+
+    const result = await adapter.execute({ request: searchTermsRequest });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected success");
+    expect(result.value.items).toEqual([
+      {
+        path: "/repo/src/router.ts",
+        relativePath: "src/router.ts",
+        line: 8,
+        text: "const router = createRouter();",
+        column: 6,
+        contextBefore: ["const before = true;"],
+        contextAfter: ["const after = true;"],
+      },
+    ]);
+  });
+
   test("maps malformed rg output to SEARCH_FAILED", async () => {
-    const adapter = createRgFdAdapter({
+    const adapter = createRgAdapter({
       runCommand: async () => ({ ok: true, stdout: "not-json\n" }),
     });
 
@@ -150,7 +204,7 @@ describe("createRgFdAdapter", () => {
 
   test("lowers grep requests into regex rg with case-sensitive matching", async () => {
     const calls: CommandCall[] = [];
-    const adapter = createRgFdAdapter({
+    const adapter = createRgAdapter({
       runCommand: async (command, args, cwd) => {
         calls.push({ command, args, cwd });
         return { ok: true, stdout: "" };

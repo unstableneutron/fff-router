@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, test } from "vitest";
-import { checkDaemonHealth } from "./daemon-autostart";
+import { afterEach, describe, expect, test, vi } from "vitest";
+import { checkDaemonHealth, ensureDaemonRunningWithDeps } from "./daemon-autostart";
 import { DAEMON_PROTOCOL_VERSION, getDaemonConfigFingerprint } from "./daemon-config";
 import { startHttpDaemon } from "./http-daemon";
 import type { SearchCoordinator } from "./types";
@@ -27,6 +27,42 @@ function makeCoordinator(): SearchCoordinator {
     },
   };
 }
+
+describe("ensureDaemonRunningWithDeps", () => {
+  test("replaces a stale daemon when the fingerprint/backend mismatches", async () => {
+    const terminateProcess = vi.fn(async () => {});
+    const spawnDaemon = vi.fn(() => ({ unref() {} }));
+    const waitForDaemonReady = vi.fn(async () => {});
+    const checkHealth = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(
+        new Error("daemon config mismatch; restart the daemon with the current configuration"),
+      )
+      .mockRejectedValueOnce(new Error("fetch failed"))
+      .mockResolvedValueOnce(undefined);
+
+    await ensureDaemonRunningWithDeps({ FFF_ROUTER_BACKEND: "rg" } as NodeJS.ProcessEnv, {
+      checkDaemonHealth: checkHealth,
+      readRunningDaemonMetadata: async () => ({
+        pid: 123,
+        host: "127.0.0.1",
+        port: 4319,
+        mcpPath: "/mcp",
+        protocolVersion: "fff-router-http-daemon-v1",
+        configFingerprint: "oldfingerprint",
+        startedAt: Date.now(),
+      }),
+      terminateProcess,
+      spawnDaemon,
+      waitForDaemonReady,
+      withStartupLock: async (callback) => await callback(),
+    });
+
+    expect(terminateProcess).toHaveBeenCalledWith(123);
+    expect(spawnDaemon).toHaveBeenCalledTimes(1);
+    expect(waitForDaemonReady).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe("checkDaemonHealth", () => {
   test("accepts a daemon with the expected protocol version and config fingerprint", async () => {

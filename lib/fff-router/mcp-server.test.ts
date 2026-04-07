@@ -96,7 +96,7 @@ describe("createMcpServer", () => {
           mode: "json",
           base_path: "/repo/src",
           next_cursor: null,
-          backend_used: "rg-fd",
+          backend_used: "rg",
           fallback_applied: true,
           fallback_reason: "backend_error",
           stats: { result_count: 1 },
@@ -111,7 +111,7 @@ describe("createMcpServer", () => {
     });
     expect(json.isError).toBe(false);
     expect(json.content[0]?.type).toBe("text");
-    expect(json.content[0]?.text).toContain('"backend_used": "rg-fd"');
+    expect(json.content[0]?.text).toContain('"backend_used": "rg"');
   });
 
   test("maps public errors through MCP tool failures", async () => {

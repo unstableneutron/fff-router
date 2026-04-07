@@ -19,7 +19,7 @@ describe("RuntimeManager", () => {
 
     const first = manager.withRuntime(
       {
-        backendId: "fff-mcp",
+        backendId: "fff-node",
         persistenceRoot: "/repo/project",
         start: async () => {
           startCount += 1;
@@ -31,7 +31,7 @@ describe("RuntimeManager", () => {
 
     const second = manager.withRuntime(
       {
-        backendId: "fff-mcp",
+        backendId: "fff-node",
         persistenceRoot: "/repo/project",
         start: async () => {
           startCount += 1;
@@ -57,7 +57,7 @@ describe("RuntimeManager", () => {
 
     const first = await manager.withRuntime(
       {
-        backendId: "fff-mcp",
+        backendId: "fff-node",
         persistenceRoot: "/repo/project",
         start: async () => {
           startCount += 1;
@@ -72,7 +72,7 @@ describe("RuntimeManager", () => {
 
     const second = await manager.withRuntime(
       {
-        backendId: "fff-mcp",
+        backendId: "fff-node",
         persistenceRoot: "/repo/project",
         start: async () => {
           startCount += 1;
@@ -96,7 +96,7 @@ describe("RuntimeManager", () => {
 
     await manager.withRuntime(
       {
-        backendId: "fff-mcp",
+        backendId: "fff-node",
         persistenceRoot: "/repo/project",
         start: async () => ({
           id: "runtime-1",
@@ -109,11 +109,11 @@ describe("RuntimeManager", () => {
     );
 
     await manager.evictRuntime({
-      backendId: "fff-mcp",
+      backendId: "fff-node",
       persistenceRoot: "/repo/project",
     });
     await manager.evictRuntime({
-      backendId: "fff-mcp",
+      backendId: "fff-node",
       persistenceRoot: "/repo/project",
     });
 
@@ -128,7 +128,7 @@ describe("RuntimeManager", () => {
 
     const pending = manager.withRuntime(
       {
-        backendId: "fff-mcp",
+        backendId: "fff-node",
         persistenceRoot: "/repo/project",
         start: async () => {
           startCount += 1;
@@ -139,7 +139,7 @@ describe("RuntimeManager", () => {
     );
 
     await manager.evictRuntime({
-      backendId: "fff-mcp",
+      backendId: "fff-node",
       persistenceRoot: "/repo/project",
     });
 
@@ -151,13 +151,13 @@ describe("RuntimeManager", () => {
     });
 
     await expect(pending).rejects.toThrow(
-      "Runtime 'fff-mcp::/repo/project' was evicted before startup completed",
+      "Runtime 'fff-node::/repo/project' was evicted before startup completed",
     );
     expect(closeCount).toBe(1);
 
     const next = await manager.withRuntime(
       {
-        backendId: "fff-mcp",
+        backendId: "fff-node",
         persistenceRoot: "/repo/project",
         start: async () => {
           startCount += 1;
@@ -183,7 +183,7 @@ describe("RuntimeManager", () => {
 
     const first = manager.withRuntime(
       {
-        backendId: "fff-mcp",
+        backendId: "fff-node",
         persistenceRoot: "/repo/project-a",
         start: async () => ({
           id: "runtime-a",
@@ -193,7 +193,7 @@ describe("RuntimeManager", () => {
       async () => {
         const second = manager.withRuntime(
           {
-            backendId: "fff-mcp",
+            backendId: "fff-node",
             persistenceRoot: "/repo/project-b",
             start: async () => {
               secondStartCount += 1;
@@ -224,7 +224,7 @@ describe("RuntimeManager", () => {
     await expect(
       manager.withRuntime(
         {
-          backendId: "fff-mcp",
+          backendId: "fff-node",
           persistenceRoot: "/repo/project",
           start: async () => {
             startCount += 1;
@@ -237,7 +237,7 @@ describe("RuntimeManager", () => {
 
     const next = await manager.withRuntime(
       {
-        backendId: "fff-mcp",
+        backendId: "fff-node",
         persistenceRoot: "/repo/project",
         start: async () => {
           startCount += 1;
@@ -255,6 +255,6 @@ describe("RuntimeManager", () => {
   });
 
   test("builds stable runtime registry keys", () => {
-    expect(runtimeRegistryKey("fff-mcp", "/repo/project")).toBe("fff-mcp::/repo/project");
+    expect(runtimeRegistryKey("fff-node", "/repo/project")).toBe("fff-node::/repo/project");
   });
 });

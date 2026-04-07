@@ -142,7 +142,7 @@ export type AllowlistedPrefix = {
 };
 
 export type SearchQueryKind = "find_files" | "search_terms" | "grep";
-export type SearchBackendId = "fff-mcp" | "rg-fd";
+export type SearchBackendId = "fff-node" | "fff-mcp" | "rg";
 
 export type RuntimeRegistryKey = string;
 

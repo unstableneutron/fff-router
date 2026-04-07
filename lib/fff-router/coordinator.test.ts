@@ -37,7 +37,7 @@ function makePublicRequest(overrides: Partial<PublicToolRequest> = {}): PublicTo
 }
 
 function makeAdapter(args: {
-  backendId: "fff-mcp" | "rg-fd";
+  backendId: "fff-node" | "rg";
   supportedQueryKinds?: SearchQueryKind[];
   execute: (request: BackendSearchRequest) => Promise<BackendSearchResult>;
 }) {
@@ -69,11 +69,15 @@ function makeAdapter(args: {
   };
 }
 
-function okResult(queryKind: SearchQueryKind, items: BackendResultItem[]): BackendSearchResult {
+function okResult(
+  queryKind: SearchQueryKind,
+  items: BackendResultItem[],
+  backendId: "fff-node" | "rg" = "fff-node",
+): BackendSearchResult {
   return {
     ok: true,
     value: {
-      backendId: "fff-mcp",
+      backendId,
       queryKind,
       items,
       nextCursor: null,
@@ -82,21 +86,127 @@ function okResult(queryKind: SearchQueryKind, items: BackendResultItem[]): Backe
 }
 
 describe("createSearchCoordinator", () => {
-  test("uses the primary adapter and shapes compact find_files output", async () => {
-    const primary = makeAdapter({
-      backendId: "fff-mcp",
-      execute: async () =>
-        okResult("find_files", [{ path: "/repo/src/router.ts", relativePath: "src/router.ts" }]),
+  test("uses the configured primary backend from the adapter registry", async () => {
+    const fffNode = makeAdapter({
+      backendId: "fff-node",
+      execute: async () => okResult("find_files", []),
     });
-    const fallback = makeAdapter({
-      backendId: "rg-fd",
+    const rg = makeAdapter({
+      backendId: "rg",
+      execute: async () =>
+        okResult(
+          "find_files",
+          [{ path: "/repo/src/router.ts", relativePath: "src/router.ts" }],
+          "rg",
+        ),
+    });
+
+    const coordinator = createSearchCoordinator({
+      config,
+      adapters: {
+        "fff-node": fffNode.adapter,
+        rg: rg.adapter,
+      },
+      primaryBackendId: "rg",
+      fallbackBackendId: null,
+      runtimeManager: new RuntimeManager(),
+      validateWithin: async ({ within }) => ({
+        ok: true,
+        value: { resolvedWithin: within, basePath: within },
+      }),
+      resolveRoutingPath: async (within) => ({
+        ok: true,
+        value: { realPath: within, statType: "directory", gitRoot: "/repo" },
+      }),
+    });
+
+    const result = await coordinator.execute(makePublicRequest({ outputMode: "json" }));
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected success");
+    expect(result.value).toEqual({
+      mode: "json",
+      base_path: "/repo/src",
+      next_cursor: null,
+      backend_used: "rg",
+      fallback_applied: false,
+      stats: { result_count: 1 },
+      items: [
+        {
+          path: "router.ts",
+          absolute_path: "/repo/src/router.ts",
+        },
+      ],
+    });
+    expect(fffNode.calls).toHaveLength(0);
+    expect(rg.calls).toHaveLength(1);
+  });
+
+  test("does not attempt fallback when the selected primary backend has no fallback", async () => {
+    const primary = makeAdapter({
+      backendId: "rg",
+      execute: async () => ({
+        ok: false as const,
+        error: {
+          code: "BACKEND_UNAVAILABLE" as const,
+          backendId: "rg" as const,
+          message: "rg missing",
+        },
+      }),
+    });
+    const fffNode = makeAdapter({
+      backendId: "fff-node",
       execute: async () => okResult("find_files", []),
     });
 
     const coordinator = createSearchCoordinator({
       config,
-      primaryAdapter: primary.adapter,
-      fallbackAdapter: fallback.adapter,
+      adapters: {
+        "fff-node": fffNode.adapter,
+        rg: primary.adapter,
+      },
+      primaryBackendId: "rg",
+      fallbackBackendId: null,
+      runtimeManager: new RuntimeManager(),
+      validateWithin: async ({ within }) => ({
+        ok: true,
+        value: { resolvedWithin: within, basePath: within },
+      }),
+      resolveRoutingPath: async (within) => ({
+        ok: true,
+        value: { realPath: within, statType: "directory", gitRoot: "/repo" },
+      }),
+    });
+
+    const result = await coordinator.execute(makePublicRequest());
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected failure");
+    expect(result.error).toEqual({
+      code: "BACKEND_UNAVAILABLE",
+      message: "rg missing",
+    });
+    expect(fffNode.calls).toHaveLength(0);
+  });
+  test("uses the primary adapter and shapes compact find_files output", async () => {
+    const primary = makeAdapter({
+      backendId: "fff-node",
+      execute: async () =>
+        okResult("find_files", [{ path: "/repo/src/router.ts", relativePath: "src/router.ts" }]),
+    });
+    const fallback = makeAdapter({
+      backendId: "rg",
+      execute: async () => okResult("find_files", []),
+    });
+
+    const coordinator = createSearchCoordinator({
+      config,
+      adapters: {
+        "fff-node": primary.adapter,
+        rg: fallback.adapter,
+      },
+      primaryBackendId: "fff-node",
+      fallbackBackendId: "rg",
       runtimeManager: new RuntimeManager(),
       validateWithin: async ({ within }) => ({
         ok: true,
@@ -124,19 +234,23 @@ describe("createSearchCoordinator", () => {
 
   test("invokes routing lifecycle planning and reuses persistent runtimes", async () => {
     const primary = makeAdapter({
-      backendId: "fff-mcp",
+      backendId: "fff-node",
       execute: async (request) => okResult(request.queryKind, []),
     });
     const fallback = makeAdapter({
-      backendId: "rg-fd",
+      backendId: "rg",
       execute: async () => okResult("find_files", []),
     });
     const planningCalls: SearchQueryKind[] = [];
 
     const coordinator = createSearchCoordinator({
       config,
-      primaryAdapter: primary.adapter,
-      fallbackAdapter: fallback.adapter,
+      adapters: {
+        "fff-node": primary.adapter,
+        rg: fallback.adapter,
+      },
+      primaryBackendId: "fff-node",
+      fallbackBackendId: "rg",
       runtimeManager: new RuntimeManager(),
       validateWithin: async ({ within }) => ({
         ok: true,
@@ -192,22 +306,22 @@ describe("createSearchCoordinator", () => {
 
   test("falls back only on backend failure", async () => {
     const primary = makeAdapter({
-      backendId: "fff-mcp",
+      backendId: "fff-node",
       execute: async () => ({
         ok: false as const,
         error: {
           code: "BACKEND_UNAVAILABLE" as const,
-          backendId: "fff-mcp" as const,
+          backendId: "fff-node" as const,
           message: "primary unavailable",
         },
       }),
     });
     const fallback = makeAdapter({
-      backendId: "rg-fd",
+      backendId: "rg",
       execute: async () => ({
         ok: true as const,
         value: {
-          backendId: "rg-fd" as const,
+          backendId: "rg" as const,
           queryKind: "find_files" as const,
           items: [{ path: "/repo/src/router.ts", relativePath: "src/router.ts" }],
           nextCursor: null,
@@ -217,8 +331,12 @@ describe("createSearchCoordinator", () => {
 
     const coordinator = createSearchCoordinator({
       config,
-      primaryAdapter: primary.adapter,
-      fallbackAdapter: fallback.adapter,
+      adapters: {
+        "fff-node": primary.adapter,
+        rg: fallback.adapter,
+      },
+      primaryBackendId: "fff-node",
+      fallbackBackendId: "rg",
       runtimeManager: new RuntimeManager(),
       validateWithin: async ({ within }) => ({
         ok: true,
@@ -238,7 +356,7 @@ describe("createSearchCoordinator", () => {
       mode: "json",
       base_path: "/repo/src",
       next_cursor: null,
-      backend_used: "rg-fd",
+      backend_used: "rg",
       fallback_applied: true,
       fallback_reason: "backend_error",
       stats: { result_count: 1 },
@@ -254,18 +372,22 @@ describe("createSearchCoordinator", () => {
 
   test("does not fall back on zero results", async () => {
     const primary = makeAdapter({
-      backendId: "fff-mcp",
+      backendId: "fff-node",
       execute: async () => okResult("find_files", []),
     });
     const fallback = makeAdapter({
-      backendId: "rg-fd",
+      backendId: "rg",
       execute: async () => okResult("find_files", []),
     });
 
     const coordinator = createSearchCoordinator({
       config,
-      primaryAdapter: primary.adapter,
-      fallbackAdapter: fallback.adapter,
+      adapters: {
+        "fff-node": primary.adapter,
+        rg: fallback.adapter,
+      },
+      primaryBackendId: "fff-node",
+      fallbackBackendId: "rg",
       runtimeManager: new RuntimeManager(),
       validateWithin: async ({ within }) => ({
         ok: true,
@@ -292,18 +414,22 @@ describe("createSearchCoordinator", () => {
 
   test("translates exclude paths relative to the public base path", async () => {
     const primary = makeAdapter({
-      backendId: "fff-mcp",
+      backendId: "fff-node",
       execute: async () => okResult("find_files", []),
     });
     const fallback = makeAdapter({
-      backendId: "rg-fd",
+      backendId: "rg",
       execute: async () => okResult("find_files", []),
     });
 
     const coordinator = createSearchCoordinator({
       config,
-      primaryAdapter: primary.adapter,
-      fallbackAdapter: fallback.adapter,
+      adapters: {
+        "fff-node": primary.adapter,
+        rg: fallback.adapter,
+      },
+      primaryBackendId: "fff-node",
+      fallbackBackendId: "rg",
       runtimeManager: new RuntimeManager(),
       validateWithin: async ({ within }) => ({
         ok: true,
@@ -324,12 +450,69 @@ describe("createSearchCoordinator", () => {
     expect(primary.calls[0]?.excludePaths).toEqual(["src/generated"]);
   });
 
+  test("shapes nested subtree results relative to base_path while preserving repo-relative excludes", async () => {
+    const primary = makeAdapter({
+      backendId: "fff-node",
+      execute: async () =>
+        okResult("find_files", [
+          {
+            path: "/repo/Vendor/libghostty/include/ghostty.h",
+            relativePath: "Vendor/libghostty/include/ghostty.h",
+          },
+        ]),
+    });
+    const fallback = makeAdapter({
+      backendId: "rg",
+      execute: async () => okResult("find_files", []),
+    });
+
+    const coordinator = createSearchCoordinator({
+      config,
+      adapters: {
+        "fff-node": primary.adapter,
+        rg: fallback.adapter,
+      },
+      primaryBackendId: "fff-node",
+      fallbackBackendId: "rg",
+      runtimeManager: new RuntimeManager(),
+      validateWithin: async ({ within }) => ({
+        ok: true,
+        value: { resolvedWithin: within, basePath: "/repo/Vendor/libghostty/include" },
+      }),
+      resolveRoutingPath: async () => ({
+        ok: true,
+        value: {
+          realPath: "/repo/Vendor/libghostty/include",
+          statType: "directory",
+          gitRoot: "/repo",
+        },
+      }),
+    });
+
+    const result = await coordinator.execute(
+      makePublicRequest({
+        within: "/repo/Vendor/libghostty/include",
+        excludePaths: ["generated"],
+      }),
+    );
+
+    expect(primary.calls[0]?.excludePaths).toEqual(["Vendor/libghostty/include/generated"]);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected success");
+    expect(result.value).toEqual({
+      mode: "compact",
+      base_path: "/repo/Vendor/libghostty/include",
+      next_cursor: null,
+      items: [{ path: "ghostty.h" }],
+    });
+  });
+
   test("evicts planned persistent runtimes before continuing", async () => {
     let closeCount = 0;
     const runtimeManager = new RuntimeManager();
     await runtimeManager.withRuntime(
       {
-        backendId: "fff-mcp",
+        backendId: "fff-node",
         persistenceRoot: "/old",
         start: async () => ({
           id: "old-runtime",
@@ -342,18 +525,22 @@ describe("createSearchCoordinator", () => {
     );
 
     const primary = makeAdapter({
-      backendId: "fff-mcp",
+      backendId: "fff-node",
       execute: async () => okResult("find_files", []),
     });
     const fallback = makeAdapter({
-      backendId: "rg-fd",
+      backendId: "rg",
       execute: async () => okResult("find_files", []),
     });
 
     const coordinator = createSearchCoordinator({
       config,
-      primaryAdapter: primary.adapter,
-      fallbackAdapter: fallback.adapter,
+      adapters: {
+        "fff-node": primary.adapter,
+        rg: fallback.adapter,
+      },
+      primaryBackendId: "fff-node",
+      fallbackBackendId: "rg",
       runtimeManager,
       validateWithin: async ({ within }) => ({
         ok: true,
@@ -387,26 +574,30 @@ describe("createSearchCoordinator", () => {
 
   test("does not fall back when the primary adapter returns SEARCH_FAILED", async () => {
     const primary = makeAdapter({
-      backendId: "fff-mcp",
+      backendId: "fff-node",
       execute: async () => ({
         ok: false as const,
         error: {
           code: "SEARCH_FAILED" as const,
-          backendId: "fff-mcp" as const,
+          backendId: "fff-node" as const,
           message: "primary search failed",
         },
       }),
     });
     const fallback = makeAdapter({
-      backendId: "rg-fd",
+      backendId: "rg",
       execute: async () =>
         okResult("find_files", [{ path: "/repo/src/router.ts", relativePath: "src/router.ts" }]),
     });
 
     const coordinator = createSearchCoordinator({
       config,
-      primaryAdapter: primary.adapter,
-      fallbackAdapter: fallback.adapter,
+      adapters: {
+        "fff-node": primary.adapter,
+        rg: fallback.adapter,
+      },
+      primaryBackendId: "fff-node",
+      fallbackBackendId: "rg",
       runtimeManager: new RuntimeManager(),
       validateWithin: async ({ within }) => ({
         ok: true,
@@ -428,7 +619,7 @@ describe("createSearchCoordinator", () => {
 
   test("preserves successful ephemeral results when runtime cleanup fails", async () => {
     const primary = makeAdapter({
-      backendId: "fff-mcp",
+      backendId: "fff-node",
       execute: async () =>
         okResult("find_files", [{ path: "/allow/pkg-a/router.ts", relativePath: "router.ts" }]),
     });
@@ -439,14 +630,18 @@ describe("createSearchCoordinator", () => {
       },
     });
     const fallback = makeAdapter({
-      backendId: "rg-fd",
+      backendId: "rg",
       execute: async () => okResult("find_files", []),
     });
 
     const coordinator = createSearchCoordinator({
       config,
-      primaryAdapter: primary.adapter,
-      fallbackAdapter: fallback.adapter,
+      adapters: {
+        "fff-node": primary.adapter,
+        rg: fallback.adapter,
+      },
+      primaryBackendId: "fff-node",
+      fallbackBackendId: "rg",
       runtimeManager: new RuntimeManager(),
       validateWithin: async ({ within }) => ({
         ok: true,
@@ -488,20 +683,24 @@ describe("createSearchCoordinator", () => {
 
   test("returns SEARCH_FAILED when an adapter does not support the query kind", async () => {
     const primary = makeAdapter({
-      backendId: "fff-mcp",
+      backendId: "fff-node",
       supportedQueryKinds: ["find_files"],
       execute: async () => okResult("find_files", []),
     });
     const fallback = makeAdapter({
-      backendId: "rg-fd",
+      backendId: "rg",
       supportedQueryKinds: ["find_files"],
       execute: async () => okResult("find_files", []),
     });
 
     const coordinator = createSearchCoordinator({
       config,
-      primaryAdapter: primary.adapter,
-      fallbackAdapter: fallback.adapter,
+      adapters: {
+        "fff-node": primary.adapter,
+        rg: fallback.adapter,
+      },
+      primaryBackendId: "fff-node",
+      fallbackBackendId: "rg",
       runtimeManager: new RuntimeManager(),
       validateWithin: async ({ within }) => ({
         ok: true,
@@ -529,7 +728,7 @@ describe("createSearchCoordinator", () => {
 
   test("derives file restriction and stable public errors", async () => {
     const primary = makeAdapter({
-      backendId: "fff-mcp",
+      backendId: "fff-node",
       execute: async (request) =>
         okResult(request.queryKind, [
           {
@@ -541,14 +740,18 @@ describe("createSearchCoordinator", () => {
         ]),
     });
     const fallback = makeAdapter({
-      backendId: "rg-fd",
+      backendId: "rg",
       execute: async () => okResult("grep", []),
     });
 
     const coordinator = createSearchCoordinator({
       config,
-      primaryAdapter: primary.adapter,
-      fallbackAdapter: fallback.adapter,
+      adapters: {
+        "fff-node": primary.adapter,
+        rg: fallback.adapter,
+      },
+      primaryBackendId: "fff-node",
+      fallbackBackendId: "rg",
       runtimeManager: new RuntimeManager(),
       validateWithin: async ({ within: _within }) => ({
         ok: true,

@@ -1,7 +1,9 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { createFffMcpAdapter } from "./adapters/fff-mcp";
-import { createRgFdAdapter } from "./adapters/rg-fd";
+import { getBackendSelection } from "./backend-config";
+import { createFffMcpStdioAdapter } from "./adapters/fff-mcp-stdio";
+import { createFffNodeAdapter } from "./adapters/fff-node";
+import { createRgAdapter } from "./adapters/rg";
 import {
   DAEMON_PROTOCOL_VERSION,
   type DaemonConfig,
@@ -57,10 +59,16 @@ async function writeDaemonMetadata(path: string, metadata: DaemonMetadata): Prom
 }
 
 function defaultCoordinator(env?: NodeJS.ProcessEnv): SearchCoordinator {
+  const backendSelection = getBackendSelection({ env });
   return createSearchCoordinator({
     config: loadRouterConfig({ env }),
-    primaryAdapter: createFffMcpAdapter(),
-    fallbackAdapter: createRgFdAdapter(),
+    adapters: {
+      "fff-node": createFffNodeAdapter(),
+      "fff-mcp": createFffMcpStdioAdapter(),
+      rg: createRgAdapter(),
+    },
+    primaryBackendId: backendSelection.primaryBackendId,
+    fallbackBackendId: backendSelection.fallbackBackendId,
     runtimeManager: new RuntimeManager(),
   });
 }

@@ -57,17 +57,29 @@ Server-side behavior:
   - `base_path` becomes the file’s parent directory
   - the coordinator applies an implicit single-file restriction internally
 
-## Backend policy
+## Backend selection
 
-Primary path:
+The daemon keeps the public API stable while letting you choose the backend with:
 
-- FFF-backed execution via `@ff-labs/fff-node`
+- `FFF_ROUTER_BACKEND=fff-node|fff-mcp|rg`
 
-Fallback path:
+Current default:
 
-- `rg` / `fd`
+- `fff-node`
+
+Current fallback matrix:
+
+- `fff-node -> rg`
+- `fff-mcp -> rg`
+- `rg -> no fallback`
 
 Fallback happens only on backend failure, not on zero results.
+
+### Backend notes
+
+- `fff-node` — direct in-process `@ff-labs/fff-node` runtime owned by `fff-routerd`
+- `rg` — direct `rg` / `fd` execution, now also available as an explicit primary backend
+- `fff-mcp` — experimental stock upstream `fff-mcp` integration over stdio MCP; request/response mapping is best-effort in this slice because upstream still returns AI-oriented text rather than a structured compatibility contract
 
 ## Runtime reuse model
 
@@ -94,8 +106,10 @@ Routing and lifecycle policy still come from:
 - `lib/fff-router/routing.ts` — persistence root derivation
 - `lib/fff-router/lifecycle.ts` — lifecycle planning and eviction policy
 - `lib/fff-router/runtime-manager.ts` — shared runtime registry and startup dedupe
-- `lib/fff-router/adapters/fff-mcp.ts` — primary FFF-backed adapter
-- `lib/fff-router/adapters/rg-fd.ts` — fallback adapter
+- `lib/fff-router/backend-config.ts` — backend selection and fallback defaults
+- `lib/fff-router/adapters/fff-node.ts` — direct `@ff-labs/fff-node` adapter
+- `lib/fff-router/adapters/fff-mcp-stdio.ts` — experimental stock `fff-mcp` adapter
+- `lib/fff-router/adapters/rg.ts` — `rg` / `fd` adapter
 - `lib/fff-router/coordinator.ts` — top-level search coordinator
 - `lib/fff-router/mcp-tools.ts` — MCP tool definitions and execution bridge
 - `lib/fff-router/mcp-server.ts` — MCP server assembly
@@ -137,6 +151,8 @@ You can override these with:
 - `FFF_ROUTER_HOST`
 - `FFF_ROUTER_PORT`
 - `FFF_ROUTER_MCP_PATH`
+- `FFF_ROUTER_BACKEND`
+- `FFF_ROUTER_FFF_MCP_BIN` (optional explicit path to the stock upstream `fff-mcp` binary)
 
 Run:
 
