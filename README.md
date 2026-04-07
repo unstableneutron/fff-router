@@ -17,7 +17,7 @@ The primary architecture is now:
 - thin CLI wrappers that call the daemon over MCP HTTP
 - an optional stdio compatibility proxy: `fff-router-mcp`
 
-This means machine-wide warm reuse now comes from the long-lived daemon process, not from `mcporter` lifecycle behavior.
+This means machine-wide warm reuse comes from the long-lived daemon process itself.
 
 ## Public contract
 
@@ -186,12 +186,6 @@ Other local agents and future extensions should talk to that same endpoint if th
 `fff-router-mcp` is no longer the primary runtime owner.
 
 It is now a thin stdio compatibility proxy that forwards MCP tool calls to the HTTP daemon. The shared runtime state lives in `fff-routerd`.
-
-## `mcporter` compatibility
-
-`config/mcporter.json` is retained only as a compatibility artifact for environments that still expect a stdio MCP target definition.
-
-The CLI wrappers in this repo no longer use `mcporter`, and `--target` / `FFF_ROUTER_MCPORTER_TARGET` are no longer supported.
 
 ## Pi integration direction
 

@@ -11,7 +11,6 @@ type ParsedCommonArgs = {
   excludePaths: string[];
   limit?: number;
   outputMode?: "compact" | "json";
-  legacyTarget?: string;
 };
 
 function helpText(tool: WrapperTool): string {
@@ -90,11 +89,10 @@ function parseCommonArgs(argv: string[]) {
       case "--case-sensitive":
         extra.caseSensitive = true;
         break;
-      case "--target":
-        common.legacyTarget = next ?? "";
-        index += 1;
-        break;
       default:
+        if (token.startsWith("-")) {
+          throw new Error(`unknown option: ${token}`);
+        }
         positionals.push(token);
         break;
     }
@@ -109,11 +107,6 @@ export async function buildWrapperInvocation(args: {
   callerCwd: string;
 }) {
   const parsed = parseCommonArgs(args.argv);
-  if (parsed.common.legacyTarget || process.env.FFF_ROUTER_MCPORTER_TARGET) {
-    throw new Error(
-      "--target and FFF_ROUTER_MCPORTER_TARGET are no longer supported; configure the HTTP daemon endpoint instead",
-    );
-  }
   if (parsed.extra.help) {
     return {
       kind: "help" as const,
