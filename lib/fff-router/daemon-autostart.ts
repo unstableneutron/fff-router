@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import {
   DAEMON_PROTOCOL_VERSION,
   getDaemonConfig,
+  getDaemonOriginFromConfig,
   getDaemonReloadFingerprint,
   getDaemonServerFingerprint,
   getDaemonPaths,
@@ -41,7 +42,7 @@ function isProcessAlive(pid: number): boolean {
 
 async function fetchHealthMetadata(env?: NodeJS.ProcessEnv): Promise<Partial<DaemonMetadata>> {
   const config = getDaemonConfig({ env });
-  const response = await fetch(new URL(`/health`, `http://${config.host}:${config.port}`));
+  const response = await fetch(new URL(`/health`, getDaemonOriginFromConfig(config)));
   if (!response.ok) {
     throw new Error(`daemon healthcheck failed with status ${response.status}`);
   }

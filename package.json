@@ -1,15 +1,53 @@
 {
   "name": "fff-router",
-  "private": true,
+  "version": "0.0.0",
   "bin": {
-    "fff-find-files": "./bin/fff-find-files.ts",
-    "fff-grep": "./bin/fff-grep.ts",
-    "fff-router-mcp": "./bin/fff-router-mcp.ts",
-    "fff-routerd": "./bin/fff-routerd.ts",
-    "fff-search-terms": "./bin/fff-search-terms.ts"
+    "fff-find-files": "./dist/bin/fff-find-files.js",
+    "fff-grep": "./dist/bin/fff-grep.js",
+    "fff-router-mcp": "./dist/bin/fff-router-mcp.js",
+    "fff-routerd": "./dist/bin/fff-routerd.js",
+    "fff-search-terms": "./dist/bin/fff-search-terms.js"
   },
+  "files": [
+    "dist",
+    "lib",
+    "bin",
+    "README.md"
+  ],
   "type": "module",
+  "main": "./dist/lib/fff-router/index.js",
+  "types": "./dist/lib/fff-router/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/lib/fff-router/index.js",
+      "types": "./dist/lib/fff-router/index.d.ts"
+    },
+    "./public-api": {
+      "import": "./dist/lib/fff-router/public-api.js",
+      "types": "./dist/lib/fff-router/public-api.d.ts"
+    },
+    "./daemon-autostart": {
+      "import": "./dist/lib/fff-router/daemon-autostart.js",
+      "types": "./dist/lib/fff-router/daemon-autostart.d.ts"
+    },
+    "./http-client": {
+      "import": "./dist/lib/fff-router/http-client.js",
+      "types": "./dist/lib/fff-router/http-client.d.ts"
+    },
+    "./resolve-within": {
+      "import": "./dist/lib/fff-router/resolve-within.js",
+      "types": "./dist/lib/fff-router/resolve-within.d.ts"
+    },
+    "./types": {
+      "import": "./dist/lib/fff-router/types.js",
+      "types": "./dist/lib/fff-router/types.d.ts"
+    },
+    "./package.json": "./package.json"
+  },
   "scripts": {
+    "build": "bun run scripts/build-package.ts && bun run scripts/build-standalone.ts",
+    "build:package": "bun run scripts/build-package.ts",
+    "build:standalone": "bun run scripts/build-standalone.ts",
     "test": "vitest run",
     "check": "oxfmt . && oxlint --type-aware --type-check .",
     "fix": "oxfmt --write . && oxlint --type-aware --type-check --fix --fix-suggestions --fix-dangerously ."
@@ -25,9 +63,13 @@
     "oxfmt": "^0.43.0",
     "oxlint": "^1.58.0",
     "oxlint-tsgolint": "^0.20.0",
+    "typescript": "^5.9.3",
     "vitest": "^2.1.8"
   },
   "peerDependencies": {
     "typescript": "^5"
+  },
+  "engines": {
+    "node": ">=20.6.0"
   }
 }

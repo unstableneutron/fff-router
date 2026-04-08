@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { createRgAdapter } from "./rg";
+import { createRgAdapter, runCommandWithSpawn } from "./rg";
 import type {
   FindFilesBackendRequest,
   GrepBackendRequest,
@@ -50,6 +50,28 @@ const grepRequest: GrepBackendRequest = {
   caseSensitive: true,
   contextLines: 1,
 };
+
+describe("runCommandWithSpawn", () => {
+  test("captures stdout from a Node child process without Bun APIs", async () => {
+    const result = await runCommandWithSpawn(process.execPath, ["-e", "console.log('ok')"], "/");
+
+    expect(result).toEqual({
+      ok: true,
+      stdout: "ok\n",
+      stderr: "",
+    });
+  });
+
+  test("maps missing commands to missing-command failures", async () => {
+    const result = await runCommandWithSpawn("definitely-not-a-real-command", [], "/");
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("expected command failure");
+    }
+    expect(result.kind).toBe("missing-command");
+  });
+});
 
 describe("createRgAdapter", () => {
   test("maps fallback find_files results into normalized file items", async () => {

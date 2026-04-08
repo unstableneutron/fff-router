@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
 import { startHttpDaemon } from "../lib/fff-router/http-daemon";
 
 const daemon = await startHttpDaemon({ env: process.env });

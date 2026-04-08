@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 import {
   getDaemonConfig,
+  getDaemonEndpoint,
   getDaemonPolicyConfigPaths,
   getDaemonReloadFingerprint,
   getDaemonServerFingerprint,
@@ -137,6 +138,23 @@ describe("daemon config file", () => {
 
     expect(() => getDaemonConfig({ env: { HOME: home } as NodeJS.ProcessEnv })).toThrow(
       /port must be an integer between 1 and 65535/i,
+    );
+  });
+
+  test("formats IPv6 daemon endpoints correctly", async () => {
+    const home = await makeTempHome();
+    await writeConfigFile({
+      home,
+      fileName: "config.json",
+      text: `{
+        "host": "::1",
+        "port": 4319,
+        "mcpPath": "/mcp"
+      }`,
+    });
+
+    expect(getDaemonEndpoint({ env: { HOME: home } as NodeJS.ProcessEnv })).toBe(
+      "http://[::1]:4319/mcp",
     );
   });
 

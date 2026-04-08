@@ -1,4 +1,6 @@
+import { spawn } from "node:child_process";
 import path from "node:path";
+import type { Readable } from "node:stream";
 import type { Result } from "../types";
 import { filterItems, toRelativePath } from "./common";
 import type {
@@ -16,28 +18,47 @@ type CommandResult =
 
 type RunCommand = (command: string, args: string[], cwd: string) => Promise<CommandResult>;
 
-async function defaultRunCommand(
+function readStream(stream: Readable | null): Promise<string> {
+  if (!stream) {
+    return Promise.resolve("");
+  }
+
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    stream.on("data", (chunk) => {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
+    });
+    stream.once("error", reject);
+    stream.once("end", () => {
+      resolve(Buffer.concat(chunks).toString("utf8"));
+    });
+  });
+}
+
+export async function runCommandWithSpawn(
   command: string,
   args: string[],
   cwd: string,
 ): Promise<CommandResult> {
   try {
-    const proc = Bun.spawn([command, ...args], {
+    const proc = spawn(command, args, {
       cwd,
-      stdout: "pipe",
-      stderr: "pipe",
+      stdio: ["ignore", "pipe", "pipe"],
     });
     const [stdout, stderr, exitCode] = await Promise.all([
-      new Response(proc.stdout).text(),
-      new Response(proc.stderr).text(),
-      proc.exited,
+      readStream(proc.stdout),
+      readStream(proc.stderr),
+      new Promise<number | null>((resolve, reject) => {
+        proc.once("error", reject);
+        proc.once("close", resolve);
+      }),
     ]);
 
     if (exitCode === 0 || exitCode === 1) {
       return { ok: true, stdout, stderr };
     }
 
-    return { ok: false, kind: "failed", code: exitCode, stderr };
+    return { ok: false, kind: "failed", code: exitCode ?? undefined, stderr };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return {
@@ -46,6 +67,14 @@ async function defaultRunCommand(
       stderr: message,
     };
   }
+}
+
+async function defaultRunCommand(
+  command: string,
+  args: string[],
+  cwd: string,
+): Promise<CommandResult> {
+  return runCommandWithSpawn(command, args, cwd);
 }
 
 function backendUnavailable(message: string): BackendSearchResult {

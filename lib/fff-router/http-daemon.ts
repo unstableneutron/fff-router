@@ -9,6 +9,7 @@ import {
   type DaemonConfig,
   type DaemonReloadConfig,
   getDaemonConfig,
+  getDaemonOriginFromConfig,
   getDaemonPaths,
   getDaemonPolicyConfigPaths,
   getDaemonReloadFingerprintForConfig,
@@ -198,7 +199,13 @@ export async function startHttpDaemon(args: StartHttpDaemonArgs = {}) {
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     const url = new URL(
       req.url || "/",
-      `http://${req.headers.host || `${config.host}:${metadata?.port ?? config.port}`}`,
+      req.headers.host
+        ? `http://${req.headers.host}`
+        : getDaemonOriginFromConfig({
+            host: config.host,
+            port: metadata?.port ?? config.port,
+            mcpPath: config.mcpPath,
+          }),
     );
 
     if (url.pathname === "/health") {
@@ -311,7 +318,11 @@ export async function startHttpDaemon(args: StartHttpDaemonArgs = {}) {
     },
     paths,
     get url() {
-      return `http://${metadata!.host}:${metadata!.port}${metadata!.mcpPath}`;
+      return `${getDaemonOriginFromConfig({
+        host: metadata!.host,
+        port: metadata!.port,
+        mcpPath: metadata!.mcpPath,
+      })}${metadata!.mcpPath}`;
     },
     reload,
     async close() {

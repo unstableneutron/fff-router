@@ -236,6 +236,12 @@ function readOptionalMcpPath(value: unknown): string | undefined {
   if (!parsed.startsWith("/")) {
     throw new Error("mcpPath must start with '/'");
   }
+  if (parsed.includes("?") || parsed.includes("#")) {
+    throw new Error("mcpPath must be a pathname without query or hash");
+  }
+  if (parsed === "/health") {
+    throw new Error("mcpPath '/health' is reserved");
+  }
   return parsed;
 }
 
@@ -503,9 +509,17 @@ export function getDaemonConfig(args: { env?: NodeJS.ProcessEnv } = {}): DaemonC
   }
 }
 
+export function formatDaemonUrlHost(host: string): string {
+  return host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
+}
+
+export function getDaemonOriginFromConfig(config: DaemonConfig): string {
+  return `http://${formatDaemonUrlHost(config.host)}:${config.port}`;
+}
+
 export function getDaemonEndpoint(args: { env?: NodeJS.ProcessEnv } = {}): string {
   const config = getDaemonConfig(args);
-  return `http://${config.host}:${config.port}${config.mcpPath}`;
+  return `${getDaemonOriginFromConfig(config)}${config.mcpPath}`;
 }
 
 export function loadDaemonReloadConfig(args: { env?: NodeJS.ProcessEnv } = {}): DaemonReloadConfig {

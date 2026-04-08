@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { ensureDaemonRunning } from "../lib/fff-router/daemon-autostart";
 import { createPersistentHttpToolClient } from "../lib/fff-router/http-client";
