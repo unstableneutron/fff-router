@@ -5,6 +5,7 @@ import { afterEach, describe, expect, test } from "vitest";
 import {
   getDaemonConfig,
   getDaemonEndpoint,
+  getDaemonPaths,
   getDaemonPolicyConfigPaths,
   getDaemonReloadFingerprint,
   getDaemonServerFingerprint,
@@ -165,6 +166,16 @@ describe("daemon config file", () => {
       dir: path.join(home, ".config", "fff-routerd"),
       jsonPath: path.join(home, ".config", "fff-routerd", "config.json"),
       jsoncPath: path.join(home, ".config", "fff-routerd", "config.jsonc"),
+    });
+  });
+
+  test("stores daemon state under XDG state home", async () => {
+    const home = await makeTempHome();
+
+    expect(getDaemonPaths({ env: { HOME: home } as NodeJS.ProcessEnv })).toEqual({
+      dir: path.join(home, ".local", "state", "fff-routerd"),
+      metadataPath: path.join(home, ".local", "state", "fff-routerd", "daemon.json"),
+      lockPath: path.join(home, ".local", "state", "fff-routerd", "startup.lock"),
     });
   });
 });

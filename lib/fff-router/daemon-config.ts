@@ -12,7 +12,7 @@ import { expandHomePath } from "./home-path";
 import type { RouterConfig } from "./types";
 
 export const DEFAULT_DAEMON_HOST = "127.0.0.1";
-export const DAEMON_PROTOCOL_VERSION = "fff-router-http-daemon-v2";
+export const DAEMON_PROTOCOL_VERSION = "fff-router-http-daemon-v1";
 export const DEFAULT_DAEMON_PORT = 4319;
 export const DEFAULT_DAEMON_MCP_PATH = "/mcp";
 const DEFAULT_BACKEND: SupportedBackendId = "fff-node";
@@ -60,12 +60,37 @@ export type DaemonPaths = {
   lockPath: string;
 };
 
+function packageVersion(): string {
+  const candidatePaths = [
+    path.resolve(import.meta.dirname, "../../package.json"),
+    path.resolve(import.meta.dirname, "../../../package.json"),
+  ];
+
+  for (const candidatePath of candidatePaths) {
+    if (!existsSync(candidatePath)) {
+      continue;
+    }
+    const parsed = JSON.parse(readFileSync(candidatePath, "utf8")) as { version?: unknown };
+    if (typeof parsed.version === "string" && parsed.version.length > 0) {
+      return parsed.version;
+    }
+  }
+
+  throw new Error("Unable to determine fff-router package version");
+}
+
+export const PACKAGE_VERSION = packageVersion();
+
 function hashFingerprint(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex").slice(0, 16);
 }
 
 function configHome(env: NodeJS.ProcessEnv): string {
   return env.HOME || os.homedir();
+}
+
+function stateHome(env: NodeJS.ProcessEnv): string {
+  return env.XDG_STATE_HOME || path.join(configHome(env), ".local", "state");
 }
 
 export function getDefaultDaemonConfig(): DaemonConfig {
@@ -564,9 +589,7 @@ export function getDaemonConfigFingerprint(
 
 export function getDaemonPaths(args: { env?: NodeJS.ProcessEnv } = {}): DaemonPaths {
   const env = args.env ?? process.env;
-  const home = configHome(env);
-  const base = env.XDG_RUNTIME_DIR || env.TMPDIR || path.join(home, ".cache", "fff-router");
-  const dir = path.join(base, "fff-router-daemon");
+  const dir = path.join(stateHome(env), "fff-routerd");
   return {
     dir,
     metadataPath: path.join(dir, "daemon.json"),

@@ -6,6 +6,7 @@ import { createFffNodeAdapter } from "./adapters/fff-node";
 import { createRgAdapter } from "./adapters/rg";
 import {
   DAEMON_PROTOCOL_VERSION,
+  PACKAGE_VERSION,
   type DaemonConfig,
   type DaemonReloadConfig,
   getDaemonConfig,
@@ -33,6 +34,7 @@ export type DaemonMetadata = {
   port: number;
   mcpPath: string;
   protocolVersion: string;
+  packageVersion: string;
   serverFingerprint: string;
   reloadFingerprint: string;
   startedAt: number;
@@ -118,6 +120,7 @@ function buildMetadata(args: {
     port: args.port,
     mcpPath: args.config.mcpPath,
     protocolVersion: DAEMON_PROTOCOL_VERSION,
+    packageVersion: PACKAGE_VERSION,
     serverFingerprint: getDaemonServerFingerprint({
       env: args.env,
       daemonConfig: {

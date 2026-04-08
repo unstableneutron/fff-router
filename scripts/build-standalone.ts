@@ -6,7 +6,6 @@ const standaloneDir = path.join(rootDir, "standalone");
 const standaloneEntrypoints = [
   "fff-find-files",
   "fff-grep",
-  "fff-router-mcp",
   "fff-routerd",
   "fff-search-terms",
 ] as const;

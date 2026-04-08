@@ -39,15 +39,12 @@ ensure_rg_tooling() {
 
 count_daemons() {
   local count=0
-  local procdir comm cmd
+  local procdir cmd
   for procdir in /proc/[0-9]*; do
-    [[ -f "$procdir/comm" ]] || continue
     [[ -f "$procdir/cmdline" ]] || continue
-    comm="$(cat "$procdir/comm" 2>/dev/null || true)"
-    [[ "$comm" == "bun" ]] || continue
     cmd="$(tr "\0" " " < "$procdir/cmdline" 2>/dev/null || true)"
     case "$cmd" in
-      *"bin/fff-routerd.ts"*) count=$((count + 1)) ;;
+      *"dist/bin/fff-routerd.js"*|*"fff-routerd"*) count=$((count + 1)) ;;
     esac
   done
   echo "$count"
@@ -120,41 +117,8 @@ echo "== daemon health endpoint =="
 bun -e 'const res = await fetch("http://127.0.0.1:4319/health"); if (!res.ok) throw new Error(`health ${res.status}`); const body = await res.json(); if (!body.ok) throw new Error("health payload not ok"); console.log(JSON.stringify(body));'
 assert_daemons after-health 1
 
-echo "== stdio compatibility proxy smoke =="
-bun - <<'BUN'
-import { spawn } from 'node:child_process';
-import { ReadBuffer, serializeMessage } from '@modelcontextprotocol/sdk/shared/stdio.js';
-import { LATEST_PROTOCOL_VERSION } from '@modelcontextprotocol/sdk/types.js';
-const child = spawn('bun', ['bin/fff-router-mcp.ts'], { stdio: ['pipe','pipe','pipe'] });
-const exit = new Promise((resolve, reject) => {
-  child.on('error', reject);
-  child.on('close', (code, signal) => resolve({ code, signal }));
-});
-const buffer = new ReadBuffer();
-const waitFor = (predicate) => new Promise((resolve) => {
-  child.stdout.on('data', function onData(chunk) {
-    buffer.append(chunk);
-    while (true) {
-      const message = buffer.readMessage();
-      if (!message) return;
-      if (predicate(message)) {
-        child.stdout.off('data', onData);
-        resolve(message);
-        return;
-      }
-    }
-  });
-});
-child.stdin.write(serializeMessage({ jsonrpc:'2.0', id:1, method:'initialize', params:{ protocolVersion: LATEST_PROTOCOL_VERSION, capabilities:{}, clientInfo:{ name:'docker-proxy', version:'1.0.0' } } }));
-await waitFor((m) => m.id === 1);
-child.stdin.write(serializeMessage({ jsonrpc:'2.0', method:'notifications/initialized' }));
-child.stdin.write(serializeMessage({ jsonrpc:'2.0', id:2, method:'tools/call', params:{ name:'fff_find_files', arguments:{ query:'coordinator', within:'/workspace/lib' } } }));
-const result = await waitFor((m) => m.id === 2);
-if (JSON.stringify(result).indexOf('coordinator') < 0) throw new Error('proxy result missing expected content');
-child.stdin.end();
-const close = await exit;
-if (close.code !== 0) throw new Error(`proxy exit ${close.code}`);
-BUN
-assert_daemons after-proxy 1
+echo "== daemon doctor =="
+bun bin/fff-routerd.ts doctor
+assert_daemons after-doctor 1
 
 echo "Docker validation completed successfully."

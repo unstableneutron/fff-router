@@ -12,7 +12,6 @@ const packageEntrypoints = [
   "lib/fff-router/types.ts",
   "bin/fff-find-files.ts",
   "bin/fff-grep.ts",
-  "bin/fff-router-mcp.ts",
   "bin/fff-routerd.ts",
   "bin/fff-search-terms.ts",
 ];
@@ -25,7 +24,6 @@ const externalPackages = [
 const executableOutputs = [
   "dist/bin/fff-find-files.js",
   "dist/bin/fff-grep.js",
-  "dist/bin/fff-router-mcp.js",
   "dist/bin/fff-routerd.js",
   "dist/bin/fff-search-terms.js",
 ];

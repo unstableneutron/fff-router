@@ -4,7 +4,6 @@
   "bin": {
     "fff-find-files": "./dist/bin/fff-find-files.js",
     "fff-grep": "./dist/bin/fff-grep.js",
-    "fff-router-mcp": "./dist/bin/fff-router-mcp.js",
     "fff-routerd": "./dist/bin/fff-routerd.js",
     "fff-search-terms": "./dist/bin/fff-search-terms.js"
   },
@@ -21,26 +20,6 @@
     ".": {
       "import": "./dist/lib/fff-router/index.js",
       "types": "./dist/lib/fff-router/index.d.ts"
-    },
-    "./public-api": {
-      "import": "./dist/lib/fff-router/public-api.js",
-      "types": "./dist/lib/fff-router/public-api.d.ts"
-    },
-    "./daemon-autostart": {
-      "import": "./dist/lib/fff-router/daemon-autostart.js",
-      "types": "./dist/lib/fff-router/daemon-autostart.d.ts"
-    },
-    "./http-client": {
-      "import": "./dist/lib/fff-router/http-client.js",
-      "types": "./dist/lib/fff-router/http-client.d.ts"
-    },
-    "./resolve-within": {
-      "import": "./dist/lib/fff-router/resolve-within.js",
-      "types": "./dist/lib/fff-router/resolve-within.d.ts"
-    },
-    "./types": {
-      "import": "./dist/lib/fff-router/types.js",
-      "types": "./dist/lib/fff-router/types.d.ts"
     },
     "./package.json": "./package.json"
   },

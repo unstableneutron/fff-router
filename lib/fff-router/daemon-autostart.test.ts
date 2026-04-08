@@ -6,8 +6,9 @@ import {
   checkDaemonHealth,
   ensureDaemonRunning,
   ensureDaemonRunningWithDeps,
+  resolveDaemonLaunchCommand,
 } from "./daemon-autostart";
-import { DAEMON_PROTOCOL_VERSION } from "./daemon-config";
+import { DAEMON_PROTOCOL_VERSION, PACKAGE_VERSION } from "./daemon-config";
 import { startHttpDaemon } from "./http-daemon";
 import type { SearchCoordinator } from "./types";
 
@@ -62,13 +63,36 @@ function makeCoordinator(): SearchCoordinator {
   };
 }
 
+describe("resolveDaemonLaunchCommand", () => {
+  test("prefers the installed fff-routerd command when available", () => {
+    expect(
+      resolveDaemonLaunchCommand({ HOME: "/home/test" } as NodeJS.ProcessEnv, {
+        resolveExecutableOnPath: (command) =>
+          command === "fff-routerd" ? "/usr/local/bin/fff-routerd" : null,
+      }),
+    ).toEqual({ command: "/usr/local/bin/fff-routerd", args: [], source: "path" });
+  });
+
+  test("falls back to the packaged built daemon entrypoint when the command is unavailable", () => {
+    const result = resolveDaemonLaunchCommand({ HOME: "/home/test" } as NodeJS.ProcessEnv, {
+      resolveExecutableOnPath: () => null,
+    });
+
+    expect(result.command).toBe(process.execPath);
+    expect(result.args).toHaveLength(1);
+    expect(result.args[0]).toMatch(/dist\/bin\/fff-routerd\.js$/);
+    expect(result.args[0]).not.toMatch(/\.ts$/);
+    expect(result.source).toBe("packaged");
+  });
+});
+
 describe("ensureDaemonRunningWithDeps", () => {
   test("sends SIGHUP when only the reload fingerprint mismatches", async () => {
     const home = await makeTempHome();
     await writeConfigFile({ home, port: 46301, backend: "fff-node" });
     const signalProcess = vi.fn(async () => {});
     const terminateProcess = vi.fn(async () => {});
-    const spawnDaemon = vi.fn(() => ({ unref() {} }));
+    const spawnDaemon = vi.fn(() => ({ unref() {}, source: "packaged" as const }));
     const waitForDaemonReady = vi.fn(async () => {});
     const checkHealth = vi
       .fn<() => Promise<void>>()
@@ -100,6 +124,7 @@ describe("ensureDaemonRunningWithDeps", () => {
         port: 46301,
         mcpPath: "/mcp",
         protocolVersion: DAEMON_PROTOCOL_VERSION,
+        packageVersion: PACKAGE_VERSION,
         serverFingerprint: "server",
         reloadFingerprint: "reload",
         startedAt: Date.now(),
@@ -124,7 +149,7 @@ describe("ensureDaemonRunningWithDeps", () => {
       throw new Error("EPERM");
     });
     const terminateProcess = vi.fn(async () => {});
-    const spawnDaemon = vi.fn(() => ({ unref() {} }));
+    const spawnDaemon = vi.fn(() => ({ unref() {}, source: "packaged" as const }));
     const waitForDaemonReady = vi.fn(async () => {});
     const checkHealth = vi
       .fn<() => Promise<void>>()
@@ -156,6 +181,7 @@ describe("ensureDaemonRunningWithDeps", () => {
         port: 46306,
         mcpPath: "/mcp",
         protocolVersion: "version",
+        packageVersion: PACKAGE_VERSION,
         serverFingerprint: "server",
         reloadFingerprint: "reload",
         startedAt: Date.now(),
@@ -180,7 +206,7 @@ describe("ensureDaemonRunningWithDeps", () => {
       throw new Error("signal unsupported");
     });
     const terminateProcess = vi.fn(async () => {});
-    const spawnDaemon = vi.fn(() => ({ unref() {} }));
+    const spawnDaemon = vi.fn(() => ({ unref() {}, source: "packaged" as const }));
     const waitForDaemonReady = vi.fn(async () => {});
     const checkHealth = vi
       .fn<() => Promise<void>>()
@@ -212,6 +238,7 @@ describe("ensureDaemonRunningWithDeps", () => {
         port: 46302,
         mcpPath: "/mcp",
         protocolVersion: DAEMON_PROTOCOL_VERSION,
+        packageVersion: PACKAGE_VERSION,
         serverFingerprint: "server",
         reloadFingerprint: "reload",
         startedAt: Date.now(),
@@ -234,7 +261,7 @@ describe("ensureDaemonRunningWithDeps", () => {
     await writeConfigFile({ home, port: 46302, backend: "fff-node" });
     const signalProcess = vi.fn(async () => {});
     const terminateProcess = vi.fn(async () => {});
-    const spawnDaemon = vi.fn(() => ({ unref() {} }));
+    const spawnDaemon = vi.fn(() => ({ unref() {}, source: "packaged" as const }));
     const waitForDaemonReady = vi.fn(async () => {});
     const checkHealth = vi
       .fn<() => Promise<void>>()
@@ -261,6 +288,7 @@ describe("ensureDaemonRunningWithDeps", () => {
         port: 46302,
         mcpPath: "/mcp",
         protocolVersion: DAEMON_PROTOCOL_VERSION,
+        packageVersion: PACKAGE_VERSION,
         serverFingerprint: "server",
         reloadFingerprint: "reload",
         startedAt: Date.now(),
@@ -276,6 +304,57 @@ describe("ensureDaemonRunningWithDeps", () => {
     expect(terminateProcess).toHaveBeenCalledWith(123);
     expect(spawnDaemon).toHaveBeenCalledTimes(1);
     expect(waitForDaemonReady).toHaveBeenCalledTimes(1);
+  });
+
+  test("falls back to the packaged daemon when a PATH daemon starts with the wrong version", async () => {
+    const home = await makeTempHome();
+    await writeConfigFile({ home, port: 46308, backend: "fff-node" });
+    const signalProcess = vi.fn(async () => {});
+    const terminateProcess = vi.fn(async () => {});
+    const spawnDaemon = vi
+      .fn()
+      .mockReturnValueOnce({ unref() {}, source: "path" as const })
+      .mockReturnValueOnce({ unref() {}, source: "packaged" as const });
+    const waitForDaemonReady = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(
+        Object.assign(new Error("daemon package version mismatch; restart required"), {
+          mismatchKind: "version",
+          metadata: { pid: 456 },
+        }),
+      )
+      .mockResolvedValueOnce(undefined);
+    const checkHealth = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(new Error("fetch failed"))
+      .mockRejectedValueOnce(new Error("fetch failed"));
+
+    await ensureDaemonRunningWithDeps({ HOME: home } as NodeJS.ProcessEnv, {
+      checkDaemonHealth: checkHealth,
+      readRunningDaemonMetadata: async () => ({
+        pid: 123,
+        host: "127.0.0.1",
+        port: 46308,
+        mcpPath: "/mcp",
+        protocolVersion: DAEMON_PROTOCOL_VERSION,
+        packageVersion: "0.0.9",
+        serverFingerprint: "server",
+        reloadFingerprint: "reload",
+        startedAt: Date.now(),
+      }),
+      signalProcess,
+      terminateProcess,
+      spawnDaemon,
+      waitForDaemonReady,
+      withStartupLock: async (callback) => await callback(),
+    });
+
+    expect(signalProcess).not.toHaveBeenCalled();
+    expect(terminateProcess).toHaveBeenCalledWith(123);
+    expect(terminateProcess).toHaveBeenCalledWith(456);
+    expect(spawnDaemon).toHaveBeenNthCalledWith(1, { HOME: home });
+    expect(spawnDaemon).toHaveBeenNthCalledWith(2, { HOME: home }, { preferPackaged: true });
+    expect(waitForDaemonReady).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -331,5 +410,6 @@ describe("checkDaemonHealth", () => {
       mismatchKind: "reload",
     });
     expect(daemon.metadata.protocolVersion).toBe(DAEMON_PROTOCOL_VERSION);
+    expect(daemon.metadata.packageVersion).toBe(PACKAGE_VERSION);
   });
 });

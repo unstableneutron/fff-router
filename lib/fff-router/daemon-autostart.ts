@@ -1,8 +1,10 @@
-import { mkdir, open, readFile, rm } from "node:fs/promises";
 import { spawn as spawnChildProcess } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { constants as fsConstants, accessSync, existsSync } from "node:fs";
+import { mkdir, open, readFile, rm } from "node:fs/promises";
+import path from "node:path";
 import {
   DAEMON_PROTOCOL_VERSION,
+  PACKAGE_VERSION,
   getDaemonConfig,
   getDaemonOriginFromConfig,
   getDaemonReloadFingerprint,
@@ -11,7 +13,7 @@ import {
 } from "./daemon-config";
 import { readDaemonMetadata, type DaemonMetadata } from "./http-daemon";
 
-type DaemonHealthMismatchKind = "protocol" | "server" | "reload";
+type DaemonHealthMismatchKind = "protocol" | "version" | "server" | "reload";
 
 class DaemonHealthMismatchError extends Error {
   constructor(
@@ -23,8 +25,20 @@ class DaemonHealthMismatchError extends Error {
   }
 }
 
-function daemonEntrypointPath(): string {
-  return fileURLToPath(new URL("../../bin/fff-routerd.ts", import.meta.url));
+function packagedDaemonEntrypointPath(): string {
+  const primaryCandidatePath = path.resolve(import.meta.dirname, "../../dist/bin/fff-routerd.js");
+  const candidatePaths = [
+    primaryCandidatePath,
+    path.resolve(import.meta.dirname, "../../bin/fff-routerd.js"),
+  ];
+
+  for (const candidatePath of candidatePaths) {
+    if (existsSync(candidatePath)) {
+      return candidatePath;
+    }
+  }
+
+  return primaryCandidatePath;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -38,6 +52,67 @@ function isProcessAlive(pid: number): boolean {
   } catch {
     return false;
   }
+}
+
+function isExecutable(pathValue: string): boolean {
+  try {
+    accessSync(pathValue, fsConstants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function commandExtensions(env: NodeJS.ProcessEnv): string[] {
+  if (process.platform !== "win32") {
+    return [""];
+  }
+
+  const pathExt = env.PATHEXT?.split(";").filter(Boolean);
+  return pathExt && pathExt.length > 0 ? pathExt : [".EXE", ".CMD", ".BAT", ".COM"];
+}
+
+function defaultResolveExecutableOnPath(command: string, env: NodeJS.ProcessEnv): string | null {
+  const pathValue = env.PATH || process.env.PATH || "";
+  const directories = pathValue.split(path.delimiter).filter(Boolean);
+  const extensions = commandExtensions(env);
+
+  for (const directory of directories) {
+    for (const extension of extensions) {
+      const candidatePath =
+        process.platform === "win32" && extension && !command.toUpperCase().endsWith(extension)
+          ? path.join(directory, `${command}${extension}`)
+          : path.join(directory, command);
+      if (existsSync(candidatePath) && isExecutable(candidatePath)) {
+        return candidatePath;
+      }
+    }
+  }
+
+  return null;
+}
+
+export function resolveDaemonLaunchCommand(
+  env: NodeJS.ProcessEnv = process.env,
+  deps: {
+    preferPackaged?: boolean;
+    resolveExecutableOnPath?: (command: string) => string | null;
+  } = {},
+): { command: string; args: string[]; source: "path" | "packaged" } {
+  if (!deps.preferPackaged) {
+    const resolvedCommand = (
+      deps.resolveExecutableOnPath ?? ((command) => defaultResolveExecutableOnPath(command, env))
+    )("fff-routerd");
+    if (resolvedCommand) {
+      return { command: resolvedCommand, args: [], source: "path" };
+    }
+  }
+
+  return {
+    command: process.execPath,
+    args: [packagedDaemonEntrypointPath()],
+    source: "packaged",
+  };
 }
 
 async function fetchHealthMetadata(env?: NodeJS.ProcessEnv): Promise<Partial<DaemonMetadata>> {
@@ -58,9 +133,7 @@ async function fetchHealthMetadata(env?: NodeJS.ProcessEnv): Promise<Partial<Dae
   return payload.metadata;
 }
 
-export async function checkDaemonBaseHealth(env?: NodeJS.ProcessEnv): Promise<void> {
-  const metadata = await fetchHealthMetadata(env);
-
+function assertMatchingProtocolAndVersion(metadata: Partial<DaemonMetadata>): void {
   if (metadata.protocolVersion !== DAEMON_PROTOCOL_VERSION) {
     throw new DaemonHealthMismatchError(
       `daemon protocol mismatch: expected ${DAEMON_PROTOCOL_VERSION}, got ${metadata.protocolVersion}`,
@@ -68,6 +141,19 @@ export async function checkDaemonBaseHealth(env?: NodeJS.ProcessEnv): Promise<vo
       metadata,
     );
   }
+
+  if (metadata.packageVersion !== PACKAGE_VERSION) {
+    throw new DaemonHealthMismatchError(
+      `daemon package version mismatch: expected ${PACKAGE_VERSION}, got ${metadata.packageVersion}`,
+      "version",
+      metadata,
+    );
+  }
+}
+
+export async function checkDaemonBaseHealth(env?: NodeJS.ProcessEnv): Promise<void> {
+  const metadata = await fetchHealthMetadata(env);
+  assertMatchingProtocolAndVersion(metadata);
 
   const expectedServerFingerprint = getDaemonServerFingerprint({ env });
   if (metadata.serverFingerprint !== expectedServerFingerprint) {
@@ -81,14 +167,7 @@ export async function checkDaemonBaseHealth(env?: NodeJS.ProcessEnv): Promise<vo
 
 export async function checkDaemonHealth(env?: NodeJS.ProcessEnv): Promise<void> {
   const metadata = await fetchHealthMetadata(env);
-
-  if (metadata.protocolVersion !== DAEMON_PROTOCOL_VERSION) {
-    throw new DaemonHealthMismatchError(
-      `daemon protocol mismatch: expected ${DAEMON_PROTOCOL_VERSION}, got ${metadata.protocolVersion}`,
-      "protocol",
-      metadata,
-    );
-  }
+  assertMatchingProtocolAndVersion(metadata);
 
   const expectedServerFingerprint = getDaemonServerFingerprint({ env });
   if (metadata.serverFingerprint !== expectedServerFingerprint) {
@@ -174,6 +253,7 @@ function mismatchKind(error: unknown): DaemonHealthMismatchKind | null {
     error &&
     "mismatchKind" in error &&
     (error.mismatchKind === "protocol" ||
+      error.mismatchKind === "version" ||
       error.mismatchKind === "server" ||
       error.mismatchKind === "reload")
   ) {
@@ -203,14 +283,21 @@ function mismatchPid(error: unknown): number | null {
   return null;
 }
 
-function spawnDaemon(env?: NodeJS.ProcessEnv) {
-  const child = spawnChildProcess(process.execPath, [daemonEntrypointPath()], {
+function spawnDaemon(
+  env?: NodeJS.ProcessEnv,
+  options?: { preferPackaged?: boolean },
+): { unref: () => void; source: "path" | "packaged" } {
+  const launchCommand = resolveDaemonLaunchCommand(env ?? process.env, options);
+  const child = spawnChildProcess(launchCommand.command, launchCommand.args, {
     env: env ?? process.env,
     stdio: ["ignore", "pipe", "pipe"],
   });
   child.stdout?.destroy();
   child.stderr?.destroy();
-  return child;
+  return {
+    unref: () => child.unref(),
+    source: launchCommand.source,
+  };
 }
 
 async function waitForDaemonReady(env?: NodeJS.ProcessEnv): Promise<void> {
@@ -274,7 +361,10 @@ export async function ensureDaemonRunningWithDeps(
     readRunningDaemonMetadata: (env?: NodeJS.ProcessEnv) => Promise<DaemonMetadata | null>;
     signalProcess: (pid: number, signal: NodeJS.Signals) => Promise<void>;
     terminateProcess: (pid: number) => Promise<void>;
-    spawnDaemon: (env?: NodeJS.ProcessEnv) => { unref: () => void };
+    spawnDaemon: (
+      env?: NodeJS.ProcessEnv,
+      options?: { preferPackaged?: boolean },
+    ) => { unref: () => void; source: "path" | "packaged" };
     waitForDaemonReady: (env?: NodeJS.ProcessEnv) => Promise<void>;
     withStartupLock: (callback: () => Promise<void>, env?: NodeJS.ProcessEnv) => Promise<void>;
   },
@@ -309,6 +399,7 @@ export async function ensureDaemonRunningWithDeps(
 
       if (
         mismatchKind(error) === "protocol" ||
+        mismatchKind(error) === "version" ||
         mismatchKind(error) === "server" ||
         mismatchKind(error) === "reload"
       ) {
@@ -325,9 +416,26 @@ export async function ensureDaemonRunningWithDeps(
       await deps.terminateProcess(existingPid);
     }
 
-    const child = deps.spawnDaemon(env);
+    let child = deps.spawnDaemon(env);
     try {
-      await deps.waitForDaemonReady(env);
+      try {
+        await deps.waitForDaemonReady(env);
+      } catch (error) {
+        if (
+          child.source === "path" &&
+          (mismatchKind(error) === "protocol" || mismatchKind(error) === "version")
+        ) {
+          const spawnedPid =
+            mismatchPid(error) ?? (await deps.readRunningDaemonMetadata(env))?.pid ?? null;
+          if (spawnedPid) {
+            await deps.terminateProcess(spawnedPid);
+          }
+          child = deps.spawnDaemon(env, { preferPackaged: true });
+          await deps.waitForDaemonReady(env);
+        } else {
+          throw error;
+        }
+      }
     } finally {
       child.unref();
     }

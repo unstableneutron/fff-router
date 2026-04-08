@@ -4,7 +4,11 @@ import path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 import { createCoordinatorRuntimeConfigRef, type CoordinatorRuntimeConfigRef } from "./coordinator";
 import { callPublicToolOverHttp } from "./http-client";
-import { getDaemonReloadFingerprint, loadDaemonReloadConfig } from "./daemon-config";
+import {
+  PACKAGE_VERSION,
+  getDaemonReloadFingerprint,
+  loadDaemonReloadConfig,
+} from "./daemon-config";
 import { startHttpDaemon } from "./http-daemon";
 import type { PublicToolRequest, SearchCoordinator, SearchCoordinatorResult } from "./types";
 
@@ -119,6 +123,7 @@ describe("startHttpDaemon", () => {
 
     expect(daemon.metadata.serverFingerprint).toBeDefined();
     expect(daemon.metadata.reloadFingerprint).toBeDefined();
+    expect(daemon.metadata.packageVersion).toBe(PACKAGE_VERSION);
     expect(daemon.metadata.reloadFingerprint).toBe(getDaemonReloadFingerprint({ env }));
   });
 

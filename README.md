@@ -15,7 +15,6 @@ The primary architecture is now:
 - one machine-local HTTP MCP daemon: `fff-routerd`
 - one shared in-process runtime map inside that daemon
 - thin CLI wrappers that call the daemon over MCP HTTP
-- an optional stdio compatibility proxy: `fff-router-mcp`
 
 This means machine-wide warm reuse comes from the long-lived daemon process itself.
 
@@ -148,8 +147,7 @@ Routing and lifecycle policy still come from:
 
 ### Entrypoints
 
-- `bin/fff-routerd.ts` — explicit HTTP MCP daemon
-- `bin/fff-router-mcp.ts` — stdio compatibility proxy to the daemon
+- `bin/fff-routerd.ts` — HTTP MCP daemon + small ops CLI
 - `bin/fff-find-files.ts` — HTTP MCP wrapper
 - `bin/fff-search-terms.ts` — HTTP MCP wrapper
 - `bin/fff-grep.ts` — HTTP MCP wrapper
@@ -186,7 +184,7 @@ docker run --rm \
   bash -lc 'bun install && bash scripts/docker-validate-wrappers.sh'
 ```
 
-## Start the daemon explicitly
+## `fff-routerd`
 
 Default bind:
 
@@ -204,10 +202,22 @@ Reload behavior:
 - changing backend / allowlist / promotion / TTL / limit fields reloads in place
 - invalid config file edits cause reload to fail until the file is fixed
 
-Run:
+Run in the foreground:
 
 ```bash
 bun run bin/fff-routerd.ts
+# or, after install:
+fff-routerd
+```
+
+Useful commands:
+
+```bash
+fff-routerd status
+fff-routerd reload
+fff-routerd stop
+fff-routerd doctor
+fff-routerd install-fff-mcp
 ```
 
 ## CLI wrappers
@@ -223,6 +233,8 @@ They:
 - call the daemon over MCP HTTP
 
 They do **not** own search policy or backend management.
+
+They are intentionally daemon-first. There is no standalone execution mode.
 
 ### Help
 
@@ -248,17 +260,23 @@ The canonical MCP endpoint is:
 
 Other local agents and future extensions should talk to that same endpoint if they want shared warm reuse.
 
-## `fff-router-mcp`
-
-`fff-router-mcp` is no longer the primary runtime owner.
-
-It is now a thin stdio compatibility proxy that forwards MCP tool calls to the HTTP daemon. The shared runtime state lives in `fff-routerd`.
-
 ## Pi integration direction
 
 The long-term intended integration is:
 
 - Pi / extensions / wrappers talk directly to the same HTTP MCP daemon
+
+If you want the optional upstream `fff-mcp` binary for the experimental `fff-mcp` backend, install it explicitly with:
+
+```bash
+fff-routerd install-fff-mcp
+```
+
+To inspect whether it is installed and where the daemon is reading config/state from:
+
+```bash
+fff-routerd doctor
+```
 
 That keeps one shared runtime pool for the whole machine instead of creating per-client warm state.
 
