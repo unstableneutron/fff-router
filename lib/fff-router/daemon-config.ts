@@ -206,6 +206,39 @@ function readOptionalNumber(value: unknown, label: string): number | undefined {
   return value;
 }
 
+function readOptionalNonNegativeInteger(value: unknown, label: string): number | undefined {
+  const parsed = readOptionalNumber(value, label);
+  if (parsed == null) {
+    return undefined;
+  }
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    throw new Error(`${label} must be a non-negative integer`);
+  }
+  return parsed;
+}
+
+function readOptionalPort(value: unknown): number | undefined {
+  const parsed = readOptionalNumber(value, "port");
+  if (parsed == null) {
+    return undefined;
+  }
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 65_535) {
+    throw new Error("port must be an integer between 1 and 65535");
+  }
+  return parsed;
+}
+
+function readOptionalMcpPath(value: unknown): string | undefined {
+  const parsed = readOptionalString(value, "mcpPath");
+  if (parsed == null) {
+    return undefined;
+  }
+  if (!parsed.startsWith("/")) {
+    throw new Error("mcpPath must start with '/'");
+  }
+  return parsed;
+}
+
 function readOptionalString(value: unknown, label: string): string | undefined {
   if (value == null) {
     return undefined;
@@ -367,26 +400,31 @@ function normalizeDaemonFileConfig(
   const ttl = fileConfig.ttl == null ? null : expectObject(fileConfig.ttl, "ttl");
   const limits = fileConfig.limits == null ? null : expectObject(fileConfig.limits, "limits");
 
+  const normalizedEnv = { ...env, HOME: configHome(env) } as NodeJS.ProcessEnv;
   const backendId = readOptionalBackend(fileConfig.backend) ?? defaults.backend;
   const allowlist =
     readOptionalStringArray(fileConfig.allowlist, "allowlist") ?? defaults.allowlist;
   const host = readOptionalString(fileConfig.host, "host") ?? defaults.host;
-  const port = readOptionalNumber(fileConfig.port, "port") ?? defaults.port;
-  const mcpPath = readOptionalString(fileConfig.mcpPath, "mcpPath") ?? defaults.mcpPath;
+  const port = readOptionalPort(fileConfig.port) ?? defaults.port;
+  const mcpPath = readOptionalMcpPath(fileConfig.mcpPath) ?? defaults.mcpPath;
 
   const promotionWindowMs =
-    readOptionalNumber(promotion?.windowMs, "promotion.windowMs") ?? defaults.promotion.windowMs;
+    readOptionalNonNegativeInteger(promotion?.windowMs, "promotion.windowMs") ??
+    defaults.promotion.windowMs;
   const promotionRequiredHits =
-    readOptionalNumber(promotion?.requiredHits, "promotion.requiredHits") ??
+    readOptionalNonNegativeInteger(promotion?.requiredHits, "promotion.requiredHits") ??
     defaults.promotion.requiredHits;
-  const ttlGitMs = readOptionalNumber(ttl?.gitMs, "ttl.gitMs") ?? defaults.ttl.gitMs;
-  const ttlNonGitMs = readOptionalNumber(ttl?.nonGitMs, "ttl.nonGitMs") ?? defaults.ttl.nonGitMs;
+  const ttlGitMs = readOptionalNonNegativeInteger(ttl?.gitMs, "ttl.gitMs") ?? defaults.ttl.gitMs;
+  const ttlNonGitMs =
+    readOptionalNonNegativeInteger(ttl?.nonGitMs, "ttl.nonGitMs") ?? defaults.ttl.nonGitMs;
   const maxPersistentDaemons =
-    readOptionalNumber(limits?.maxPersistentDaemons, "limits.maxPersistentDaemons") ??
+    readOptionalNonNegativeInteger(limits?.maxPersistentDaemons, "limits.maxPersistentDaemons") ??
     defaults.limits.maxPersistentDaemons;
   const maxPersistentNonGitDaemons =
-    readOptionalNumber(limits?.maxPersistentNonGitDaemons, "limits.maxPersistentNonGitDaemons") ??
-    defaults.limits.maxPersistentNonGitDaemons;
+    readOptionalNonNegativeInteger(
+      limits?.maxPersistentNonGitDaemons,
+      "limits.maxPersistentNonGitDaemons",
+    ) ?? defaults.limits.maxPersistentNonGitDaemons;
 
   return {
     daemon: {
@@ -400,7 +438,7 @@ function normalizeDaemonFileConfig(
         fallbackBackendId: getDefaultFallbackBackend(backendId),
       },
       router: {
-        allowlistedNonGitPrefixes: expandAllowlistEntries(allowlist, env),
+        allowlistedNonGitPrefixes: expandAllowlistEntries(allowlist, normalizedEnv),
         promotion: {
           windowMs: promotionWindowMs,
           requiredHits: promotionRequiredHits,

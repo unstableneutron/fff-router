@@ -149,7 +149,7 @@ export async function startHttpDaemon(args: StartHttpDaemonArgs = {}) {
     args.createCoordinator?.({ liveConfigRef, runtimeManager }) ??
     createDefaultCoordinator({ liveConfigRef, runtimeManager });
   const paths = getDaemonPaths({ env });
-  const policyConfigPaths = env.HOME ? getDaemonPolicyConfigPaths({ env }) : null;
+  const policyConfigPaths = getDaemonPolicyConfigPaths({ env });
   const startedAt = Date.now();
   let metadata: DaemonMetadata | null = null;
   let watcher: FSWatcher | null = null;
@@ -193,9 +193,7 @@ export async function startHttpDaemon(args: StartHttpDaemonArgs = {}) {
   };
 
   await mkdir(paths.dir, { recursive: true });
-  if (policyConfigPaths) {
-    await mkdir(policyConfigPaths.dir, { recursive: true });
-  }
+  await mkdir(policyConfigPaths.dir, { recursive: true });
 
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     const url = new URL(
@@ -274,7 +272,7 @@ export async function startHttpDaemon(args: StartHttpDaemonArgs = {}) {
   });
   await writeDaemonMetadata(paths.metadataPath, metadata);
 
-  if (args.watchConfig !== false && policyConfigPaths) {
+  if (args.watchConfig !== false) {
     watcher = watch(policyConfigPaths.dir, (_eventType, filename) => {
       if (closing) {
         return;

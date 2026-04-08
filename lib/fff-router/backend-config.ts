@@ -28,12 +28,3 @@ export function getDefaultFallbackBackend(
       return null;
   }
 }
-
-export function getBackendSelection(args: { env?: NodeJS.ProcessEnv } = {}): BackendSelection {
-  const env = args.env ?? process.env;
-  const primaryBackendId = parseBackend(env.FFF_ROUTER_BACKEND);
-  return {
-    primaryBackendId,
-    fallbackBackendId: getDefaultFallbackBackend(primaryBackendId),
-  };
-}

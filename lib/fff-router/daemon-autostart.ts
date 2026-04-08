@@ -306,7 +306,11 @@ export async function ensureDaemonRunningWithDeps(
         }
       }
 
-      if (mismatchKind(error) === "protocol" || mismatchKind(error) === "server" || mismatchKind(error) === "reload") {
+      if (
+        mismatchKind(error) === "protocol" ||
+        mismatchKind(error) === "server" ||
+        mismatchKind(error) === "reload"
+      ) {
         if (pid) {
           await deps.terminateProcess(pid);
         }

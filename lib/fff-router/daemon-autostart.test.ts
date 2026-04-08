@@ -117,11 +117,12 @@ describe("ensureDaemonRunningWithDeps", () => {
     expect(waitForDaemonReady).toHaveBeenCalledTimes(1);
   });
 
-
   test("restarts the daemon when SIGHUP reload signal fails", async () => {
     const home = await makeTempHome();
     await writeConfigFile({ home, port: 46306, backend: "fff-node" });
-    const signalProcess = vi.fn(async () => { throw new Error("EPERM"); });
+    const signalProcess = vi.fn(async () => {
+      throw new Error("EPERM");
+    });
     const terminateProcess = vi.fn(async () => {});
     const spawnDaemon = vi.fn(() => ({ unref() {} }));
     const waitForDaemonReady = vi.fn(async () => {});
@@ -133,7 +134,7 @@ describe("ensureDaemonRunningWithDeps", () => {
           {
             mismatchKind: "reload",
             metadata: { pid: 123 },
-          }
+          },
         ),
       )
       .mockRejectedValueOnce(
@@ -142,7 +143,7 @@ describe("ensureDaemonRunningWithDeps", () => {
           {
             mismatchKind: "reload",
             metadata: { pid: 123 },
-          }
+          },
         ),
       )
       .mockResolvedValueOnce(undefined);
@@ -155,6 +156,62 @@ describe("ensureDaemonRunningWithDeps", () => {
         port: 46306,
         mcpPath: "/mcp",
         protocolVersion: "version",
+        serverFingerprint: "server",
+        reloadFingerprint: "reload",
+        startedAt: Date.now(),
+      }),
+      signalProcess,
+      terminateProcess,
+      spawnDaemon,
+      waitForDaemonReady,
+      withStartupLock: async (callback) => await callback(),
+    });
+
+    expect(signalProcess).toHaveBeenCalledWith(123, "SIGHUP");
+    expect(terminateProcess).toHaveBeenCalledWith(123);
+    expect(spawnDaemon).toHaveBeenCalledTimes(1);
+    expect(waitForDaemonReady).toHaveBeenCalledTimes(1);
+  });
+
+  test("restarts the daemon when SIGHUP reload fails", async () => {
+    const home = await makeTempHome();
+    await writeConfigFile({ home, port: 46302, backend: "fff-node" });
+    const signalProcess = vi.fn(async () => {
+      throw new Error("signal unsupported");
+    });
+    const terminateProcess = vi.fn(async () => {});
+    const spawnDaemon = vi.fn(() => ({ unref() {} }));
+    const waitForDaemonReady = vi.fn(async () => {});
+    const checkHealth = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(
+        Object.assign(
+          new Error("daemon reload config mismatch; send SIGHUP to reload configuration"),
+          {
+            mismatchKind: "reload",
+            metadata: { pid: 123 },
+          },
+        ),
+      )
+      .mockRejectedValueOnce(
+        Object.assign(
+          new Error("daemon reload config mismatch; send SIGHUP to reload configuration"),
+          {
+            mismatchKind: "reload",
+            metadata: { pid: 123 },
+          },
+        ),
+      )
+      .mockResolvedValueOnce(undefined);
+
+    await ensureDaemonRunningWithDeps({ HOME: home } as NodeJS.ProcessEnv, {
+      checkDaemonHealth: checkHealth,
+      readRunningDaemonMetadata: async () => ({
+        pid: 123,
+        host: "127.0.0.1",
+        port: 46302,
+        mcpPath: "/mcp",
+        protocolVersion: DAEMON_PROTOCOL_VERSION,
         serverFingerprint: "server",
         reloadFingerprint: "reload",
         startedAt: Date.now(),

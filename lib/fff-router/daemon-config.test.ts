@@ -124,6 +124,22 @@ describe("daemon config file", () => {
     );
   });
 
+  test("rejects invalid port and mcpPath values", async () => {
+    const home = await makeTempHome();
+    await writeConfigFile({
+      home,
+      fileName: "config.json",
+      text: `{
+        "port": 70000,
+        "mcpPath": "mcp"
+      }`,
+    });
+
+    expect(() => getDaemonConfig({ env: { HOME: home } as NodeJS.ProcessEnv })).toThrow(
+      /port must be an integer between 1 and 65535/i,
+    );
+  });
+
   test("returns config file paths under ~/.config/fff-routerd", async () => {
     const home = await makeTempHome();
 
