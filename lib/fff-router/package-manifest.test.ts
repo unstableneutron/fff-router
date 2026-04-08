@@ -61,6 +61,7 @@ describe("package manifest", () => {
     });
     expect(packageJson.scripts).toMatchObject({
       build: "bun run scripts/build-package.ts && bun run scripts/build-standalone.ts",
+      prepare: "bun run build:package",
       "build:package": "bun run scripts/build-package.ts",
       "build:standalone": "bun run scripts/build-standalone.ts",
     });
