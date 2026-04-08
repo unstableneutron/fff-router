@@ -6,7 +6,7 @@ import type {
   SearchBackendAdapter,
   SearchBackendRuntime,
 } from "./adapters/types";
-import { createSearchCoordinator } from "./coordinator";
+import { createCoordinatorRuntimeConfigRef, createSearchCoordinator } from "./coordinator";
 import { RuntimeManager } from "./runtime-manager";
 import type { PublicToolRequest, RouterConfig, SearchBackendId, SearchQueryKind } from "./types";
 
@@ -86,6 +86,62 @@ function okResult(
 }
 
 describe("createSearchCoordinator", () => {
+  test("uses the latest runtime config from a live config ref", async () => {
+    const liveConfigRef = createCoordinatorRuntimeConfigRef({
+      config,
+      primaryBackendId: "fff-node",
+      fallbackBackendId: "rg",
+    });
+    const fffNode = makeAdapter({
+      backendId: "fff-node",
+      execute: async () => okResult("find_files", []),
+    });
+    const rg = makeAdapter({
+      backendId: "rg",
+      execute: async () =>
+        okResult(
+          "find_files",
+          [{ path: "/repo/src/router.ts", relativePath: "src/router.ts" }],
+          "rg",
+        ),
+    });
+
+    const coordinator = createSearchCoordinator({
+      config,
+      adapters: {
+        "fff-node": fffNode.adapter,
+        rg: rg.adapter,
+      },
+      primaryBackendId: "fff-node",
+      fallbackBackendId: "rg",
+      liveConfigRef,
+      runtimeManager: new RuntimeManager(),
+      validateWithin: async ({ within }) => ({
+        ok: true,
+        value: { resolvedWithin: within, basePath: within },
+      }),
+      resolveRoutingPath: async (within) => ({
+        ok: true,
+        value: { realPath: within, statType: "directory", gitRoot: "/repo" },
+      }),
+    });
+
+    liveConfigRef.current = {
+      config,
+      primaryBackendId: "rg",
+      fallbackBackendId: null,
+    };
+
+    const result = await coordinator.execute(makePublicRequest({ outputMode: "json" }));
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected success");
+    if (!("backend_used" in result.value)) throw new Error("expected json result");
+    expect(result.value.backend_used).toBe("rg");
+    expect(fffNode.calls).toHaveLength(0);
+    expect(rg.calls).toHaveLength(1);
+  });
+
   test("uses the configured primary backend from the adapter registry", async () => {
     const fffNode = makeAdapter({
       backendId: "fff-node",

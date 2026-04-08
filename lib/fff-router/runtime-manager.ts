@@ -125,4 +125,16 @@ export class RuntimeManager<TRuntime extends SearchBackendRuntime = SearchBacken
       await closeRuntime(runtime);
     }
   }
+
+  async closeAll(): Promise<void> {
+    const runtimes = await this.withMutationLock(() => {
+      const collected = Array.from(this.entries.values())
+        .map((entry) => entry.runtime)
+        .filter((runtime): runtime is TRuntime => runtime != null);
+      this.entries.clear();
+      return collected;
+    });
+
+    await Promise.all(runtimes.map((runtime) => closeRuntime(runtime)));
+  }
 }

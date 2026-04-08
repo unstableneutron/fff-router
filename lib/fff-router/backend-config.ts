@@ -5,7 +5,7 @@ export type BackendSelection = {
   fallbackBackendId: SupportedBackendId | null;
 };
 
-function parseBackend(raw: string | undefined): SupportedBackendId {
+export function parseBackend(raw: string | undefined): SupportedBackendId {
   const value = raw?.trim() || "fff-node";
   switch (value) {
     case "fff-node":

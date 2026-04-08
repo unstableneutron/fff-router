@@ -60,18 +60,35 @@ Server-side behavior:
 
 ## Backend selection
 
-The daemon keeps the public API stable while letting you choose the backend with:
+The daemon keeps the public API stable while letting you choose the backend through:
 
-- `FFF_ROUTER_BACKEND=fff-node|fff-mcp|rg`
-- `FFF_ROUTER_ALLOWLIST=<colon-separated non-git prefixes>`
+- `~/.config/fff-routerd/config.json`
+- `~/.config/fff-routerd/config.jsonc`
+
+If both files exist, `config.json` wins.
+If neither file exists, `fff-routerd` creates `config.json` with defaults on first run.
+
+Comments are accepted in **either** extension.
+
+Example:
+
+```jsonc
+{
+  // comments are allowed in config.json and config.jsonc
+  "host": "127.0.0.1",
+  "port": 4319,
+  "mcpPath": "/mcp",
+  "backend": "fff-node",
+  "allowlist": ["~/.config", "$HOME/.local/share", "$HOME/src"],
+  "promotion": { "windowMs": 600000, "requiredHits": 2 },
+  "ttl": { "gitMs": 3600000, "nonGitMs": 900000 },
+  "limits": { "maxPersistentDaemons": 12, "maxPersistentNonGitDaemons": 4 },
+}
+```
 
 ## Non-git allowlist
 
-Set `FFF_ROUTER_ALLOWLIST` to a colon-separated list of absolute or HOME-based prefixes:
-
-```bash
-export FFF_ROUTER_ALLOWLIST="~/.config:$HOME/.local/share:${HOME}/src"
-```
+Use the `allowlist` array in the config file.
 
 Each prefix is matched recursively for allowlisting. Non-git routing still derives the persistence root using the first child under the matched prefix, while Git repositories under an allowlisted path still take precedence.
 
@@ -177,13 +194,15 @@ Default bind:
 - port: `4319`
 - MCP path: `/mcp`
 
-You can override these with:
+All daemon configuration comes from `~/.config/fff-routerd/config.json` or `config.jsonc`.
 
-- `FFF_ROUTER_HOST`
-- `FFF_ROUTER_PORT`
-- `FFF_ROUTER_MCP_PATH`
-- `FFF_ROUTER_BACKEND`
-- `FFF_ROUTER_FFF_MCP_BIN` (optional explicit path to the stock upstream `fff-mcp` binary)
+Reload behavior:
+
+- editing `config.json` or `config.jsonc` auto-reloads in place
+- sending `SIGHUP` also reloads the file in place
+- changing `host`, `port`, or `mcpPath` requires a daemon restart
+- changing backend / allowlist / promotion / TTL / limit fields reloads in place
+- invalid config file edits cause reload to fail until the file is fixed
 
 Run:
 

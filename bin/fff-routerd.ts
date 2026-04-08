@@ -1,8 +1,7 @@
 #!/usr/bin/env bun
-import { getDaemonConfig } from "../lib/fff-router/daemon-config";
 import { startHttpDaemon } from "../lib/fff-router/http-daemon";
 
-const daemon = await startHttpDaemon(getDaemonConfig());
+const daemon = await startHttpDaemon({ env: process.env });
 
 const shutdown = async () => {
   const hardExit = setTimeout(() => {
@@ -26,6 +25,11 @@ process.once("SIGINT", () => {
 });
 process.once("SIGTERM", () => {
   void shutdown();
+});
+process.on("SIGHUP", () => {
+  void daemon.reload().catch((error) => {
+    console.error("fff-routerd reload failed:", error);
+  });
 });
 
 // Keep the daemon alive until signaled.

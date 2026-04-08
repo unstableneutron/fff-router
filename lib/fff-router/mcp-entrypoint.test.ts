@@ -1,4 +1,6 @@
 import { spawn } from "node:child_process";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { LATEST_PROTOCOL_VERSION } from "@modelcontextprotocol/sdk/types.js";
@@ -22,11 +24,33 @@ type JsonRpcMessage = {
 };
 
 const startedDaemons: Array<Awaited<ReturnType<typeof startHttpDaemon>>> = [];
+const tempDirs: string[] = [];
+
+async function makeTempHome(): Promise<string> {
+  const tempHome = await mkdtemp(path.join(os.tmpdir(), "fff-router-mcp-entrypoint-"));
+  tempDirs.push(tempHome);
+  return tempHome;
+}
+
+async function writeConfigFile(home: string, port: number): Promise<void> {
+  const dir = path.join(home, ".config", "fff-routerd");
+  await mkdir(dir, { recursive: true });
+  await writeFile(
+    path.join(dir, "config.json"),
+    `{
+      "host": "127.0.0.1",
+      "port": ${port},
+      "mcpPath": "/mcp",
+      "backend": "fff-node"
+    }`,
+  );
+}
 
 afterEach(async () => {
   while (startedDaemons.length > 0) {
     await startedDaemons.pop()?.close();
   }
+  await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
 function makeCoordinator(): SearchCoordinator {
@@ -86,9 +110,12 @@ function createMessageReader(child: ReturnType<typeof spawn>) {
 
 describe("fff-router-mcp entrypoint", () => {
   test("proxies stdio MCP requests through the HTTP daemon and exits on stdin close", async () => {
+    const home = await makeTempHome();
+    const port = 46311;
+    await writeConfigFile(home, port);
+
     const daemon = await startHttpDaemon({
-      host: "127.0.0.1",
-      port: 0,
+      env: { HOME: home } as NodeJS.ProcessEnv,
       coordinator: makeCoordinator(),
     });
     startedDaemons.push(daemon);
@@ -96,8 +123,7 @@ describe("fff-router-mcp entrypoint", () => {
     const child = spawn("bun", [binPath], {
       env: {
         ...process.env,
-        FFF_ROUTER_HOST: daemon.metadata.host,
-        FFF_ROUTER_PORT: String(daemon.metadata.port),
+        HOME: home,
       },
       stdio: ["pipe", "pipe", "pipe"],
     });

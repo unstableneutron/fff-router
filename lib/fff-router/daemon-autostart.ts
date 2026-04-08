@@ -4,19 +4,19 @@ import { fileURLToPath } from "node:url";
 import {
   DAEMON_PROTOCOL_VERSION,
   getDaemonConfig,
-  getDaemonConfigFingerprint,
+  getDaemonReloadFingerprint,
+  getDaemonServerFingerprint,
   getDaemonPaths,
 } from "./daemon-config";
-import { readDaemonMetadata } from "./http-daemon";
+import { readDaemonMetadata, type DaemonMetadata } from "./http-daemon";
+
+type DaemonHealthMismatchKind = "protocol" | "server" | "reload";
 
 class DaemonHealthMismatchError extends Error {
   constructor(
     message: string,
-    readonly metadata: {
-      pid?: number;
-      protocolVersion?: string;
-      configFingerprint?: string;
-    } | null,
+    readonly mismatchKind: DaemonHealthMismatchKind,
+    readonly metadata: Partial<DaemonMetadata> | null,
   ) {
     super(message);
   }
@@ -39,7 +39,7 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
-export async function checkDaemonHealth(env?: NodeJS.ProcessEnv): Promise<void> {
+async function fetchHealthMetadata(env?: NodeJS.ProcessEnv): Promise<Partial<DaemonMetadata>> {
   const config = getDaemonConfig({ env });
   const response = await fetch(new URL(`/health`, `http://${config.host}:${config.port}`));
   if (!response.ok) {
@@ -48,24 +48,62 @@ export async function checkDaemonHealth(env?: NodeJS.ProcessEnv): Promise<void> 
 
   const payload = (await response.json()) as {
     ok?: boolean;
-    metadata?: { protocolVersion?: string; configFingerprint?: string } | null;
+    metadata?: Partial<DaemonMetadata> | null;
   };
   if (!payload.ok || !payload.metadata) {
     throw new Error("daemon healthcheck returned an invalid payload");
   }
 
-  if (payload.metadata.protocolVersion !== DAEMON_PROTOCOL_VERSION) {
+  return payload.metadata;
+}
+
+export async function checkDaemonBaseHealth(env?: NodeJS.ProcessEnv): Promise<void> {
+  const metadata = await fetchHealthMetadata(env);
+
+  if (metadata.protocolVersion !== DAEMON_PROTOCOL_VERSION) {
     throw new DaemonHealthMismatchError(
-      `daemon protocol mismatch: expected ${DAEMON_PROTOCOL_VERSION}, got ${payload.metadata.protocolVersion}`,
-      payload.metadata,
+      `daemon protocol mismatch: expected ${DAEMON_PROTOCOL_VERSION}, got ${metadata.protocolVersion}`,
+      "protocol",
+      metadata,
     );
   }
 
-  const expectedFingerprint = getDaemonConfigFingerprint({ env });
-  if (payload.metadata.configFingerprint !== expectedFingerprint) {
+  const expectedServerFingerprint = getDaemonServerFingerprint({ env });
+  if (metadata.serverFingerprint !== expectedServerFingerprint) {
     throw new DaemonHealthMismatchError(
-      "daemon config mismatch; restart the daemon with the current configuration",
-      payload.metadata,
+      "daemon server config mismatch; restart required",
+      "server",
+      metadata,
+    );
+  }
+}
+
+export async function checkDaemonHealth(env?: NodeJS.ProcessEnv): Promise<void> {
+  const metadata = await fetchHealthMetadata(env);
+
+  if (metadata.protocolVersion !== DAEMON_PROTOCOL_VERSION) {
+    throw new DaemonHealthMismatchError(
+      `daemon protocol mismatch: expected ${DAEMON_PROTOCOL_VERSION}, got ${metadata.protocolVersion}`,
+      "protocol",
+      metadata,
+    );
+  }
+
+  const expectedServerFingerprint = getDaemonServerFingerprint({ env });
+  if (metadata.serverFingerprint !== expectedServerFingerprint) {
+    throw new DaemonHealthMismatchError(
+      "daemon server config mismatch; restart required",
+      "server",
+      metadata,
+    );
+  }
+
+  const expectedReloadFingerprint = getDaemonReloadFingerprint({ env });
+  if (metadata.reloadFingerprint !== expectedReloadFingerprint) {
+    throw new DaemonHealthMismatchError(
+      "daemon reload config mismatch; send SIGHUP to reload configuration",
+      "reload",
+      metadata,
     );
   }
 }
@@ -125,14 +163,42 @@ function isRecoverableHealthError(error: unknown): boolean {
   );
 }
 
-function isReplaceableHealthMismatch(error: unknown): boolean {
-  return error instanceof Error && /config mismatch/i.test(error.message);
+function mismatchKind(error: unknown): DaemonHealthMismatchKind | null {
+  if (error instanceof DaemonHealthMismatchError) {
+    return error.mismatchKind;
+  }
+
+  if (
+    typeof error === "object" &&
+    error &&
+    "mismatchKind" in error &&
+    (error.mismatchKind === "protocol" ||
+      error.mismatchKind === "server" ||
+      error.mismatchKind === "reload")
+  ) {
+    return error.mismatchKind;
+  }
+
+  return null;
 }
 
 function mismatchPid(error: unknown): number | null {
   if (error instanceof DaemonHealthMismatchError && typeof error.metadata?.pid === "number") {
     return error.metadata.pid;
   }
+
+  if (
+    typeof error === "object" &&
+    error &&
+    "metadata" in error &&
+    typeof error.metadata === "object" &&
+    error.metadata &&
+    "pid" in error.metadata &&
+    typeof error.metadata.pid === "number"
+  ) {
+    return error.metadata.pid;
+  }
+
   return null;
 }
 
@@ -159,6 +225,21 @@ async function waitForDaemonReady(env?: NodeJS.ProcessEnv): Promise<void> {
   }
 
   throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}
+
+async function signalProcess(pid: number, signal: NodeJS.Signals): Promise<void> {
+  if (!Number.isFinite(pid) || pid <= 0 || pid === process.pid) {
+    return;
+  }
+
+  try {
+    process.kill(pid, signal);
+  } catch (error) {
+    if (typeof error === "object" && error && "code" in error && error.code === "ESRCH") {
+      return;
+    }
+    throw error;
+  }
 }
 
 async function terminateProcess(pid: number): Promise<void> {
@@ -188,28 +269,21 @@ export async function ensureDaemonRunningWithDeps(
   env: NodeJS.ProcessEnv | undefined,
   deps: {
     checkDaemonHealth: (env?: NodeJS.ProcessEnv) => Promise<void>;
-    readRunningDaemonMetadata: (env?: NodeJS.ProcessEnv) => Promise<{ pid: number } | null>;
+    checkDaemonBaseHealth?: (env?: NodeJS.ProcessEnv) => Promise<void>;
+    readRunningDaemonMetadata: (env?: NodeJS.ProcessEnv) => Promise<DaemonMetadata | null>;
+    signalProcess: (pid: number, signal: NodeJS.Signals) => Promise<void>;
     terminateProcess: (pid: number) => Promise<void>;
     spawnDaemon: (env?: NodeJS.ProcessEnv) => { unref: () => void };
     waitForDaemonReady: (env?: NodeJS.ProcessEnv) => Promise<void>;
     withStartupLock: (callback: () => Promise<void>, env?: NodeJS.ProcessEnv) => Promise<void>;
   },
 ): Promise<void> {
-  getDaemonConfigFingerprint({ env });
-
   try {
     await deps.checkDaemonHealth(env);
     return;
   } catch (error) {
-    if (!isRecoverableHealthError(error) && !isReplaceableHealthMismatch(error)) {
+    if (!isRecoverableHealthError(error) && mismatchKind(error) === null) {
       throw error;
-    }
-
-    if (isReplaceableHealthMismatch(error)) {
-      const pid = mismatchPid(error) ?? (await deps.readRunningDaemonMetadata(env))?.pid ?? null;
-      if (pid) {
-        await deps.terminateProcess(pid);
-      }
     }
   }
 
@@ -218,14 +292,32 @@ export async function ensureDaemonRunningWithDeps(
       await deps.checkDaemonHealth(env);
       return;
     } catch (error) {
-      if (isReplaceableHealthMismatch(error)) {
-        const pid = mismatchPid(error) ?? (await deps.readRunningDaemonMetadata(env))?.pid ?? null;
+      const pid = mismatchPid(error) ?? (await deps.readRunningDaemonMetadata(env))?.pid ?? null;
+
+      if (mismatchKind(error) === "reload") {
+        if (pid) {
+          try {
+            await deps.signalProcess(pid, "SIGHUP");
+            await deps.waitForDaemonReady(env);
+            return;
+          } catch {
+            // Fall through to restart/spawn when reload signaling or readiness fails.
+          }
+        }
+      }
+
+      if (mismatchKind(error) === "protocol" || mismatchKind(error) === "server" || mismatchKind(error) === "reload") {
         if (pid) {
           await deps.terminateProcess(pid);
         }
       } else if (!isRecoverableHealthError(error)) {
         throw error;
       }
+    }
+
+    const existingPid = (await deps.readRunningDaemonMetadata(env))?.pid ?? null;
+    if (existingPid) {
+      await deps.terminateProcess(existingPid);
     }
 
     const child = deps.spawnDaemon(env);
@@ -240,7 +332,9 @@ export async function ensureDaemonRunningWithDeps(
 export async function ensureDaemonRunning(env?: NodeJS.ProcessEnv): Promise<void> {
   await ensureDaemonRunningWithDeps(env, {
     checkDaemonHealth,
+    checkDaemonBaseHealth,
     readRunningDaemonMetadata,
+    signalProcess,
     terminateProcess,
     spawnDaemon,
     waitForDaemonReady,

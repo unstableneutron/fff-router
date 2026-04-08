@@ -22,17 +22,34 @@ import type {
   ValidatedWithin,
 } from "./types";
 
+export type CoordinatorRuntimeConfig = {
+  config: RouterConfig;
+  primaryBackendId: SearchBackendId;
+  fallbackBackendId: SearchBackendId | null;
+};
+
+export type CoordinatorRuntimeConfigRef = {
+  current: CoordinatorRuntimeConfig;
+};
+
 type CoordinatorDeps = {
   config: RouterConfig;
   adapters: Partial<Record<SearchBackendId, SearchBackendAdapter<any>>>;
   primaryBackendId: SearchBackendId;
   fallbackBackendId: SearchBackendId | null;
   runtimeManager: RuntimeManager<any>;
+  liveConfigRef?: CoordinatorRuntimeConfigRef;
   validateWithin?: typeof validateResolvedWithin;
   resolveRoutingPath?: typeof resolveSearchPath;
   planLifecycle?: typeof planRoutingLifecycle;
   now?: () => number;
 };
+
+export function createCoordinatorRuntimeConfigRef(
+  config: CoordinatorRuntimeConfig,
+): CoordinatorRuntimeConfigRef {
+  return { current: config };
+}
 
 function invalid(message: string): SearchCoordinatorResult {
   return { ok: false, error: { code: "INVALID_REQUEST", message } };
@@ -288,6 +305,33 @@ export class SearchCoordinatorImpl implements SearchCoordinator {
     }
   }
 
+  private getRuntimeConfig(): CoordinatorRuntimeConfig {
+    return (
+      this.deps.liveConfigRef?.current ?? {
+        config: this.deps.config,
+        primaryBackendId: this.deps.primaryBackendId,
+        fallbackBackendId: this.deps.fallbackBackendId,
+      }
+    );
+  }
+
+  private syncLifecycleTtls(config: RouterConfig): void {
+    const nextDaemons = Object.fromEntries(
+      Object.entries(this.lifecycleState.daemons).map(([key, daemon]) => [
+        key,
+        {
+          ...daemon,
+          ttlMs: daemon.rootType === "git" ? config.ttl.gitMs : config.ttl.nonGitMs,
+        },
+      ]),
+    );
+
+    this.lifecycleState = {
+      ...this.lifecycleState,
+      daemons: nextDaemons,
+    };
+  }
+
   private async rollbackPersistentLifecycle(key: string): Promise<void> {
     await this.withPlanningLock(async () => {
       const nextDaemons = { ...this.lifecycleState.daemons };
@@ -408,7 +452,8 @@ export class SearchCoordinatorImpl implements SearchCoordinator {
     }
 
     const queryKind = queryKindForRequest(request);
-    const primaryAdapter = this.getAdapter(this.deps.primaryBackendId);
+    const runtimeConfig = this.getRuntimeConfig();
+    const primaryAdapter = this.getAdapter(runtimeConfig.primaryBackendId);
     if (!primaryAdapter.supportedQueryKinds.includes(queryKind)) {
       return {
         ok: false,
@@ -452,6 +497,7 @@ export class SearchCoordinatorImpl implements SearchCoordinator {
     }
 
     const lifecyclePlan = await this.withPlanningLock(async () => {
+      this.syncLifecycleTtls(runtimeConfig.config);
       const nextState: DaemonRegistryState = {
         ...this.lifecycleState,
         now: this.now(),
@@ -461,7 +507,7 @@ export class SearchCoordinatorImpl implements SearchCoordinator {
         realPath: resolvedPath.value.realPath,
         statType: resolvedPath.value.statType,
         gitRoot: resolvedPath.value.gitRoot,
-        config: this.deps.config,
+        config: runtimeConfig.config,
         state: nextState,
       });
       if (!plan.ok) {
@@ -534,7 +580,7 @@ export class SearchCoordinatorImpl implements SearchCoordinator {
       };
     }
 
-    if (!this.deps.fallbackBackendId) {
+    if (!runtimeConfig.fallbackBackendId) {
       return {
         ok: false,
         error: {
@@ -544,7 +590,7 @@ export class SearchCoordinatorImpl implements SearchCoordinator {
       };
     }
 
-    const fallbackAdapter = this.getAdapter(this.deps.fallbackBackendId);
+    const fallbackAdapter = this.getAdapter(runtimeConfig.fallbackBackendId);
     const fallbackRequest = buildBackendRequest({
       request,
       validatedWithin: validatedWithin.value,

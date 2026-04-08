@@ -1,55 +1,21 @@
 import { describe, expect, test } from "vitest";
-import { getBackendSelection } from "./backend-config";
-import { getDaemonConfigFingerprint } from "./daemon-config";
+import { getDefaultFallbackBackend, parseBackend } from "./backend-config";
 
-describe("getBackendSelection", () => {
-  test("defaults to fff-node primary with rg fallback", () => {
-    expect(getBackendSelection({ env: {} as NodeJS.ProcessEnv })).toEqual({
-      primaryBackendId: "fff-node",
-      fallbackBackendId: "rg",
-    });
+describe("backend config helpers", () => {
+  test("parses supported backend names", () => {
+    expect(parseBackend("fff-node")).toBe("fff-node");
+    expect(parseBackend("fff-mcp")).toBe("fff-mcp");
+    expect(parseBackend("rg")).toBe("rg");
+    expect(parseBackend(undefined)).toBe("fff-node");
   });
 
   test("maps fff-mcp to rg fallback and rg to no fallback", () => {
-    expect(
-      getBackendSelection({
-        env: { FFF_ROUTER_BACKEND: "fff-mcp" } as NodeJS.ProcessEnv,
-      }),
-    ).toEqual({
-      primaryBackendId: "fff-mcp",
-      fallbackBackendId: "rg",
-    });
-
-    expect(getBackendSelection({ env: { FFF_ROUTER_BACKEND: "rg" } as NodeJS.ProcessEnv })).toEqual(
-      {
-        primaryBackendId: "rg",
-        fallbackBackendId: null,
-      },
-    );
+    expect(getDefaultFallbackBackend("fff-node")).toBe("rg");
+    expect(getDefaultFallbackBackend("fff-mcp")).toBe("rg");
+    expect(getDefaultFallbackBackend("rg")).toBeNull();
   });
 
   test("rejects invalid backend names", () => {
-    expect(() =>
-      getBackendSelection({ env: { FFF_ROUTER_BACKEND: "nope" } as NodeJS.ProcessEnv }),
-    ).toThrow(/invalid backend/i);
-  });
-});
-
-describe("getDaemonConfigFingerprint", () => {
-  test("changes when the selected backend changes", () => {
-    const baseEnv = {
-      FFF_ROUTER_HOST: "127.0.0.1",
-      FFF_ROUTER_PORT: "4319",
-    } as NodeJS.ProcessEnv;
-
-    expect(
-      getDaemonConfigFingerprint({
-        env: { ...baseEnv, FFF_ROUTER_BACKEND: "fff-node" },
-      }),
-    ).not.toBe(
-      getDaemonConfigFingerprint({
-        env: { ...baseEnv, FFF_ROUTER_BACKEND: "rg" },
-      }),
-    );
+    expect(() => parseBackend("nope")).toThrow(/invalid backend/i);
   });
 });
