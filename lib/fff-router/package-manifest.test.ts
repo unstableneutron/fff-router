@@ -37,7 +37,6 @@ describe("package manifest", () => {
       "fff-find-files": "./dist/bin/fff-find-files.js",
       "fff-grep": "./dist/bin/fff-grep.js",
       "fff-routerd": "./dist/bin/fff-routerd.js",
-      "fff-search-terms": "./dist/bin/fff-search-terms.js",
     });
     expect(packageJson.scripts).toMatchObject({
       build: "bun run scripts/build-package.ts && bun run scripts/build-standalone.ts",

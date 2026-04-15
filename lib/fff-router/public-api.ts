@@ -23,6 +23,8 @@ const outputModeSchema = Type.Union([Type.Literal("compact"), Type.Literal("json
 
 const cursorSchema = Type.Null();
 
+export const ENABLE_SEARCH_TERMS = false;
+
 function defineTool(
   name: PublicToolName,
   description: string,
@@ -244,6 +246,23 @@ export function normalizeTerms(value: unknown): Result<string[], PublicError> {
   return { ok: true, value: terms };
 }
 
+export function normalizePatterns(value: unknown): Result<string[], PublicError> {
+  if (!Array.isArray(value) || value.length === 0) {
+    return invalid("patterns must contain at least one string");
+  }
+
+  const patterns: string[] = [];
+  for (const entry of value) {
+    if (typeof entry !== "string" || entry.trim() === "") {
+      return invalid("patterns must contain only non-empty strings");
+    }
+
+    patterns.push(entry);
+  }
+
+  return { ok: true, value: patterns };
+}
+
 function schemaFieldNames(schema: TSchema): string[] {
   const properties = (schema as { properties?: Record<string, unknown> }).properties;
   return Object.keys(properties ?? {});
@@ -295,7 +314,7 @@ export const searchTermsInputSchema = Type.Object(
 
 export const grepInputSchema = Type.Object(
   {
-    pattern: Type.String({ minLength: 1 }),
+    patterns: Type.Array(Type.String({ minLength: 1 }), { minItems: 1 }),
     within: Type.Optional(Type.String({ minLength: 1 })),
     glob: Type.Optional(Type.String({ minLength: 1 })),
     case_sensitive: Type.Optional(Type.Boolean()),
@@ -312,20 +331,24 @@ export const grepInputSchema = Type.Object(
 export const PUBLIC_TOOL_DEFINITIONS = [
   defineTool(
     "fff_find_files",
-    "Find files by fuzzy name/path under an already-resolved within scope (absolute or HOME-based).",
-    '{"query":"router","within":"~/.config"}',
+    "Fuzzy file search by name/path under an already-resolved within scope. Use it when you are exploring a topic or looking for files, not when you already have a specific code identifier. Keep queries short and let glob, extensions, and exclude_paths do the path narrowing.",
+    '{"query":"openssl header","within":"/opt/homebrew/lib","glob":"**/*.h","exclude_paths":["pkgconfig"]}',
     findFilesInputSchema,
   ),
-  defineTool(
-    "fff_search_terms",
-    "Search for one or more literal terms under an already-resolved within scope (absolute or HOME-based).",
-    '{"terms":["router","coordinator"],"within":"$HOME/.config"}',
-    searchTermsInputSchema,
-  ),
+  ...(ENABLE_SEARCH_TERMS
+    ? [
+        defineTool(
+          "fff_search_terms",
+          "Search for one or more literal terms under an already-resolved within scope (absolute or HOME-based).",
+          '{"terms":["router","coordinator"],"within":"$HOME/.config"}',
+          searchTermsInputSchema,
+        ),
+      ]
+    : []),
   defineTool(
     "fff_grep",
-    "Run structured grep under an already-resolved within scope (absolute or HOME-based).",
-    '{"pattern":"plan(Request)?","within":"${HOME}/src"}',
+    "Search file contents under an already-resolved within scope. Use `patterns` for one or more identifiers or regexes; multiple entries use OR semantics. Prefer this tool when you have a specific name or pattern, and use glob / extensions / exclude_paths to prefilter files aggressively.",
+    '{"patterns":["ActorAuth","actor_auth","PopulatedActorAuth"],"within":"src","extensions":["rs"],"exclude_paths":["tests"]}',
     grepInputSchema,
   ),
 ] as const;
@@ -539,9 +562,9 @@ function normalizeGrepInput(
     return knownFields;
   }
 
-  const pattern = parseRequiredString(input.pattern, "pattern");
-  if (!pattern.ok) {
-    return pattern;
+  const patterns = normalizePatterns(input.patterns);
+  if (!patterns.ok) {
+    return patterns;
   }
 
   const within = normalizeWithin(input.within);
@@ -596,7 +619,7 @@ function normalizeGrepInput(
     within.value === undefined
       ? {
           tool: "fff_grep",
-          pattern: pattern.value,
+          patterns: patterns.value,
           ...(glob.value !== undefined ? { glob: glob.value } : {}),
           caseSensitive: input.case_sensitive ?? false,
           extensions: extensions.value,
@@ -608,7 +631,7 @@ function normalizeGrepInput(
         }
       : {
           tool: "fff_grep",
-          pattern: pattern.value,
+          patterns: patterns.value,
           within: within.value,
           ...(glob.value !== undefined ? { glob: glob.value } : {}),
           caseSensitive: input.case_sensitive ?? false,
@@ -640,6 +663,9 @@ export function normalizePublicToolInput(
     case "fff_find_files":
       return normalizeFindFilesInput(record);
     case "fff_search_terms":
+      if (!ENABLE_SEARCH_TERMS) {
+        return invalid("fff_search_terms is disabled; use fff_grep with patterns instead");
+      }
       return normalizeSearchTermsInput(record);
     case "fff_grep":
       return normalizeGrepInput(record);

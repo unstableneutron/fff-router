@@ -1,11 +1,10 @@
 {
   "name": "fff-router",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "bin": {
     "fff-find-files": "./dist/bin/fff-find-files.js",
     "fff-grep": "./dist/bin/fff-grep.js",
-    "fff-routerd": "./dist/bin/fff-routerd.js",
-    "fff-search-terms": "./dist/bin/fff-search-terms.js"
+    "fff-routerd": "./dist/bin/fff-routerd.js"
   },
   "files": [
     "dist",

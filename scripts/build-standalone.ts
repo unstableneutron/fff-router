@@ -3,12 +3,7 @@ import path from "node:path";
 
 const rootDir = path.resolve(import.meta.dirname, "..");
 const standaloneDir = path.join(rootDir, "standalone");
-const standaloneEntrypoints = [
-  "fff-find-files",
-  "fff-grep",
-  "fff-routerd",
-  "fff-search-terms",
-] as const;
+const standaloneEntrypoints = ["fff-find-files", "fff-grep", "fff-routerd"] as const;
 
 function fail(message: string): never {
   console.error(message);

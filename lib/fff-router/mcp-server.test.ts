@@ -16,7 +16,7 @@ function makeCoordinator(result: Awaited<ReturnType<SearchCoordinator["execute"]
 }
 
 describe("createMcpServer", () => {
-  test("registers exactly the 3 public tools with canonical schemas", async () => {
+  test("registers exactly the 2 public tools with canonical schemas", async () => {
     const { coordinator } = makeCoordinator({
       ok: true,
       value: {
@@ -30,11 +30,7 @@ describe("createMcpServer", () => {
 
     const tools = await server.listTools();
 
-    expect(tools.map((tool) => tool.name)).toEqual([
-      "fff_find_files",
-      "fff_search_terms",
-      "fff_grep",
-    ]);
+    expect(tools.map((tool) => tool.name)).toEqual(["fff_find_files", "fff_grep"]);
     expect(tools.map((tool) => tool.inputSchema)).toEqual(
       (await import("./public-api")).PUBLIC_TOOL_DEFINITIONS.map((tool) => tool.inputSchema),
     );
@@ -128,7 +124,7 @@ describe("createMcpServer", () => {
     });
 
     const result = await server.callTool("fff_grep", {
-      pattern: "router",
+      patterns: ["router"],
       within: "/repo/src",
     });
 

@@ -94,6 +94,14 @@ function normalizeRegexPattern(pattern: string, caseSensitive: boolean): string 
   return `(?i:${pattern})`;
 }
 
+function combineRegexPatterns(patterns: string[], caseSensitive: boolean): string {
+  const combined =
+    patterns.length === 1
+      ? (patterns[0] ?? "")
+      : patterns.map((pattern) => `(?:${pattern})`).join("|");
+  return normalizeRegexPattern(combined, caseSensitive);
+}
+
 function mapFileItems(
   result: NonNullable<FileSearchResultLike["value"]>["items"],
 ): BackendResultItem[] {
@@ -229,7 +237,7 @@ export function createFffNodeAdapter(): SearchBackendAdapter<FffRuntime> {
         case "grep": {
           const query = buildScopedQuery(
             scope.tokens,
-            normalizeRegexPattern(args.request.pattern, args.request.caseSensitive),
+            combineRegexPatterns(args.request.patterns, args.request.caseSensitive),
           );
           const collected: BackendResultItem[] = [];
           let cursor: GrepCursorLike | null = null;

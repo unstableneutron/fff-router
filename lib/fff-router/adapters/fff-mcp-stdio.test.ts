@@ -43,7 +43,7 @@ const grepRequest: GrepBackendRequest = {
   extensions: ["ts"],
   excludePaths: ["dist"],
   limit: 5,
-  pattern: "createSearchCoordinator",
+  patterns: ["createSearchCoordinator", "buildSearchCoordinator"],
   caseSensitive: true,
   contextLines: 1,
 };
@@ -224,7 +224,7 @@ describe("createFffMcpStdioAdapter", () => {
       {
         name: "grep",
         arguments: {
-          query: "lib/ **/*.ts *.ts !dist/ createSearchCoordinator",
+          query: "lib/ **/*.ts *.ts !dist/ (?:createSearchCoordinator)|(?:buildSearchCoordinator)",
           maxResults: 5,
         },
       },

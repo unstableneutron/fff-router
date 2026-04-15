@@ -327,7 +327,7 @@ describe("createSearchCoordinator", () => {
     const result = await coordinator.execute(
       makePublicRequest({
         tool: "fff_grep",
-        pattern: "createSearchCoordinator",
+        patterns: ["createSearchCoordinator"],
         caseSensitive: true,
         contextLines: 0,
       }),
@@ -447,7 +447,7 @@ describe("createSearchCoordinator", () => {
     const result = await coordinator.execute(
       makePublicRequest({
         tool: "fff_grep",
-        pattern: "createSearchCoordinator",
+        patterns: ["createSearchCoordinator"],
         caseSensitive: true,
         contextLines: 0,
         outputMode: "json",
@@ -543,7 +543,7 @@ describe("createSearchCoordinator", () => {
     await coordinator.execute(
       makePublicRequest({
         tool: "fff_grep",
-        pattern: "router",
+        patterns: ["router"],
         caseSensitive: true,
         contextLines: 0,
       }),
@@ -964,7 +964,7 @@ describe("createSearchCoordinator", () => {
     const result = await coordinator.execute(
       makePublicRequest({
         tool: "fff_grep",
-        pattern: "router",
+        patterns: ["router"],
         caseSensitive: true,
         contextLines: 0,
       }),
@@ -1023,7 +1023,7 @@ describe("createSearchCoordinator", () => {
     const success = await coordinator.execute(
       makePublicRequest({
         tool: "fff_grep",
-        pattern: "planRequest",
+        patterns: ["planRequest"],
         caseSensitive: true,
         contextLines: 0,
       }),

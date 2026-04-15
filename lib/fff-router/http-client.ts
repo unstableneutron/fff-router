@@ -22,6 +22,7 @@ function toToolCall(request: PublicToolRequest): {
 } {
   const common: Record<string, unknown> = {
     within: request.within,
+    glob: request.glob,
     extensions: request.extensions,
     exclude_paths: request.excludePaths,
     limit: request.limit,
@@ -56,7 +57,7 @@ function toToolCall(request: PublicToolRequest): {
       return {
         name: request.tool,
         input: {
-          pattern: grepRequest.pattern,
+          patterns: grepRequest.patterns,
           case_sensitive: grepRequest.caseSensitive,
           context_lines: grepRequest.contextLines,
           ...common,

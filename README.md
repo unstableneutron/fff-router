@@ -2,10 +2,9 @@
 
 `fff-router` is a shared FFF-backed search service.
 
-It exposes exactly three public tools:
+It exposes exactly two public tools:
 
 - `fff_find_files`
-- `fff_search_terms`
 - `fff_grep`
 
 ## Current architecture
@@ -163,7 +162,6 @@ Routing and lifecycle policy still come from:
 
 - `bin/fff-routerd.ts` — HTTP MCP daemon + small ops CLI
 - `bin/fff-find-files.ts` — HTTP MCP wrapper
-- `bin/fff-search-terms.ts` — HTTP MCP wrapper
 - `bin/fff-grep.ts` — HTTP MCP wrapper
 
 ## Install
@@ -254,16 +252,15 @@ They are intentionally daemon-first. There is no standalone execution mode.
 
 ```bash
 bun run bin/fff-find-files.ts --help
-bun run bin/fff-search-terms.ts --help
 bun run bin/fff-grep.ts --help
 ```
 
 ### Example usage
 
 ```bash
-bun run bin/fff-find-files.ts router --within src --glob '**/*.ts' --extension ts
-bun run bin/fff-search-terms.ts router coordinator --within lib --glob '**/*.ts' --context-lines 1
-bun run bin/fff-grep.ts 'plan(Request)?' --within lib --glob '**/*.ts' --case-sensitive
+bun run bin/fff-find-files.ts 'openssl header' --within /opt/homebrew/lib --glob '**/*.h' --exclude-path pkgconfig
+bun run bin/fff-grep.ts ActorAuth actor_auth PopulatedActorAuth --within src --extension rs --exclude-path tests
+bun run bin/fff-grep.ts 'plan(Request)?' 'build(Request)?' --within ~/src --glob 'src/**/*.ts' --exclude-path dist --case-sensitive
 ```
 
 ## HTTP MCP endpoint
@@ -299,5 +296,4 @@ That keeps one shared runtime pool for the whole machine instead of creating per
 The public names remain locked:
 
 - `fff_find_files`
-- `fff_search_terms`
 - `fff_grep`

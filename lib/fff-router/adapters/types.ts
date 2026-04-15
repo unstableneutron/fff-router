@@ -33,7 +33,7 @@ export type SearchTermsBackendRequest = BackendRequestBase & {
 
 export type GrepBackendRequest = BackendRequestBase & {
   queryKind: "grep";
-  pattern: string;
+  patterns: string[];
   caseSensitive: boolean;
   contextLines: number;
 };

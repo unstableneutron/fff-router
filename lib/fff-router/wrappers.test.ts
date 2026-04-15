@@ -26,43 +26,10 @@ describe("buildWrapperInvocation", () => {
     });
   });
 
-  test("builds search_terms invocations with normalized public args", async () => {
-    const invocation = await buildWrapperInvocation({
-      tool: "fff_search_terms",
-      argv: [
-        "router",
-        "coordinator",
-        "--context-lines",
-        "2",
-        "--limit",
-        "5",
-        "--output-mode",
-        "json",
-      ],
-      callerCwd: "/repo",
-    });
-
-    expect(invocation).toEqual({
-      kind: "call",
-      toolName: "fff_search_terms",
-      publicRequest: {
-        tool: "fff_search_terms",
-        terms: ["router", "coordinator"],
-        contextLines: 2,
-        within: "/repo",
-        extensions: [],
-        excludePaths: [],
-        limit: 5,
-        cursor: null,
-        outputMode: "json",
-      },
-    });
-  });
-
   test("builds grep invocations with case-sensitive flag", async () => {
     const invocation = await buildWrapperInvocation({
       tool: "fff_grep",
-      argv: ["plan(Request)?", "--case-sensitive"],
+      argv: ["plan(Request)?", "build(Request)?", "--case-sensitive"],
       callerCwd: "/repo",
     });
 
@@ -71,7 +38,7 @@ describe("buildWrapperInvocation", () => {
       toolName: "fff_grep",
       publicRequest: {
         tool: "fff_grep",
-        pattern: "plan(Request)?",
+        patterns: ["plan(Request)?", "build(Request)?"],
         caseSensitive: true,
         contextLines: 0,
         within: "/repo",
@@ -93,7 +60,7 @@ describe("buildWrapperInvocation", () => {
 
     expect(invocation).toEqual({
       kind: "help",
-      text: "Usage: fff-grep <pattern> [--within PATH] [--glob GLOB] [--case-sensitive] [--extension EXT] [--exclude-path PATH] [--context-lines N] [--limit N] [--output-mode compact|json]",
+      text: "Usage: fff-grep <pattern> [pattern...] [--within PATH] [--glob GLOB] [--case-sensitive] [--extension EXT] [--exclude-path PATH] [--context-lines N] [--limit N] [--output-mode compact|json]",
     });
   });
 
@@ -109,7 +76,7 @@ describe("buildWrapperInvocation", () => {
       toolName: "fff_grep",
       publicRequest: {
         tool: "fff_grep",
-        pattern: "plan(Request)?",
+        patterns: ["plan(Request)?"],
         glob: "src/**/*.ts",
         caseSensitive: false,
         contextLines: 0,

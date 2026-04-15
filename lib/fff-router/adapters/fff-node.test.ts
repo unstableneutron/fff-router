@@ -221,7 +221,7 @@ const grepRequest: GrepBackendRequest = {
   extensions: ["ts"],
   excludePaths: [],
   limit: 20,
-  pattern: "plan(Request)?",
+  patterns: ["plan(Request)?", "build(Request)?"],
   caseSensitive: false,
   contextLines: 1,
 };
@@ -291,7 +291,7 @@ describe("createFffNodeAdapter", () => {
 
     expect(log.grep).toEqual([
       {
-        query: "src/ (?i:plan(Request)?)",
+        query: "src/ (?i:(?:plan(Request)?)|(?:build(Request)?))",
         mode: "regex",
         beforeContext: 1,
         afterContext: 1,
@@ -401,7 +401,7 @@ describe("createFffNodeAdapter", () => {
         within: "/repo/src/router.ts",
         basePath: "/repo/src",
         fileRestriction: "/repo/src/router.ts",
-        pattern: "planRequest",
+        patterns: ["planRequest"],
         caseSensitive: true,
       },
       runtime: makeRuntime({ log }),
@@ -453,7 +453,7 @@ describe("createFffNodeAdapter", () => {
         extensions: [],
         excludePaths: [],
         limit: 1,
-        pattern: "needle",
+        patterns: ["needle"],
         caseSensitive: true,
         contextLines: 0,
       },
@@ -505,7 +505,7 @@ describe("createFffNodeAdapter", () => {
           extensions: [],
           excludePaths: ["Vendor/libghostty/include/generated"],
           limit: 20,
-          pattern: "ghostty_",
+          patterns: ["ghostty_"],
           caseSensitive: false,
           contextLines: 0,
         },

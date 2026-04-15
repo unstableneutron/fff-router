@@ -5,18 +5,17 @@ import {
   normalizeCursor,
   normalizeExcludePaths,
   normalizeExtensions,
+  normalizePatterns,
   normalizePublicToolInput,
-  normalizeTerms,
   normalizeWithin,
   PUBLIC_TOOL_DEFINITIONS,
   parsePublicOutputMode,
 } from "./public-api";
 
 describe("public-api", () => {
-  test("exports exactly the 3 public tools with snippets", () => {
+  test("exports exactly the 2 public tools with snippets", () => {
     expect(PUBLIC_TOOL_DEFINITIONS.map((tool) => tool.name)).toEqual([
       "fff_find_files",
-      "fff_search_terms",
       "fff_grep",
     ]);
     expect(
@@ -56,35 +55,9 @@ describe("public-api", () => {
     });
   });
 
-  test("applies defaults for omitted optional fields", () => {
-    const result = normalizePublicToolInput("fff_search_terms", {
-      terms: ["router", "coordinator"],
-      within: "/tmp/project",
-      glob: "src/**/*.ts",
-    });
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      throw new Error("expected success");
-    }
-
-    expect(result.value).toEqual({
-      tool: "fff_search_terms",
-      terms: ["router", "coordinator"],
-      within: "/tmp/project",
-      glob: "src/**/*.ts",
-      extensions: [],
-      excludePaths: [],
-      contextLines: 0,
-      limit: 20,
-      cursor: null,
-      outputMode: "compact",
-    });
-  });
-
   test("normalizes fff_grep input", () => {
     const result = normalizePublicToolInput("fff_grep", {
-      pattern: "plan(Request)?",
+      patterns: ["plan(Request)?", "build(Request)?"],
       within: "/tmp/project/lib",
       glob: "**/*.ts",
       case_sensitive: true,
@@ -98,7 +71,7 @@ describe("public-api", () => {
 
     expect(result.value).toEqual({
       tool: "fff_grep",
-      pattern: "plan(Request)?",
+      patterns: ["plan(Request)?", "build(Request)?"],
       within: "/tmp/project/lib",
       glob: "**/*.ts",
       caseSensitive: true,
@@ -113,7 +86,7 @@ describe("public-api", () => {
 
   test("defaults grep case sensitivity to false when omitted", () => {
     const result = normalizePublicToolInput("fff_grep", {
-      pattern: "plan(Request)?",
+      patterns: ["plan(Request)?"],
       within: "/tmp/project/lib",
     });
 
@@ -131,7 +104,7 @@ describe("public-api", () => {
 
   test("preserves meaningful search whitespace while rejecting blank values", () => {
     const grep = normalizePublicToolInput("fff_grep", {
-      pattern: "  plan(Request)?  ",
+      patterns: ["  plan(Request)?  ", " build(Request)? "],
       within: "/tmp/project/lib",
     });
     expect(grep.ok).toBe(true);
@@ -142,24 +115,10 @@ describe("public-api", () => {
     if (grep.value.tool !== "fff_grep") {
       throw new Error("expected grep request");
     }
-    expect(grep.value.pattern).toBe("  plan(Request)?  ");
-
-    const terms = normalizePublicToolInput("fff_search_terms", {
-      terms: ["  router  ", "coordinator"],
-      within: "/tmp/project",
-    });
-    expect(terms.ok).toBe(true);
-    if (!terms.ok) {
-      throw new Error("expected success");
-    }
-    expect(terms.value.tool).toBe("fff_search_terms");
-    if (terms.value.tool !== "fff_search_terms") {
-      throw new Error("expected search terms request");
-    }
-    expect(terms.value.terms).toEqual(["  router  ", "coordinator"]);
+    expect(grep.value.patterns).toEqual(["  plan(Request)?  ", " build(Request)? "]);
 
     const blankPattern = normalizePublicToolInput("fff_grep", {
-      pattern: "   ",
+      patterns: ["   "],
       within: "/tmp/project/lib",
     });
     expect(blankPattern.ok).toBe(false);
@@ -169,8 +128,8 @@ describe("public-api", () => {
     expect(blankPattern.error.code).toBe("INVALID_REQUEST");
   });
 
-  test("rejects missing or empty search terms", () => {
-    const missingTerms = normalizePublicToolInput("fff_search_terms", {
+  test("rejects missing or empty grep patterns", () => {
+    const missingTerms = normalizePublicToolInput("fff_grep", {
       within: "/tmp/project",
     });
     expect(missingTerms.ok).toBe(false);
@@ -179,8 +138,8 @@ describe("public-api", () => {
     }
     expect(missingTerms.error.code).toBe("INVALID_REQUEST");
 
-    const emptyTerms = normalizePublicToolInput("fff_search_terms", {
-      terms: [],
+    const emptyTerms = normalizePublicToolInput("fff_grep", {
+      patterns: [],
       within: "/tmp/project",
     });
     expect(emptyTerms.ok).toBe(false);
@@ -249,7 +208,7 @@ describe("public-api", () => {
 
     for (const glob of ["/tmp/project/**/*.ts", "../src/**/*.ts", "!src/**/*.ts"]) {
       const result = normalizePublicToolInput("fff_grep", {
-        pattern: "router",
+        patterns: ["router"],
         within: "/tmp/project",
         glob,
       });
@@ -339,7 +298,7 @@ describe("public-api", () => {
     expect(typeof normalizeExtensions).toBe("function");
     expect(typeof normalizeExcludePaths).toBe("function");
     expect(typeof normalizeCursor).toBe("function");
-    expect(typeof normalizeTerms).toBe("function");
+    expect(typeof normalizePatterns).toBe("function");
   });
 
   test("cursor schema matches the initial null-only pagination contract", () => {

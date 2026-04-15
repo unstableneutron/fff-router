@@ -23,8 +23,9 @@ const zodInputShapes = {
     output_mode: z.enum(["compact", "json"]).optional(),
   },
   fff_grep: {
-    pattern: z.string().min(1),
+    patterns: z.array(z.string().min(1)).min(1),
     within: z.string().optional(),
+    glob: z.string().optional(),
     case_sensitive: z.boolean().optional(),
     extensions: z.array(z.string().min(1)).optional(),
     exclude_paths: z.array(z.string().min(1)).optional(),

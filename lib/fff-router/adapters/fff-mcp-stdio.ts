@@ -125,7 +125,7 @@ function compileConstraints(request: {
 }
 
 function compileGrepQuery(request: {
-  pattern: string;
+  patterns: string[];
   persistenceRoot: string;
   basePath: string;
   fileRestriction?: string;
@@ -133,7 +133,11 @@ function compileGrepQuery(request: {
   extensions: string[];
   excludePaths: string[];
 }): string {
-  return [...buildConstraintTokens(request), request.pattern].filter(Boolean).join(" ");
+  const combinedPattern =
+    request.patterns.length === 1
+      ? (request.patterns[0] ?? "")
+      : request.patterns.map((pattern) => `(?:${pattern})`).join("|");
+  return [...buildConstraintTokens(request), combinedPattern].filter(Boolean).join(" ");
 }
 
 function stripFindFilesSuffix(line: string): string {

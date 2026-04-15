@@ -332,7 +332,8 @@ export function createRgAdapter(deps?: { runCommand?: RunCommand }): SearchBacke
           if (!request.caseSensitive) {
             rgArgs.push("--ignore-case");
           }
-          rgArgs.push("-e", request.pattern, buildSearchTarget(request));
+          rgArgs.push(...request.patterns.flatMap((pattern) => ["-e", pattern] as const));
+          rgArgs.push(buildSearchTarget(request));
 
           const command = await runCommand("rg", rgArgs, request.persistenceRoot);
           if (!command.ok) {

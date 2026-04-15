@@ -49,7 +49,7 @@ const grepRequest: GrepBackendRequest = {
   extensions: ["ts"],
   excludePaths: ["dist"],
   limit: 20,
-  pattern: "plan(Request)?",
+  patterns: ["plan(Request)?", "build(Request)?"],
   caseSensitive: true,
   contextLines: 1,
 };
@@ -268,6 +268,8 @@ describe("createRgAdapter", () => {
           "!dist/**",
           "-e",
           "plan(Request)?",
+          "-e",
+          "build(Request)?",
           "/repo/src",
         ],
         cwd: "/repo",

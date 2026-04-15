@@ -129,7 +129,7 @@ function buildBackendRequest(args: {
       return {
         ...base,
         queryKind: "grep",
-        pattern: args.request.pattern,
+        patterns: args.request.patterns,
         caseSensitive: args.request.caseSensitive,
         contextLines: args.request.contextLines,
       };

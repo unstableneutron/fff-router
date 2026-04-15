@@ -13,7 +13,6 @@ const packageEntrypoints = [
   "bin/fff-find-files.ts",
   "bin/fff-grep.ts",
   "bin/fff-routerd.ts",
-  "bin/fff-search-terms.ts",
 ];
 const externalPackages = [
   "@ff-labs/fff-node",
@@ -25,7 +24,6 @@ const executableOutputs = [
   "dist/bin/fff-find-files.js",
   "dist/bin/fff-grep.js",
   "dist/bin/fff-routerd.js",
-  "dist/bin/fff-search-terms.js",
 ];
 
 function fail(message: string): never {

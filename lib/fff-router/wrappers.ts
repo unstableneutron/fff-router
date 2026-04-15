@@ -3,7 +3,7 @@ import { callPublicToolOverHttp } from "./http-client";
 import { resolveWithinFromCaller } from "./resolve-within";
 import type { PublicToolRequest } from "./types";
 
-type WrapperTool = "fff_find_files" | "fff_search_terms" | "fff_grep";
+type WrapperTool = "fff_find_files" | "fff_grep";
 
 type ParsedCommonArgs = {
   within: string | null;
@@ -18,10 +18,8 @@ function helpText(tool: WrapperTool): string {
   switch (tool) {
     case "fff_find_files":
       return "Usage: fff-find-files <query> [--within PATH] [--glob GLOB] [--extension EXT] [--exclude-path PATH] [--limit N] [--output-mode compact|json]";
-    case "fff_search_terms":
-      return "Usage: fff-search-terms <term> [term...] [--within PATH] [--glob GLOB] [--extension EXT] [--exclude-path PATH] [--context-lines N] [--limit N] [--output-mode compact|json]";
     case "fff_grep":
-      return "Usage: fff-grep <pattern> [--within PATH] [--glob GLOB] [--case-sensitive] [--extension EXT] [--exclude-path PATH] [--context-lines N] [--limit N] [--output-mode compact|json]";
+      return "Usage: fff-grep <pattern> [pattern...] [--within PATH] [--glob GLOB] [--case-sensitive] [--extension EXT] [--exclude-path PATH] [--context-lines N] [--limit N] [--output-mode compact|json]";
   }
 }
 
@@ -146,18 +144,10 @@ export async function buildWrapperInvocation(args: {
         ...base,
       };
       break;
-    case "fff_search_terms":
-      publicRequest = {
-        tool: args.tool,
-        terms: parsed.positionals,
-        contextLines: typeof parsed.extra.contextLines === "number" ? parsed.extra.contextLines : 0,
-        ...base,
-      };
-      break;
     case "fff_grep":
       publicRequest = {
         tool: args.tool,
-        pattern: parsed.positionals.join(" ").trim(),
+        patterns: parsed.positionals,
         caseSensitive: parsed.extra.caseSensitive === true,
         contextLines: typeof parsed.extra.contextLines === "number" ? parsed.extra.contextLines : 0,
         ...base,
