@@ -5,7 +5,7 @@ describe("buildWrapperInvocation", () => {
   test("resolves within for find_files and builds a public request", async () => {
     const invocation = await buildWrapperInvocation({
       tool: "fff_find_files",
-      argv: ["router", "--within", "src", "--extension", "ts"],
+      argv: ["router", "--within", "src", "--glob", "**/*.ts", "--extension", "ts"],
       callerCwd: "/repo",
     });
 
@@ -16,6 +16,7 @@ describe("buildWrapperInvocation", () => {
         tool: "fff_find_files",
         query: "router",
         within: "/repo/src",
+        glob: "**/*.ts",
         extensions: ["ts"],
         excludePaths: [],
         limit: 20,
@@ -92,7 +93,33 @@ describe("buildWrapperInvocation", () => {
 
     expect(invocation).toEqual({
       kind: "help",
-      text: "Usage: fff-grep <pattern> [--within PATH] [--case-sensitive] [--extension EXT] [--exclude-path PATH] [--context-lines N] [--limit N] [--output-mode compact|json]",
+      text: "Usage: fff-grep <pattern> [--within PATH] [--glob GLOB] [--case-sensitive] [--extension EXT] [--exclude-path PATH] [--context-lines N] [--limit N] [--output-mode compact|json]",
+    });
+  });
+
+  test("builds grep invocations with glob filters", async () => {
+    const invocation = await buildWrapperInvocation({
+      tool: "fff_grep",
+      argv: ["plan(Request)?", "--glob", "src/**/*.ts"],
+      callerCwd: "/repo",
+    });
+
+    expect(invocation).toEqual({
+      kind: "call",
+      toolName: "fff_grep",
+      publicRequest: {
+        tool: "fff_grep",
+        pattern: "plan(Request)?",
+        glob: "src/**/*.ts",
+        caseSensitive: false,
+        contextLines: 0,
+        within: "/repo",
+        extensions: [],
+        excludePaths: [],
+        limit: 20,
+        cursor: null,
+        outputMode: "compact",
+      },
     });
   });
 

@@ -12,6 +12,7 @@ const findFilesRequest: FindFilesBackendRequest = {
   queryKind: "find_files",
   within: "/repo/lib",
   basePath: "/repo/lib",
+  glob: "**/*.ts",
   extensions: ["ts"],
   excludePaths: ["dist"],
   limit: 5,
@@ -24,6 +25,7 @@ const searchTermsRequest: SearchTermsBackendRequest = {
   queryKind: "search_terms",
   within: "/repo/lib",
   basePath: "/repo/lib",
+  glob: "**/*.ts",
   extensions: ["ts"],
   excludePaths: ["dist"],
   limit: 5,
@@ -37,6 +39,7 @@ const grepRequest: GrepBackendRequest = {
   queryKind: "grep",
   within: "/repo/lib",
   basePath: "/repo/lib",
+  glob: "**/*.ts",
   extensions: ["ts"],
   excludePaths: ["dist"],
   limit: 5,
@@ -80,7 +83,7 @@ describe("createFffMcpStdioAdapter", () => {
       {
         name: "find_files",
         arguments: {
-          query: "router lib/ *.ts !dist/",
+          query: "router lib/ **/*.ts *.ts !dist/",
           maxResults: 5,
         },
       },
@@ -158,7 +161,7 @@ describe("createFffMcpStdioAdapter", () => {
         name: "multi_grep",
         arguments: {
           patterns: ["createSearchCoordinator"],
-          constraints: "lib/ *.ts !dist/",
+          constraints: "lib/ **/*.ts *.ts !dist/",
           maxResults: 5,
           context: 1,
         },
@@ -221,7 +224,7 @@ describe("createFffMcpStdioAdapter", () => {
       {
         name: "grep",
         arguments: {
-          query: "lib/ *.ts !dist/ createSearchCoordinator",
+          query: "lib/ **/*.ts *.ts !dist/ createSearchCoordinator",
           maxResults: 5,
         },
       },

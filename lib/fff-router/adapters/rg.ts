@@ -114,6 +114,10 @@ function mapCommandFailure(
 function buildGlobArgs(request: BackendSearchRequest): string[] {
   const args: string[] = [];
 
+  if (request.glob) {
+    args.push("--glob", request.glob);
+  }
+
   for (const extension of request.extensions) {
     args.push("--glob", `*.${extension}`);
   }
@@ -251,6 +255,7 @@ export function createRgAdapter(deps?: { runCommand?: RunCommand }): SearchBacke
               "f",
               "--base-directory",
               request.persistenceRoot,
+              ...buildGlobArgs(request),
               ".",
               buildFdTarget(request),
             ],

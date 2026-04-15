@@ -1,4 +1,5 @@
 import path from "node:path";
+import picomatch from "picomatch";
 import type { BackendResultItem, BackendSearchRequest } from "./types";
 
 export function normalizeRelativePath(relativePath: string): string {
@@ -23,6 +24,17 @@ export function matchesExtension(extensions: string[], relativePath: string): bo
   );
 }
 
+export function matchesGlob(glob: string | undefined, relativePath: string): boolean {
+  if (!glob) {
+    return true;
+  }
+
+  return picomatch(glob, {
+    dot: true,
+    basename: !glob.includes("/"),
+  })(normalizeRelativePath(relativePath));
+}
+
 export function matchesExcludePaths(excludePaths: string[], relativePath: string): boolean {
   const normalized = normalizeRelativePath(relativePath);
 
@@ -37,6 +49,7 @@ export function filterItems(
 ): BackendResultItem[] {
   return items
     .filter((item) => pathWithinScope(request, item.path))
+    .filter((item) => matchesGlob(request.glob, item.relativePath))
     .filter((item) => matchesExtension(request.extensions, item.relativePath))
     .filter((item) => matchesExcludePaths(request.excludePaths, item.relativePath))
     .slice(0, request.limit);

@@ -129,6 +129,44 @@ export function normalizeExtensions(input: unknown): Result<string[], PublicErro
   return { ok: true, value: normalized };
 }
 
+function normalizeGlobPattern(value: string): Result<string, PublicError> {
+  const trimmed = value.trim().replace(/\\/g, "/");
+  if (!trimmed) {
+    return invalid("glob must not be empty");
+  }
+
+  if (path.isAbsolute(trimmed)) {
+    return invalid("glob must be relative to the resolved base path");
+  }
+
+  if (trimmed.startsWith("!")) {
+    return invalid("glob must be an include pattern; use exclude_paths for exclusions");
+  }
+
+  const segments = trimmed.split("/");
+  if (segments.some((segment) => segment === "" || segment === ".")) {
+    return invalid("glob must not contain empty or current-directory segments");
+  }
+
+  if (segments.includes("..")) {
+    return invalid("glob must not escape the resolved base path");
+  }
+
+  return { ok: true, value: trimmed };
+}
+
+export function normalizeGlob(input: unknown): Result<string | undefined, PublicError> {
+  if (input === undefined) {
+    return { ok: true, value: undefined };
+  }
+
+  if (typeof input !== "string") {
+    return invalid("glob must be a string when provided");
+  }
+
+  return normalizeGlobPattern(input);
+}
+
 function normalizeExcludePath(entry: string): Result<string, PublicError> {
   const trimmed = entry.trim().replace(/\\/g, "/");
   if (!trimmed) {
@@ -230,6 +268,7 @@ export const findFilesInputSchema = Type.Object(
   {
     query: Type.String({ minLength: 1 }),
     within: Type.Optional(Type.String({ minLength: 1 })),
+    glob: Type.Optional(Type.String({ minLength: 1 })),
     extensions: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
     exclude_paths: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
     limit: Type.Optional(Type.Integer({ minimum: 0 })),
@@ -243,6 +282,7 @@ export const searchTermsInputSchema = Type.Object(
   {
     terms: Type.Array(Type.String({ minLength: 1 }), { minItems: 1 }),
     within: Type.Optional(Type.String({ minLength: 1 })),
+    glob: Type.Optional(Type.String({ minLength: 1 })),
     extensions: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
     exclude_paths: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
     context_lines: Type.Optional(Type.Integer({ minimum: 0 })),
@@ -257,6 +297,7 @@ export const grepInputSchema = Type.Object(
   {
     pattern: Type.String({ minLength: 1 }),
     within: Type.Optional(Type.String({ minLength: 1 })),
+    glob: Type.Optional(Type.String({ minLength: 1 })),
     case_sensitive: Type.Optional(Type.Boolean()),
     extensions: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
     exclude_paths: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
@@ -341,6 +382,11 @@ function normalizeFindFilesInput(
     return within;
   }
 
+  const glob = normalizeGlob(input.glob);
+  if (!glob.ok) {
+    return glob;
+  }
+
   const extensions = normalizeExtensions(input.extensions);
   if (!extensions.ok) {
     return extensions;
@@ -371,6 +417,7 @@ function normalizeFindFilesInput(
       ? {
           tool: "fff_find_files",
           query: query.value,
+          ...(glob.value !== undefined ? { glob: glob.value } : {}),
           extensions: extensions.value,
           excludePaths: excludePaths.value,
           limit: limit.value,
@@ -381,6 +428,7 @@ function normalizeFindFilesInput(
           tool: "fff_find_files",
           query: query.value,
           within: within.value,
+          ...(glob.value !== undefined ? { glob: glob.value } : {}),
           extensions: extensions.value,
           excludePaths: excludePaths.value,
           limit: limit.value,
@@ -410,6 +458,11 @@ function normalizeSearchTermsInput(
   const within = normalizeWithin(input.within);
   if (!within.ok) {
     return within;
+  }
+
+  const glob = normalizeGlob(input.glob);
+  if (!glob.ok) {
+    return glob;
   }
 
   const extensions = normalizeExtensions(input.extensions);
@@ -451,6 +504,7 @@ function normalizeSearchTermsInput(
       ? {
           tool: "fff_search_terms",
           terms: terms.value,
+          ...(glob.value !== undefined ? { glob: glob.value } : {}),
           extensions: extensions.value,
           excludePaths: excludePaths.value,
           contextLines: contextLines.value,
@@ -462,6 +516,7 @@ function normalizeSearchTermsInput(
           tool: "fff_search_terms",
           terms: terms.value,
           within: within.value,
+          ...(glob.value !== undefined ? { glob: glob.value } : {}),
           extensions: extensions.value,
           excludePaths: excludePaths.value,
           contextLines: contextLines.value,
@@ -492,6 +547,11 @@ function normalizeGrepInput(
   const within = normalizeWithin(input.within);
   if (!within.ok) {
     return within;
+  }
+
+  const glob = normalizeGlob(input.glob);
+  if (!glob.ok) {
+    return glob;
   }
 
   if (input.case_sensitive !== undefined && typeof input.case_sensitive !== "boolean") {
@@ -537,6 +597,7 @@ function normalizeGrepInput(
       ? {
           tool: "fff_grep",
           pattern: pattern.value,
+          ...(glob.value !== undefined ? { glob: glob.value } : {}),
           caseSensitive: input.case_sensitive ?? false,
           extensions: extensions.value,
           excludePaths: excludePaths.value,
@@ -549,6 +610,7 @@ function normalizeGrepInput(
           tool: "fff_grep",
           pattern: pattern.value,
           within: within.value,
+          ...(glob.value !== undefined ? { glob: glob.value } : {}),
           caseSensitive: input.case_sensitive ?? false,
           extensions: extensions.value,
           excludePaths: excludePaths.value,

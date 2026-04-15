@@ -30,6 +30,7 @@ describe("public-api", () => {
     const result = normalizePublicToolInput("fff_find_files", {
       query: "router",
       within: "/tmp/project/src",
+      glob: "**/*.ts",
       extensions: [".ts", "tsx"],
       exclude_paths: ["dist", "src/generated"],
       limit: 10,
@@ -46,6 +47,7 @@ describe("public-api", () => {
       tool: "fff_find_files",
       query: "router",
       within: "/tmp/project/src",
+      glob: "**/*.ts",
       extensions: ["ts", "tsx"],
       excludePaths: ["dist", "src/generated"],
       limit: 10,
@@ -58,6 +60,7 @@ describe("public-api", () => {
     const result = normalizePublicToolInput("fff_search_terms", {
       terms: ["router", "coordinator"],
       within: "/tmp/project",
+      glob: "src/**/*.ts",
     });
 
     expect(result.ok).toBe(true);
@@ -69,6 +72,7 @@ describe("public-api", () => {
       tool: "fff_search_terms",
       terms: ["router", "coordinator"],
       within: "/tmp/project",
+      glob: "src/**/*.ts",
       extensions: [],
       excludePaths: [],
       contextLines: 0,
@@ -82,6 +86,7 @@ describe("public-api", () => {
     const result = normalizePublicToolInput("fff_grep", {
       pattern: "plan(Request)?",
       within: "/tmp/project/lib",
+      glob: "**/*.ts",
       case_sensitive: true,
       context_lines: 2,
     });
@@ -95,6 +100,7 @@ describe("public-api", () => {
       tool: "fff_grep",
       pattern: "plan(Request)?",
       within: "/tmp/project/lib",
+      glob: "**/*.ts",
       caseSensitive: true,
       extensions: [],
       excludePaths: [],
@@ -214,6 +220,38 @@ describe("public-api", () => {
         query: "router",
         within: "/tmp/project",
         exclude_paths: [excludePath],
+      });
+
+      expect(result.ok).toBe(false);
+      if (result.ok) {
+        throw new Error("expected failure");
+      }
+      expect(result.error.code).toBe("INVALID_REQUEST");
+    }
+  });
+
+  test("accepts relative include globs and rejects unsafe ones", () => {
+    const valid = normalizePublicToolInput("fff_find_files", {
+      query: "router",
+      within: "/tmp/project",
+      glob: "src/**/*.test.ts",
+    });
+
+    expect(valid.ok).toBe(true);
+    if (!valid.ok) {
+      throw new Error("expected success");
+    }
+    expect(valid.value.tool).toBe("fff_find_files");
+    if (valid.value.tool !== "fff_find_files") {
+      throw new Error("expected find files request");
+    }
+    expect(valid.value.glob).toBe("src/**/*.test.ts");
+
+    for (const glob of ["/tmp/project/**/*.ts", "../src/**/*.ts", "!src/**/*.ts"]) {
+      const result = normalizePublicToolInput("fff_grep", {
+        pattern: "router",
+        within: "/tmp/project",
+        glob,
       });
 
       expect(result.ok).toBe(false);

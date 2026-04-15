@@ -7,6 +7,7 @@ type WrapperTool = "fff_find_files" | "fff_search_terms" | "fff_grep";
 
 type ParsedCommonArgs = {
   within: string | null;
+  glob?: string;
   extensions: string[];
   excludePaths: string[];
   limit?: number;
@@ -16,11 +17,11 @@ type ParsedCommonArgs = {
 function helpText(tool: WrapperTool): string {
   switch (tool) {
     case "fff_find_files":
-      return "Usage: fff-find-files <query> [--within PATH] [--extension EXT] [--exclude-path PATH] [--limit N] [--output-mode compact|json]";
+      return "Usage: fff-find-files <query> [--within PATH] [--glob GLOB] [--extension EXT] [--exclude-path PATH] [--limit N] [--output-mode compact|json]";
     case "fff_search_terms":
-      return "Usage: fff-search-terms <term> [term...] [--within PATH] [--extension EXT] [--exclude-path PATH] [--context-lines N] [--limit N] [--output-mode compact|json]";
+      return "Usage: fff-search-terms <term> [term...] [--within PATH] [--glob GLOB] [--extension EXT] [--exclude-path PATH] [--context-lines N] [--limit N] [--output-mode compact|json]";
     case "fff_grep":
-      return "Usage: fff-grep <pattern> [--within PATH] [--case-sensitive] [--extension EXT] [--exclude-path PATH] [--context-lines N] [--limit N] [--output-mode compact|json]";
+      return "Usage: fff-grep <pattern> [--within PATH] [--glob GLOB] [--case-sensitive] [--extension EXT] [--exclude-path PATH] [--context-lines N] [--limit N] [--output-mode compact|json]";
   }
 }
 
@@ -48,6 +49,10 @@ function parseCommonArgs(argv: string[]) {
         break;
       case "--within":
         common.within = next ?? null;
+        index += 1;
+        break;
+      case "--glob":
+        common.glob = next;
         index += 1;
         break;
       case "--extension":
@@ -124,6 +129,7 @@ export async function buildWrapperInvocation(args: {
 
   const base = {
     within: resolvedWithin.value.resolvedWithin,
+    ...(parsed.common.glob ? { glob: parsed.common.glob } : {}),
     extensions: parsed.common.extensions,
     excludePaths: parsed.common.excludePaths,
     limit: parsed.common.limit ?? 20,

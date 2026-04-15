@@ -35,6 +35,7 @@ export type PublicError = {
 
 export type PublicRequestBase = {
   within?: string;
+  glob?: string;
   extensions: string[];
   excludePaths: string[];
   limit: number;

@@ -14,6 +14,7 @@ export type BackendRequestBase = RuntimeRequestKey & {
   within: string;
   basePath: string;
   fileRestriction?: string;
+  glob?: string;
   extensions: string[];
   excludePaths: string[];
   limit: number;

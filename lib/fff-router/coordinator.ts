@@ -105,6 +105,7 @@ function buildBackendRequest(args: {
     within: args.validatedWithin.resolvedWithin,
     basePath: args.validatedWithin.basePath,
     fileRestriction: args.validatedWithin.fileRestriction,
+    ...(args.request.glob !== undefined ? { glob: args.request.glob } : {}),
     extensions: args.request.extensions,
     excludePaths: translateExcludePaths(
       args.validatedWithin,

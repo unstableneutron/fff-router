@@ -65,6 +65,7 @@ function buildConstraintTokens(request: {
   persistenceRoot: string;
   basePath: string;
   fileRestriction?: string;
+  glob?: string;
   extensions: string[];
   excludePaths: string[];
 }): string[] {
@@ -85,6 +86,10 @@ function buildConstraintTokens(request: {
     }
   }
 
+  if (request.glob) {
+    tokens.push(request.glob);
+  }
+
   for (const extension of request.extensions) {
     tokens.push(`*.${extension}`);
   }
@@ -101,6 +106,7 @@ function compileFindFilesQuery(request: {
   persistenceRoot: string;
   basePath: string;
   fileRestriction?: string;
+  glob?: string;
   extensions: string[];
   excludePaths: string[];
 }): string {
@@ -111,6 +117,7 @@ function compileConstraints(request: {
   persistenceRoot: string;
   basePath: string;
   fileRestriction?: string;
+  glob?: string;
   extensions: string[];
   excludePaths: string[];
 }): string {
@@ -122,6 +129,7 @@ function compileGrepQuery(request: {
   persistenceRoot: string;
   basePath: string;
   fileRestriction?: string;
+  glob?: string;
   extensions: string[];
   excludePaths: string[];
 }): string {

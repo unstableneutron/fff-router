@@ -23,11 +23,25 @@ This means machine-wide warm reuse comes from the long-lived daemon process itse
 Common public fields:
 
 - `within`
+- `glob`
 - `extensions`
 - `exclude_paths`
 - `limit`
 - `cursor`
 - `output_mode`
+
+Matching order:
+
+```text
+within ∩ glob ∩ extensions - exclude_paths
+```
+
+Where:
+
+- `within` is the hard scope boundary
+- `glob` is an optional include filter relative to `within`
+- `extensions` is optional suffix filtering
+- `exclude_paths` stays literal-only (no wildcard syntax)
 
 Supported output modes:
 
@@ -247,9 +261,9 @@ bun run bin/fff-grep.ts --help
 ### Example usage
 
 ```bash
-bun run bin/fff-find-files.ts router --within src --extension ts
-bun run bin/fff-search-terms.ts router coordinator --within lib --context-lines 1
-bun run bin/fff-grep.ts 'plan(Request)?' --within lib --case-sensitive
+bun run bin/fff-find-files.ts router --within src --glob '**/*.ts' --extension ts
+bun run bin/fff-search-terms.ts router coordinator --within lib --glob '**/*.ts' --context-lines 1
+bun run bin/fff-grep.ts 'plan(Request)?' --within lib --glob '**/*.ts' --case-sensitive
 ```
 
 ## HTTP MCP endpoint

@@ -18,6 +18,7 @@ const findFilesRequest: FindFilesBackendRequest = {
   queryKind: "find_files",
   within: "/repo/src",
   basePath: "/repo/src",
+  glob: "**/*.ts",
   extensions: ["ts"],
   excludePaths: ["dist"],
   limit: 20,
@@ -30,6 +31,7 @@ const searchTermsRequest: SearchTermsBackendRequest = {
   queryKind: "search_terms",
   within: "/repo/src",
   basePath: "/repo/src",
+  glob: "**/*.ts",
   extensions: ["ts"],
   excludePaths: ["dist"],
   limit: 20,
@@ -43,6 +45,7 @@ const grepRequest: GrepBackendRequest = {
   queryKind: "grep",
   within: "/repo/src",
   basePath: "/repo/src",
+  glob: "**/*.ts",
   extensions: ["ts"],
   excludePaths: ["dist"],
   limit: 20,
@@ -91,7 +94,20 @@ describe("createRgAdapter", () => {
     expect(calls).toEqual([
       {
         command: "fd",
-        args: ["--type", "f", "--base-directory", "/repo", ".", "src"],
+        args: [
+          "--type",
+          "f",
+          "--base-directory",
+          "/repo",
+          "--glob",
+          "**/*.ts",
+          "--glob",
+          "*.ts",
+          "--glob",
+          "!dist/**",
+          ".",
+          "src",
+        ],
         cwd: "/repo",
       },
     ]);
@@ -132,6 +148,8 @@ describe("createRgAdapter", () => {
           "--fixed-strings",
           "--context",
           "2",
+          "--glob",
+          "**/*.ts",
           "--glob",
           "*.ts",
           "--glob",
@@ -243,6 +261,8 @@ describe("createRgAdapter", () => {
           "--context",
           "1",
           "--glob",
+          "**/*.ts",
+          "--glob",
           "*.ts",
           "--glob",
           "!dist/**",
@@ -256,5 +276,39 @@ describe("createRgAdapter", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error("expected success");
     expect(result.value.queryKind).toBe("grep");
+  });
+
+  test("passes glob through fd for find_files", async () => {
+    const calls: CommandCall[] = [];
+    const adapter = createRgAdapter({
+      runCommand: async (command, args, cwd) => {
+        calls.push({ command, args, cwd });
+        return { ok: true, stdout: "src/router.ts\n" };
+      },
+    });
+
+    const result = await adapter.execute({ request: findFilesRequest });
+
+    expect(calls).toEqual([
+      {
+        command: "fd",
+        args: [
+          "--type",
+          "f",
+          "--base-directory",
+          "/repo",
+          "--glob",
+          "**/*.ts",
+          "--glob",
+          "*.ts",
+          "--glob",
+          "!dist/**",
+          ".",
+          "src",
+        ],
+        cwd: "/repo",
+      },
+    ]);
+    expect(result.ok).toBe(true);
   });
 });
