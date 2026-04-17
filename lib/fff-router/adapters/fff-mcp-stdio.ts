@@ -133,11 +133,26 @@ function compileGrepQuery(request: {
   extensions: string[];
   excludePaths: string[];
 }): string {
+  // fff-mcp's `grep` tool takes a single space-delimited query where the final
+  // token is the pattern and earlier tokens are constraints. Raw whitespace in
+  // the pattern would be shredded into extra constraint tokens, so we encode
+  // any literal spaces/tabs as `\s` (supported by fff-mcp's Rust regex engine).
+  const encodedPatterns = request.patterns.map(encodeFffMcpGrepPattern);
   const combinedPattern =
-    request.patterns.length === 1
-      ? (request.patterns[0] ?? "")
-      : request.patterns.map((pattern) => `(?:${pattern})`).join("|");
+    encodedPatterns.length === 1
+      ? (encodedPatterns[0] ?? "")
+      : encodedPatterns.map((pattern) => `(?:${pattern})`).join("|");
   return [...buildConstraintTokens(request), combinedPattern].filter(Boolean).join(" ");
+}
+
+/**
+ * Encode whitespace in a regex pattern so fff-mcp's whitespace-delimited grep
+ * DSL doesn't split the pattern into multiple constraint tokens. `\s` matches
+ * any whitespace char; callers who need exact single-space semantics should
+ * write `\x20` explicitly.
+ */
+function encodeFffMcpGrepPattern(pattern: string): string {
+  return pattern.replace(/[ \t]/g, "\\s");
 }
 
 function stripFindFilesSuffix(line: string): string {
@@ -425,10 +440,21 @@ export function createFffMcpStdioAdapter(): SearchBackendAdapter<FffMcpRuntime> 
             };
           }
           case "grep": {
-            const text = await callToolText(args.runtime, "grep", {
-              query: compileGrepQuery(args.request),
-              maxResults: args.request.limit,
-            });
+            // Route based on the caller's explicit literal flag. `multi_grep`
+            // is fff-mcp's literal-only path (patterns stay intact, no DSL
+            // shredding). `grep` is the regex path, with whitespace encoded
+            // so the DSL parser doesn't split the pattern into tokens.
+            const text = args.request.literal
+              ? await callToolText(args.runtime, "multi_grep", {
+                  patterns: args.request.patterns,
+                  constraints: compileConstraints(args.request),
+                  maxResults: args.request.limit,
+                  context: args.request.contextLines,
+                })
+              : await callToolText(args.runtime, "grep", {
+                  query: compileGrepQuery(args.request),
+                  maxResults: args.request.limit,
+                });
             const parsed = parseTextMatchOutput(text, args.request.persistenceRoot);
             return {
               ok: true,

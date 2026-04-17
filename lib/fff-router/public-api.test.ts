@@ -58,6 +58,7 @@ describe("public-api", () => {
   test("normalizes fff_grep input", () => {
     const result = normalizePublicToolInput("fff_grep", {
       patterns: ["plan(Request)?", "build(Request)?"],
+      literal: false,
       within: "/tmp/project/lib",
       glob: "**/*.ts",
       case_sensitive: true,
@@ -72,6 +73,7 @@ describe("public-api", () => {
     expect(result.value).toEqual({
       tool: "fff_grep",
       patterns: ["plan(Request)?", "build(Request)?"],
+      literal: false,
       within: "/tmp/project/lib",
       glob: "**/*.ts",
       caseSensitive: true,
@@ -87,6 +89,7 @@ describe("public-api", () => {
   test("defaults grep case sensitivity to false when omitted", () => {
     const result = normalizePublicToolInput("fff_grep", {
       patterns: ["plan(Request)?"],
+      literal: false,
       within: "/tmp/project/lib",
     });
 
@@ -105,6 +108,7 @@ describe("public-api", () => {
   test("preserves meaningful search whitespace while rejecting blank values", () => {
     const grep = normalizePublicToolInput("fff_grep", {
       patterns: ["  plan(Request)?  ", " build(Request)? "],
+      literal: false,
       within: "/tmp/project/lib",
     });
     expect(grep.ok).toBe(true);
@@ -119,6 +123,7 @@ describe("public-api", () => {
 
     const blankPattern = normalizePublicToolInput("fff_grep", {
       patterns: ["   "],
+      literal: false,
       within: "/tmp/project/lib",
     });
     expect(blankPattern.ok).toBe(false);
@@ -130,6 +135,7 @@ describe("public-api", () => {
 
   test("rejects missing or empty grep patterns", () => {
     const missingTerms = normalizePublicToolInput("fff_grep", {
+      literal: false,
       within: "/tmp/project",
     });
     expect(missingTerms.ok).toBe(false);
@@ -140,6 +146,7 @@ describe("public-api", () => {
 
     const emptyTerms = normalizePublicToolInput("fff_grep", {
       patterns: [],
+      literal: false,
       within: "/tmp/project",
     });
     expect(emptyTerms.ok).toBe(false);
@@ -147,6 +154,35 @@ describe("public-api", () => {
       throw new Error("expected failure");
     }
     expect(emptyTerms.error.code).toBe("INVALID_REQUEST");
+  });
+
+  test("rejects fff_grep input missing the required literal flag", () => {
+    const result = normalizePublicToolInput("fff_grep", {
+      patterns: ["plan(Request)?"],
+      within: "/tmp/project",
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("expected failure");
+    }
+    expect(result.error.code).toBe("INVALID_REQUEST");
+    expect(result.error.message).toMatch(/literal/i);
+  });
+
+  test("rejects fff_grep input with a non-boolean literal flag", () => {
+    const result = normalizePublicToolInput("fff_grep", {
+      patterns: ["plan(Request)?"],
+      literal: "true",
+      within: "/tmp/project",
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("expected failure");
+    }
+    expect(result.error.code).toBe("INVALID_REQUEST");
+    expect(result.error.message).toMatch(/literal/i);
   });
 
   test("rejects invalid output_mode and non-null cursor in the initial slice", () => {
@@ -209,6 +245,7 @@ describe("public-api", () => {
     for (const glob of ["/tmp/project/**/*.ts", "../src/**/*.ts", "!src/**/*.ts"]) {
       const result = normalizePublicToolInput("fff_grep", {
         patterns: ["router"],
+        literal: false,
         within: "/tmp/project",
         glob,
       });

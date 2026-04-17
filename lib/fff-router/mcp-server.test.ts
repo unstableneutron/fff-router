@@ -125,6 +125,7 @@ describe("createMcpServer", () => {
 
     const result = await server.callTool("fff_grep", {
       patterns: ["router"],
+      literal: false,
       within: "/repo/src",
     });
 

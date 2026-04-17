@@ -29,7 +29,7 @@ describe("buildWrapperInvocation", () => {
   test("builds grep invocations with case-sensitive flag", async () => {
     const invocation = await buildWrapperInvocation({
       tool: "fff_grep",
-      argv: ["plan(Request)?", "build(Request)?", "--case-sensitive"],
+      argv: ["plan(Request)?", "build(Request)?", "--case-sensitive", "--regex"],
       callerCwd: "/repo",
     });
 
@@ -39,6 +39,7 @@ describe("buildWrapperInvocation", () => {
       publicRequest: {
         tool: "fff_grep",
         patterns: ["plan(Request)?", "build(Request)?"],
+        literal: false,
         caseSensitive: true,
         contextLines: 0,
         within: "/repo",
@@ -60,7 +61,7 @@ describe("buildWrapperInvocation", () => {
 
     expect(invocation).toEqual({
       kind: "help",
-      text: "Usage: fff-grep <pattern> [pattern...] [--within PATH] [--glob GLOB] [--case-sensitive] [--extension EXT] [--exclude-path PATH] [--context-lines N] [--limit N] [--output-mode compact|json]",
+      text: "Usage: fff-grep <pattern> [pattern...] [--literal|--regex] [--within PATH] [--glob GLOB] [--case-sensitive] [--extension EXT] [--exclude-path PATH] [--context-lines N] [--limit N] [--output-mode compact|json]\n\n  --literal (default)  Patterns are matched as literal text.\n  --regex              Patterns are matched as regular expressions.",
     });
   });
 
@@ -77,6 +78,7 @@ describe("buildWrapperInvocation", () => {
       publicRequest: {
         tool: "fff_grep",
         patterns: ["plan(Request)?"],
+        literal: true,
         glob: "src/**/*.ts",
         caseSensitive: false,
         contextLines: 0,

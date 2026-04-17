@@ -328,6 +328,7 @@ describe("createSearchCoordinator", () => {
       makePublicRequest({
         tool: "fff_grep",
         patterns: ["createSearchCoordinator"],
+        literal: false,
         caseSensitive: true,
         contextLines: 0,
       }),
@@ -448,6 +449,7 @@ describe("createSearchCoordinator", () => {
       makePublicRequest({
         tool: "fff_grep",
         patterns: ["createSearchCoordinator"],
+        literal: false,
         caseSensitive: true,
         contextLines: 0,
         outputMode: "json",
@@ -544,6 +546,7 @@ describe("createSearchCoordinator", () => {
       makePublicRequest({
         tool: "fff_grep",
         patterns: ["router"],
+        literal: false,
         caseSensitive: true,
         contextLines: 0,
       }),
@@ -965,6 +968,7 @@ describe("createSearchCoordinator", () => {
       makePublicRequest({
         tool: "fff_grep",
         patterns: ["router"],
+        literal: false,
         caseSensitive: true,
         contextLines: 0,
       }),
@@ -1024,6 +1028,7 @@ describe("createSearchCoordinator", () => {
       makePublicRequest({
         tool: "fff_grep",
         patterns: ["planRequest"],
+        literal: false,
         caseSensitive: true,
         contextLines: 0,
       }),

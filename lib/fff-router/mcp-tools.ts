@@ -24,6 +24,7 @@ const zodInputShapes = {
   },
   fff_grep: {
     patterns: z.array(z.string().min(1)).min(1),
+    literal: z.boolean(),
     within: z.string().optional(),
     glob: z.string().optional(),
     case_sensitive: z.boolean().optional(),

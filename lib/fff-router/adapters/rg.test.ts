@@ -51,6 +51,7 @@ const grepRequest: GrepBackendRequest = {
   limit: 20,
   patterns: ["plan(Request)?", "build(Request)?"],
   caseSensitive: true,
+  literal: false,
   contextLines: 1,
 };
 
@@ -278,6 +279,36 @@ describe("createRgAdapter", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error("expected success");
     expect(result.value.queryKind).toBe("grep");
+  });
+
+  test("adds --fixed-strings when literal=true so regex metacharacters stay literal", async () => {
+    const calls: CommandCall[] = [];
+    const adapter = createRgAdapter({
+      runCommand: async (command, args, cwd) => {
+        calls.push({ command, args, cwd });
+        return { ok: true, stdout: "" };
+      },
+    });
+
+    await adapter.execute({
+      request: { ...grepRequest, literal: true, patterns: ['provider: "anthropic"'] },
+    });
+
+    expect(calls[0]?.args).toEqual([
+      "--json",
+      "--context",
+      "1",
+      "--glob",
+      "**/*.ts",
+      "--glob",
+      "*.ts",
+      "--glob",
+      "!dist/**",
+      "--fixed-strings",
+      "-e",
+      'provider: "anthropic"',
+      "/repo/src",
+    ]);
   });
 
   test("passes glob through fd for find_files", async () => {

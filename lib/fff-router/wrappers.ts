@@ -19,7 +19,7 @@ function helpText(tool: WrapperTool): string {
     case "fff_find_files":
       return "Usage: fff-find-files <query> [--within PATH] [--glob GLOB] [--extension EXT] [--exclude-path PATH] [--limit N] [--output-mode compact|json]";
     case "fff_grep":
-      return "Usage: fff-grep <pattern> [pattern...] [--within PATH] [--glob GLOB] [--case-sensitive] [--extension EXT] [--exclude-path PATH] [--context-lines N] [--limit N] [--output-mode compact|json]";
+      return "Usage: fff-grep <pattern> [pattern...] [--literal|--regex] [--within PATH] [--glob GLOB] [--case-sensitive] [--extension EXT] [--exclude-path PATH] [--context-lines N] [--limit N] [--output-mode compact|json]\n\n  --literal (default)  Patterns are matched as literal text.\n  --regex              Patterns are matched as regular expressions.";
   }
 }
 
@@ -92,6 +92,12 @@ function parseCommonArgs(argv: string[]) {
       case "--case-sensitive":
         extra.caseSensitive = true;
         break;
+      case "--literal":
+        extra.literal = true;
+        break;
+      case "--regex":
+        extra.literal = false;
+        break;
       default:
         if (token.startsWith("-")) {
           throw new Error(`unknown option: ${token}`);
@@ -148,6 +154,8 @@ export async function buildWrapperInvocation(args: {
       publicRequest = {
         tool: args.tool,
         patterns: parsed.positionals,
+        // Default to literal on the CLI; `--regex` opts into regex semantics.
+        literal: parsed.extra.literal !== false,
         caseSensitive: parsed.extra.caseSensitive === true,
         contextLines: typeof parsed.extra.contextLines === "number" ? parsed.extra.contextLines : 0,
         ...base,

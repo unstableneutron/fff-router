@@ -315,6 +315,10 @@ export const searchTermsInputSchema = Type.Object(
 export const grepInputSchema = Type.Object(
   {
     patterns: Type.Array(Type.String({ minLength: 1 }), { minItems: 1 }),
+    literal: Type.Boolean({
+      description:
+        "Required. If true, patterns are matched as literal text (safe for code, quotes, whitespace, and regex metacharacters). If false, patterns are regex. This tool does not guess; set it explicitly.",
+    }),
     within: Type.Optional(Type.String({ minLength: 1 })),
     glob: Type.Optional(Type.String({ minLength: 1 })),
     case_sensitive: Type.Optional(Type.Boolean()),
@@ -347,8 +351,8 @@ export const PUBLIC_TOOL_DEFINITIONS = [
     : []),
   defineTool(
     "fff_grep",
-    "Search file contents under an already-resolved within scope. Use `patterns` for one or more identifiers or regexes; multiple entries use OR semantics. Prefer this tool when you have a specific name or pattern, and use glob / extensions / exclude_paths to prefilter files aggressively.",
-    '{"patterns":["ActorAuth","actor_auth","PopulatedActorAuth"],"within":"src","extensions":["rs"],"exclude_paths":["tests"]}',
+    "Search file contents under an already-resolved within scope. `literal` is REQUIRED: set literal=true for identifier searches, code fragments, or any string containing whitespace, quotes, or punctuation where regex interpretation is unwanted; set literal=false only when you need regex features (anchors, character classes, quantifiers, alternation). This tool does not guess. Use `patterns` for one or more terms; multiple entries use OR semantics. Use `glob` / `extensions` / `exclude_paths` to prefilter files aggressively.",
+    '{"patterns":["ActorAuth","actor_auth","PopulatedActorAuth"],"literal":true,"within":"src","extensions":["rs"],"exclude_paths":["tests"]}',
     grepInputSchema,
   ),
 ] as const;
@@ -567,6 +571,12 @@ function normalizeGrepInput(
     return patterns;
   }
 
+  if (typeof input.literal !== "boolean") {
+    return invalid(
+      "literal must be explicitly set to true or false; fff_grep does not guess between regex and literal interpretation",
+    );
+  }
+
   const within = normalizeWithin(input.within);
   if (!within.ok) {
     return within;
@@ -620,6 +630,7 @@ function normalizeGrepInput(
       ? {
           tool: "fff_grep",
           patterns: patterns.value,
+          literal: input.literal,
           ...(glob.value !== undefined ? { glob: glob.value } : {}),
           caseSensitive: input.case_sensitive ?? false,
           extensions: extensions.value,
@@ -632,6 +643,7 @@ function normalizeGrepInput(
       : {
           tool: "fff_grep",
           patterns: patterns.value,
+          literal: input.literal,
           within: within.value,
           ...(glob.value !== undefined ? { glob: glob.value } : {}),
           caseSensitive: input.case_sensitive ?? false,

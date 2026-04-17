@@ -235,12 +235,46 @@ export function createFffNodeAdapter(): SearchBackendAdapter<FffRuntime> {
           return success("search_terms", collected.slice(0, args.request.limit));
         }
         case "grep": {
+          const collected: BackendResultItem[] = [];
+          let cursor: GrepCursorLike | null = null;
+
+          // Route literal requests through fff-node's native multiGrep so
+          // patterns stay intact (no regex metacharacter interpretation).
+          if (args.request.literal) {
+            const constraints = scope.tokens.join(" ");
+
+            for (
+              let page = 0;
+              page < maxPages && collected.length < args.request.limit;
+              page += 1
+            ) {
+              const result = args.runtime.finder.multiGrep({
+                patterns: args.request.patterns,
+                constraints: constraints || undefined,
+                beforeContext: args.request.contextLines,
+                afterContext: args.request.contextLines,
+                cursor,
+              });
+              if (!result.ok || !result.value) {
+                return searchFailed(result.error ?? "FFF multi_grep failed");
+              }
+
+              const filtered = filterItems(args.request, mapTextItems(result.value.items));
+              collected.push(...filtered);
+
+              if (!result.value.nextCursor) {
+                break;
+              }
+              cursor = result.value.nextCursor;
+            }
+
+            return success("grep", collected.slice(0, args.request.limit));
+          }
+
           const query = buildScopedQuery(
             scope.tokens,
             combineRegexPatterns(args.request.patterns, args.request.caseSensitive),
           );
-          const collected: BackendResultItem[] = [];
-          let cursor: GrepCursorLike | null = null;
 
           for (let page = 0; page < maxPages && collected.length < args.request.limit; page += 1) {
             const result = args.runtime.finder.grep(query, {

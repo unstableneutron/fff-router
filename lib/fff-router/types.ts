@@ -57,6 +57,7 @@ export type PublicSearchTermsRequest = PublicRequestBase & {
 export type PublicGrepRequest = PublicRequestBase & {
   tool: "fff_grep";
   patterns: string[];
+  literal: boolean;
   caseSensitive: boolean;
   contextLines: number;
 };

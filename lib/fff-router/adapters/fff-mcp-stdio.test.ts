@@ -44,6 +44,7 @@ const grepRequest: GrepBackendRequest = {
   excludePaths: ["dist"],
   limit: 5,
   patterns: ["createSearchCoordinator", "buildSearchCoordinator"],
+  literal: false,
   caseSensitive: true,
   contextLines: 1,
 };
@@ -285,5 +286,104 @@ describe("createFffMcpStdioAdapter", () => {
         relativePath: "lib/fff-router/coordinator.ts",
       },
     });
+  });
+});
+
+describe("createFffMcpStdioAdapter grep literal routing", () => {
+  const literalGrepRequest: GrepBackendRequest = {
+    backendId: "fff-mcp",
+    persistenceRoot: "/repo",
+    queryKind: "grep",
+    within: "/repo/lib",
+    basePath: "/repo/lib",
+    glob: "**/*.ts",
+    extensions: ["ts"],
+    excludePaths: ["dist"],
+    limit: 5,
+    patterns: ['provider: "anthropic"'],
+    literal: true,
+    caseSensitive: true,
+    contextLines: 1,
+  };
+
+  test("routes literal=true grep to multi_grep with patterns intact", async () => {
+    const calls: Array<{ name: string; arguments: Record<string, unknown> }> = [];
+    const adapter = createFffMcpStdioAdapter();
+
+    await adapter.execute({
+      request: literalGrepRequest,
+      runtime: {
+        id: "fff-mcp::/repo",
+        close: async () => {},
+        callTool: async (name, args) => {
+          calls.push({ name, arguments: args });
+          return "0 matches.";
+        },
+      },
+    });
+
+    expect(calls).toEqual([
+      {
+        name: "multi_grep",
+        arguments: {
+          patterns: ['provider: "anthropic"'],
+          constraints: "lib/ **/*.ts *.ts !dist/",
+          maxResults: 5,
+          context: 1,
+        },
+      },
+    ]);
+  });
+
+  test("routes literal=false grep to grep with whitespace-encoded pattern", async () => {
+    const calls: Array<{ name: string; arguments: Record<string, unknown> }> = [];
+    const adapter = createFffMcpStdioAdapter();
+
+    await adapter.execute({
+      request: { ...literalGrepRequest, literal: false },
+      runtime: {
+        id: "fff-mcp::/repo",
+        close: async () => {},
+        callTool: async (name, args) => {
+          calls.push({ name, arguments: args });
+          return "0 matches.";
+        },
+      },
+    });
+
+    expect(calls).toEqual([
+      {
+        name: "grep",
+        arguments: {
+          // Literal whitespace in the pattern is encoded as `\s` so fff-mcp's
+          // space-delimited DSL doesn't treat it as an extra constraint.
+          query: 'lib/ **/*.ts *.ts !dist/ provider:\\s"anthropic"',
+          maxResults: 5,
+        },
+      },
+    ]);
+  });
+
+  test("encodes whitespace in every alternation branch for multi-pattern regex", async () => {
+    const calls: Array<{ name: string; arguments: Record<string, unknown> }> = [];
+    const adapter = createFffMcpStdioAdapter();
+
+    await adapter.execute({
+      request: {
+        ...literalGrepRequest,
+        literal: false,
+        patterns: ["foo bar", "baz\tqux"],
+      },
+      runtime: {
+        id: "fff-mcp::/repo",
+        close: async () => {},
+        callTool: async (name, args) => {
+          calls.push({ name, arguments: args });
+          return "0 matches.";
+        },
+      },
+    });
+
+    expect(calls[0]?.arguments.query).toBe("lib/ **/*.ts *.ts !dist/ (?:foo\\sbar)|(?:baz\\squx)");
   });
 });

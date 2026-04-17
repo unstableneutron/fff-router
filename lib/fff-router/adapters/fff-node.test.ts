@@ -223,6 +223,7 @@ const grepRequest: GrepBackendRequest = {
   limit: 20,
   patterns: ["plan(Request)?", "build(Request)?"],
   caseSensitive: false,
+  literal: false,
   contextLines: 1,
 };
 
@@ -403,6 +404,7 @@ describe("createFffNodeAdapter", () => {
         fileRestriction: "/repo/src/router.ts",
         patterns: ["planRequest"],
         caseSensitive: true,
+        literal: false,
       },
       runtime: makeRuntime({ log }),
     });
@@ -455,6 +457,7 @@ describe("createFffNodeAdapter", () => {
         limit: 1,
         patterns: ["needle"],
         caseSensitive: true,
+        literal: false,
         contextLines: 0,
       },
       runtime: makeRuntime({ log, grepPages }),
@@ -507,6 +510,7 @@ describe("createFffNodeAdapter", () => {
           limit: 20,
           patterns: ["ghostty_"],
           caseSensitive: false,
+          literal: false,
           contextLines: 0,
         },
         runtime,
@@ -550,5 +554,23 @@ describe("createFffNodeAdapter", () => {
       await runtime.close();
       await fs.rm(tempRoot, { recursive: true, force: true });
     }
+  });
+
+  test("routes literal=true grep through fff-node's native multiGrep", async () => {
+    const log = makeLog();
+    const adapter = createFffNodeAdapter();
+
+    await adapter.execute({
+      request: {
+        ...grepRequest,
+        literal: true,
+        patterns: ['provider: "anthropic"', "ActorAuth"],
+      },
+      runtime: makeRuntime({ log }),
+    });
+
+    expect(log.grep).toHaveLength(0);
+    expect(log.multiGrep).toHaveLength(1);
+    expect(log.multiGrep[0]?.patterns).toEqual(['provider: "anthropic"', "ActorAuth"]);
   });
 });

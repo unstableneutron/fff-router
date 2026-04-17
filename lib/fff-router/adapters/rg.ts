@@ -332,6 +332,11 @@ export function createRgAdapter(deps?: { runCommand?: RunCommand }): SearchBacke
           if (!request.caseSensitive) {
             rgArgs.push("--ignore-case");
           }
+          // `--fixed-strings` makes ripgrep match every `-e` pattern as a
+          // literal string (regex metacharacters treated as bytes).
+          if (request.literal) {
+            rgArgs.push("--fixed-strings");
+          }
           rgArgs.push(...request.patterns.flatMap((pattern) => ["-e", pattern] as const));
           rgArgs.push(buildSearchTarget(request));
 

@@ -58,6 +58,7 @@ function toToolCall(request: PublicToolRequest): {
         name: request.tool,
         input: {
           patterns: grepRequest.patterns,
+          literal: grepRequest.literal,
           case_sensitive: grepRequest.caseSensitive,
           context_lines: grepRequest.contextLines,
           ...common,
