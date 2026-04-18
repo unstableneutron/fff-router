@@ -1,5 +1,9 @@
 import { describe, expect, test } from "vitest";
-import { createFffMcpStdioAdapter, waitForFffMcpReady } from "./fff-mcp-stdio";
+import {
+  createFffMcpStdioAdapter,
+  filterRenderedCompactText,
+  waitForFffMcpReady,
+} from "./fff-mcp-stdio";
 import type {
   FindFilesBackendRequest,
   GrepBackendRequest,
@@ -385,5 +389,254 @@ describe("createFffMcpStdioAdapter grep literal routing", () => {
     });
 
     expect(calls[0]?.arguments.query).toBe("lib/ **/*.ts *.ts !dist/ (?:foo\\sbar)|(?:baz\\squx)");
+  });
+});
+
+describe("createFffMcpStdioAdapter fileRestriction + rendered compact", () => {
+  const fileRestrictedGrep: GrepBackendRequest = {
+    backendId: "fff-mcp",
+    persistenceRoot: "/repo",
+    queryKind: "grep",
+    within: "/repo/internal/adapter/treehouse/treehouse_test.go",
+    basePath: "/repo/internal/adapter/treehouse",
+    fileRestriction: "/repo/internal/adapter/treehouse/treehouse_test.go",
+    extensions: [],
+    excludePaths: [],
+    limit: 50,
+    patterns: ["2026-"],
+    literal: true,
+    caseSensitive: true,
+    contextLines: 1,
+  };
+
+  const fileRestrictedSearchTerms: SearchTermsBackendRequest = {
+    backendId: "fff-mcp",
+    persistenceRoot: "/repo",
+    queryKind: "search_terms",
+    within: "/repo/internal/adapter/treehouse/treehouse_test.go",
+    basePath: "/repo/internal/adapter/treehouse",
+    fileRestriction: "/repo/internal/adapter/treehouse/treehouse_test.go",
+    extensions: [],
+    excludePaths: [],
+    limit: 50,
+    terms: ["2026-"],
+    contextLines: 1,
+  };
+
+  // fff-mcp fuzzy-matches a bare relative-path constraint against its filename
+  // index, so it can return hits in unrelated files. This synthetic response
+  // mirrors the real fuzzy-leak we observed in the jj-bonsai repo: two
+  // sibling paths plus the restricted one, interleaved with context and a
+  // read recommendation that points at a filtered-out file.
+  const fuzzyLeakText = [
+    "→ Read internal/adapter/treehouse/assets/manifest.json (best match)",
+    "7/7 matches shown",
+    "internal/adapter/treehouse/assets/manifest.json",
+    ' 2- "adapter": "treehouse",',
+    ' 3: "version": "2026-04-21",',
+    ' 4- "files": [',
+    "--",
+    "internal/adapter/treehouse/treehouse_test.go",
+    " 116- newerRepoContent := []byte(strings.ReplaceAll(",
+    ' 117: string(assets[0].Content), "2026-04-16", "2026-04-20"))',
+    " 118- if err != nil {",
+    "internal/core/seeds_test.go",
+    ' 117: "# jj-bonsai-version: 2026-04-17\\n" +',
+  ].join("\n");
+
+  test("uses anchored-glob constraint token for fileRestriction", async () => {
+    const calls: Array<{ name: string; arguments: Record<string, unknown> }> = [];
+    const adapter = createFffMcpStdioAdapter();
+
+    await adapter.execute({
+      request: fileRestrictedGrep,
+      runtime: {
+        id: "fff-mcp::/repo",
+        close: async () => {},
+        callTool: async (name, args) => {
+          calls.push({ name, arguments: args });
+          return "0 matches.";
+        },
+      },
+    });
+
+    // `**/<relativeFile>` is the only fff-mcp constraint form that actually
+    // pins a match to a single file — verified by probing fff-mcp directly.
+    // A bare `<relativeFile>` token would fuzzy-match against siblings.
+    expect(calls[0]?.arguments.constraints).toBe("**/internal/adapter/treehouse/treehouse_test.go");
+  });
+
+  test("narrows grep items and renderedCompact when fff-mcp leaks sibling matches", async () => {
+    const adapter = createFffMcpStdioAdapter();
+
+    const result = await adapter.execute({
+      request: fileRestrictedGrep,
+      runtime: {
+        id: "fff-mcp::/repo",
+        close: async () => {},
+        callTool: async () => fuzzyLeakText,
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected success");
+
+    // Items agree with the restriction.
+    expect(result.value.items.map((item) => item.relativePath)).toEqual([
+      "internal/adapter/treehouse/treehouse_test.go",
+    ]);
+
+    // renderedCompact no longer surfaces sibling paths.
+    const rendered = (result.value as { renderedCompact?: string }).renderedCompact ?? "";
+    expect(rendered).not.toContain("assets/manifest.json");
+    expect(rendered).not.toContain("internal/core/seeds_test.go");
+    expect(rendered).toContain("internal/adapter/treehouse/treehouse_test.go");
+    // And the read recommendation — which pointed at a filtered-out path —
+    // was dropped instead of misleading the caller.
+    expect(rendered).not.toMatch(/^→\s+Read\s+internal\/adapter\/treehouse\/assets\//m);
+    expect(result.value.summary?.readRecommendation).toBeUndefined();
+    // The summary counts are left as fff-mcp reported them; recomputing them
+    // would be speculative since fff-mcp's total pre-dates our post-filter.
+    expect(result.value.summary?.shownCount).toBe(7);
+    expect(result.value.summary?.totalCount).toBe(7);
+  });
+
+  test("narrows search_terms items and renderedCompact identically", async () => {
+    const adapter = createFffMcpStdioAdapter();
+
+    const result = await adapter.execute({
+      request: fileRestrictedSearchTerms,
+      runtime: {
+        id: "fff-mcp::/repo",
+        close: async () => {},
+        callTool: async () => fuzzyLeakText,
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected success");
+
+    expect(result.value.items.map((item) => item.relativePath)).toEqual([
+      "internal/adapter/treehouse/treehouse_test.go",
+    ]);
+    const rendered = (result.value as { renderedCompact?: string }).renderedCompact ?? "";
+    expect(rendered).not.toContain("assets/manifest.json");
+    expect(rendered).not.toContain("internal/core/seeds_test.go");
+  });
+
+  test("passes renderedCompact through verbatim when nothing is filtered out", async () => {
+    const adapter = createFffMcpStdioAdapter();
+    const cleanText = [
+      "→ Read internal/adapter/treehouse/treehouse_test.go (only match)",
+      "1/1 matches shown",
+      "internal/adapter/treehouse/treehouse_test.go",
+      " 116- newerRepoContent := []byte(strings.ReplaceAll(",
+      ' 117: string(assets[0].Content), "2026-04-16", "2026-04-20"))',
+    ].join("\n");
+
+    const result = await adapter.execute({
+      request: fileRestrictedGrep,
+      runtime: {
+        id: "fff-mcp::/repo",
+        close: async () => {},
+        callTool: async () => cleanText,
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected success");
+    // No path was dropped, so the adapter must return the backend's text
+    // byte-for-byte — this is the common case and preserves fff-mcp's exact
+    // formatting.
+    expect((result.value as { renderedCompact?: string }).renderedCompact).toBe(cleanText);
+  });
+
+  test("renderedCompact also respects glob and excludePaths mismatches", async () => {
+    const adapter = createFffMcpStdioAdapter();
+    // Directory-scoped request that excludes `assets/**` and restricts to
+    // `.go` extensions. fff-mcp's fuzzy filter can still leak `.json` hits
+    // from `assets/`, so we want the rendered text to match the items view
+    // for all filter criteria, not just fileRestriction.
+    const request: SearchTermsBackendRequest = {
+      backendId: "fff-mcp",
+      persistenceRoot: "/repo",
+      queryKind: "search_terms",
+      within: "/repo/internal/adapter/treehouse",
+      basePath: "/repo/internal/adapter/treehouse",
+      extensions: ["go"],
+      excludePaths: ["internal/adapter/treehouse/assets"],
+      limit: 50,
+      terms: ["2026-"],
+      contextLines: 0,
+    };
+
+    const result = await adapter.execute({
+      request,
+      runtime: {
+        id: "fff-mcp::/repo",
+        close: async () => {},
+        callTool: async () => fuzzyLeakText,
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected success");
+
+    const renderedPaths = ((result.value as { renderedCompact?: string }).renderedCompact ?? "")
+      .split("\n")
+      .filter((line) => line && !line.startsWith(" ") && line !== "--" && !line.startsWith("→"))
+      .filter((line) => !/^\d+\/\d+\s+matches\s+shown$/.test(line));
+    // Only the `.go` file inside the treehouse directory survives.
+    expect(renderedPaths).toEqual(["internal/adapter/treehouse/treehouse_test.go"]);
+    // And the core/seeds_test.go path, which is outside `within`, is gone.
+    expect((result.value as { renderedCompact?: string }).renderedCompact).not.toContain(
+      "internal/core/seeds_test.go",
+    );
+  });
+});
+
+describe("filterRenderedCompactText", () => {
+  const synthetic = [
+    "→ Read a/keep.ts (best match)",
+    "3/3 matches shown",
+    "a/keep.ts",
+    " 10: const keep = true;",
+    " 11- keep context",
+    "--",
+    "b/drop.ts",
+    " 20: const drop = true;",
+    "a/keep.ts [def]",
+    " 30: export function keep() {}",
+    " 31| const inner = true;",
+  ].join("\n");
+
+  test("keeps accepted blocks together with their context and separators", () => {
+    const out = filterRenderedCompactText(synthetic, (p) => p === "a/keep.ts");
+    expect(out).toContain("a/keep.ts\n 10: const keep = true;");
+    expect(out).toContain(" 11- keep context");
+    expect(out).toContain("a/keep.ts [def]");
+    expect(out).toContain(" 30: export function keep() {}");
+    expect(out).toContain(" 31| const inner = true;");
+    expect(out).not.toContain("b/drop.ts");
+    expect(out).not.toContain("const drop = true;");
+  });
+
+  test("drops a → Read recommendation that was filtered out", () => {
+    const out = filterRenderedCompactText(synthetic, (p) => p === "b/drop.ts");
+    expect(out).not.toMatch(/^→\s+Read\s+a\/keep\.ts/m);
+    expect(out).toContain("b/drop.ts");
+  });
+
+  test("preserves summary lines even when every block is dropped", () => {
+    const out = filterRenderedCompactText(synthetic, () => false);
+    expect(out).toContain("3/3 matches shown");
+    expect(out).not.toContain("a/keep.ts");
+    expect(out).not.toContain("b/drop.ts");
+    expect(out).not.toMatch(/^→\s+Read/m);
+  });
+
+  test("is a byte-for-byte identity when every block is accepted", () => {
+    const out = filterRenderedCompactText(synthetic, () => true);
+    expect(out).toBe(synthetic);
   });
 });

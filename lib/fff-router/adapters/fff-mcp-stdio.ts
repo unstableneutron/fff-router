@@ -71,11 +71,20 @@ function buildConstraintTokens(request: {
 }): string[] {
   const tokens: string[] = [];
   if (request.fileRestriction) {
+    // fff-mcp's constraint DSL treats a bare path token (`deep/sub/target.ts`)
+    // as a fuzzy filename hint, not an exact-file pin. Probing against
+    // fff-mcp directly shows the anchored-glob form `**/deep/sub/target.ts`
+    // is the only reliable way to restrict matches to a single file — it
+    // selects just that path even when siblings share the basename. The
+    // adapter still post-filters via `filterRenderedCompactText` so
+    // correctness does not depend on fff-mcp honouring the glob, but
+    // emitting the tighter token keeps the backend from scanning unrelated
+    // files in the first place.
     const relativeFile = normalizeRelative(
       path.relative(request.persistenceRoot, request.fileRestriction),
     );
     if (relativeFile && relativeFile !== ".") {
-      tokens.push(relativeFile);
+      tokens.push(`**/${relativeFile}`);
     }
   } else {
     const baseRelative = normalizeRelative(
@@ -223,6 +232,81 @@ function parseShownSummary(line: string): Pick<BackendSearchSummary, "shownCount
   };
 }
 
+/**
+ * Walks an fff-mcp compact-text response and keeps only the path blocks whose
+ * header relative-path satisfies `keep`. Preamble lines (`N/M matches shown`,
+ * `0 matches`, `0 exact matches`, `cursor:…`, blanks) are always preserved;
+ * `→ Read <path>` recommendations are dropped when the recommended path has
+ * been filtered out so the rendered preamble never points at a file we just
+ * removed from the body. Indented numbered lines (`  N:`, `  N-`, `  N|`)
+ * and `--` block separators are emitted only while the active header is
+ * accepted.
+ *
+ * The predicate mirrors the one the adapter applies to `items` via
+ * `filterItems` so that `items` and `renderedCompact` describe the same set
+ * of paths. fff-mcp's multi_grep/grep DSL treats bare path tokens as fuzzy
+ * filename hints (not strict filters), so even with a tight constraint it
+ * can still return path blocks from siblings of the restricted file. This
+ * filter is the correctness gate; the anchored-glob constraint token in
+ * `buildConstraintTokens` is just a performance hint to reduce the amount
+ * of unrelated scanning fff-mcp has to do.
+ */
+export function filterRenderedCompactText(
+  text: string,
+  keep: (relativePath: string) => boolean,
+): string {
+  const out: string[] = [];
+  // Preamble before any header always passes through; flips on each header.
+  let currentAccepted = true;
+
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trimEnd();
+
+    // `→ Read <rel> (reason)`: drop when the recommended path failed `keep`
+    // so the rendered preamble never points at a filtered-out file.
+    const readMatch = line.match(/^→\s+Read\s+(.+?)(?:\s+\((.+)\))?$/);
+    if (readMatch) {
+      const recPath = normalizeRelative((readMatch[1] ?? "").replace(/\s+\[def\]$/, "").trim());
+      if (keep(recPath)) {
+        out.push(rawLine);
+      }
+      continue;
+    }
+
+    // Preamble / summary / end markers: always pass through.
+    if (
+      !line ||
+      line.startsWith("cursor:") ||
+      /^\d+\/\d+\s+matches\s+shown$/.test(line) ||
+      /^0\s+matches/.test(line) ||
+      /^0\s+exact\s+matches/.test(line)
+    ) {
+      out.push(rawLine);
+      continue;
+    }
+
+    // Indented numbered lines and `--` separators belong to the active block.
+    if (line === "--" || /^\s+\d+[:\-|]/.test(line)) {
+      if (currentAccepted) {
+        out.push(rawLine);
+      }
+      continue;
+    }
+
+    // Otherwise: a new path-header line. Strip any `[def]` / `[hot]` /
+    // `[warm]` / `[frequent]` suffix before normalising — mirrors the
+    // header parsing in `parseTextMatchOutput` so acceptance is decided
+    // against the same relative-path shape `filterItems` saw.
+    const headerPath = normalizeRelative(line.replace(/\s+\[[^\]]+\]$/, ""));
+    currentAccepted = keep(headerPath);
+    if (currentAccepted) {
+      out.push(rawLine);
+    }
+  }
+
+  return out.join("\n");
+}
+
 function parseTextMatchOutput(text: string, persistenceRoot: string) {
   const items: Array<{
     path: string;
@@ -331,6 +415,48 @@ function parseTextMatchOutput(text: string, persistenceRoot: string) {
   return { items, summary };
 }
 
+/**
+ * If `filterItems` dropped any relative paths returned by fff-mcp, rewrite the
+ * compact text to match the filtered view. When nothing was dropped we keep
+ * the original text verbatim — this preserves the backend's exact formatting
+ * (spacing, ordering, newline style) for the common case and only rebuilds
+ * when the item/text invariant would otherwise break.
+ */
+function rewriteRenderedCompactIfNeeded(
+  text: string,
+  originalItems: Array<{ relativePath: string }>,
+  filteredItems: Array<{ relativePath: string }>,
+): string {
+  const survivingPaths = new Set(filteredItems.map((item) => item.relativePath));
+  const somethingDropped = originalItems.some((item) => !survivingPaths.has(item.relativePath));
+  if (!somethingDropped) {
+    return text;
+  }
+  return filterRenderedCompactText(text, (relativePath) => survivingPaths.has(relativePath));
+}
+
+/**
+ * Drop a read recommendation when its path is no longer in the item set. We
+ * deliberately leave `shownCount` / `totalCount` alone: those reflect what
+ * fff-mcp saw before our post-filter and recomputing them here would be
+ * speculative (fff-mcp's `totalCount` counts pre-truncation matches we can
+ * never observe). The rendered-text filter mirrors this decision.
+ */
+function narrowSummaryToSurvivingPaths(
+  summary: BackendSearchSummary,
+  filteredItems: Array<{ relativePath: string }>,
+): BackendSearchSummary {
+  if (!summary.readRecommendation) {
+    return summary;
+  }
+  const survivingPaths = new Set(filteredItems.map((item) => item.relativePath));
+  if (survivingPaths.has(summary.readRecommendation.relativePath)) {
+    return summary;
+  }
+  const { readRecommendation: _dropped, ...rest } = summary;
+  return rest;
+}
+
 async function callToolText(
   runtime: FffMcpRuntime,
   name: string,
@@ -427,15 +553,16 @@ export function createFffMcpStdioAdapter(): SearchBackendAdapter<FffMcpRuntime> 
               context: args.request.contextLines,
             });
             const parsed = parseTextMatchOutput(text, args.request.persistenceRoot);
+            const filteredItems = filterItems(args.request, parsed.items);
             return {
               ok: true,
               value: {
                 backendId: "fff-mcp",
                 queryKind: "search_terms",
-                items: filterItems(args.request, parsed.items),
+                items: filteredItems,
                 nextCursor: null,
-                renderedCompact: text,
-                summary: parsed.summary,
+                renderedCompact: rewriteRenderedCompactIfNeeded(text, parsed.items, filteredItems),
+                summary: narrowSummaryToSurvivingPaths(parsed.summary, filteredItems),
               },
             };
           }
@@ -456,15 +583,16 @@ export function createFffMcpStdioAdapter(): SearchBackendAdapter<FffMcpRuntime> 
                   maxResults: args.request.limit,
                 });
             const parsed = parseTextMatchOutput(text, args.request.persistenceRoot);
+            const filteredItems = filterItems(args.request, parsed.items);
             return {
               ok: true,
               value: {
                 backendId: "fff-mcp",
                 queryKind: "grep",
-                items: filterItems(args.request, parsed.items),
+                items: filteredItems,
                 nextCursor: null,
-                renderedCompact: text,
-                summary: parsed.summary,
+                renderedCompact: rewriteRenderedCompactIfNeeded(text, parsed.items, filteredItems),
+                summary: narrowSummaryToSurvivingPaths(parsed.summary, filteredItems),
               },
             };
           }
