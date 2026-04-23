@@ -465,19 +465,105 @@ async function callToolText(
   return await runtime.callTool(name, args);
 }
 
+/**
+ * Default readiness-poll deadline. Measured cold-start times for stock
+ * fff-mcp: ~0.5s for a typical personal repo (~30k files), ~5.5s for a
+ * large monorepo (~617k files). 30s gives ~5× headroom on the worst
+ * case we've observed while still failing fast when the backend is
+ * genuinely broken. Callers can tighten or extend this via
+ * `FFF_ROUTER_FFF_MCP_READY_TIMEOUT_MS` or by passing `deadlineMs`
+ * explicitly.
+ */
+export const DEFAULT_FFF_MCP_READY_TIMEOUT_MS = 30_000;
+const FFF_MCP_READY_INITIAL_DELAY_MS = 100;
+const FFF_MCP_READY_MAX_DELAY_MS = 2_000;
+const FFF_MCP_READY_BACKOFF_FACTOR = 1.5;
+
+export interface WaitForFffMcpReadyOptions {
+  /** Total budget (in ms) before we give up and throw. */
+  deadlineMs?: number;
+  /** Initial delay between polls; backs off exponentially. */
+  initialDelayMs?: number;
+  /** Upper bound for the exponential backoff between polls. */
+  maxDelayMs?: number;
+  /** Injectable `setTimeout`-style delay for tests. */
+  delay?: (ms: number) => Promise<void>;
+  /** Injectable wall-clock for tests. */
+  now?: () => number;
+}
+
+function readEnvReadyTimeoutMs(): number {
+  const raw = process.env.FFF_ROUTER_FFF_MCP_READY_TIMEOUT_MS;
+  if (!raw) {
+    return DEFAULT_FFF_MCP_READY_TIMEOUT_MS;
+  }
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return DEFAULT_FFF_MCP_READY_TIMEOUT_MS;
+  }
+  return parsed;
+}
+
+/**
+ * Poll fff-mcp until its corpus has finished indexing or the deadline
+ * elapses. Returns the last probe text on success so callers can log or
+ * forward it. On timeout, throws an error that includes the last observed
+ * indexed count (if any) and how long we waited, to make "too slow" vs
+ * "never started" debuggable from a single log line.
+ *
+ * Cold-start readiness is inferred from stock fff-mcp's `(N indexed)`
+ * preamble on `find_files` output: `(0 indexed)` means the indexer has
+ * not surfaced any files yet, anything else means it is queryable.
+ */
 export async function waitForFffMcpReady(
   callTool: (name: string, args: Record<string, unknown>) => Promise<string>,
-  delay: (ms: number) => Promise<void> = sleep,
-): Promise<void> {
-  for (const timeout of [100, 200, 300, 500, 700, 1000]) {
+  optionsOrDelay: WaitForFffMcpReadyOptions | ((ms: number) => Promise<void>) = {},
+): Promise<string> {
+  // Back-compat: the previous signature accepted a bare delay function.
+  const options: WaitForFffMcpReadyOptions =
+    typeof optionsOrDelay === "function" ? { delay: optionsOrDelay } : optionsOrDelay;
+
+  const delay = options.delay ?? sleep;
+  const now = options.now ?? Date.now;
+  const deadlineMs = options.deadlineMs ?? readEnvReadyTimeoutMs();
+  const initialDelayMs = options.initialDelayMs ?? FFF_MCP_READY_INITIAL_DELAY_MS;
+  const maxDelayMs = options.maxDelayMs ?? FFF_MCP_READY_MAX_DELAY_MS;
+
+  const started = now();
+  const deadlineAt = started + deadlineMs;
+  let nextDelay = initialDelayMs;
+  let lastIndexedCount: number | null = null;
+
+  // Always run at least one probe so a tiny `deadlineMs` still gets a
+  // shot at observing a hot cache.
+  while (true) {
     const text = await callTool("find_files", { query: "a", maxResults: 1 });
-    if (!/\(0 indexed\)/i.test(text)) {
-      return;
+    const indexedMatch = text.match(/\((\d+)\s+indexed\)/i);
+    if (!indexedMatch || Number(indexedMatch[1]) > 0) {
+      return text;
     }
-    await delay(timeout);
+    lastIndexedCount = Number(indexedMatch[1]);
+
+    const remaining = deadlineAt - now();
+    if (remaining <= 0) {
+      break;
+    }
+
+    const waitMs = Math.min(nextDelay, remaining, maxDelayMs);
+    await delay(waitMs);
+    nextDelay = Math.min(Math.ceil(nextDelay * FFF_MCP_READY_BACKOFF_FACTOR), maxDelayMs);
   }
 
-  throw new Error("fff-mcp did not finish indexing in time");
+  const waitedMs = now() - started;
+  const indexedSuffix =
+    lastIndexedCount === null ? "" : " (last probe reported " + lastIndexedCount + " indexed)";
+  throw new Error(
+    "fff-mcp did not finish indexing within " +
+      waitedMs +
+      "ms" +
+      indexedSuffix +
+      ". Raise FFF_ROUTER_FFF_MCP_READY_TIMEOUT_MS if this repository is large.",
+  );
 }
 
 export function createFffMcpStdioAdapter(): SearchBackendAdapter<FffMcpRuntime> {
@@ -517,7 +603,18 @@ export function createFffMcpStdioAdapter(): SearchBackendAdapter<FffMcpRuntime> 
         },
       };
 
-      await waitForFffMcpReady(runtime.callTool.bind(runtime));
+      // Warmup can be slow on large monorepos; any error here must tear
+      // down the spawned child, otherwise it keeps running unsupervised
+      // while the caller retries (leaking one fff-mcp per attempt).
+      // RuntimeManager.getOrStartRuntime's catch branch deletes its map
+      // entry but has no runtime handle to close, so the cleanup has to
+      // happen here before we rethrow.
+      try {
+        await waitForFffMcpReady(runtime.callTool.bind(runtime));
+      } catch (error) {
+        await Promise.resolve(runtime.close()).catch(() => {});
+        throw error;
+      }
       return runtime;
     },
     async execute(args) {

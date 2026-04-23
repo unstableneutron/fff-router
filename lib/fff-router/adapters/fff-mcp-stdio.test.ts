@@ -61,9 +61,85 @@ describe("waitForFffMcpReady", () => {
     };
     let responses = 0;
 
-    await waitForFffMcpReady(callTool, async () => {});
+    await waitForFffMcpReady(callTool, { delay: async () => {} });
 
     expect(responses).toBe(2);
+  });
+
+  test("keeps polling across a slow cold-index until it finishes", async () => {
+    // Simulate a large monorepo whose first ten probes still show
+    // `(0 indexed)` before the corpus finishes warming up. The old
+    // six-probe schedule would have bailed out here; the deadline-driven
+    // loop should keep going until either the corpus is ready or the
+    // budget runs out.
+    let probes = 0;
+    const callTool = async () => {
+      probes += 1;
+      if (probes <= 10) {
+        return "0 results (0 indexed)";
+      }
+      return "lib/fff-router/coordinator.ts git:clean";
+    };
+
+    await waitForFffMcpReady(callTool, {
+      delay: async () => {},
+      now: (() => {
+        // Monotonic fake clock that advances by 1ms per read, well under
+        // the default deadline, so the timeout branch stays inactive.
+        let t = 0;
+        return () => ++t;
+      })(),
+    });
+
+    expect(probes).toBe(11);
+  });
+
+  test("throws with context when the deadline elapses before fff-mcp reports progress", async () => {
+    const callTool = async () => "0 results (0 indexed)";
+    let t = 0;
+    const now = () => {
+      // Advance 10ms per probe so a 30ms deadline accepts ~3 probes
+      // before the timeout branch fires.
+      t += 10;
+      return t;
+    };
+
+    await expect(
+      waitForFffMcpReady(callTool, {
+        deadlineMs: 30,
+        delay: async () => {},
+        now,
+      }),
+    ).rejects.toThrow(/did not finish indexing within.*last probe reported 0 indexed/);
+  });
+
+  test("honours an explicit deadlineMs over the env default", async () => {
+    // Env var would normally expand the deadline; an explicit option
+    // must still take precedence so callers can opt into a tight budget.
+    const previous = process.env.FFF_ROUTER_FFF_MCP_READY_TIMEOUT_MS;
+    process.env.FFF_ROUTER_FFF_MCP_READY_TIMEOUT_MS = "600000";
+    try {
+      const callTool = async () => "0 results (0 indexed)";
+      let t = 0;
+      const now = () => {
+        t += 50;
+        return t;
+      };
+
+      await expect(
+        waitForFffMcpReady(callTool, {
+          deadlineMs: 10,
+          delay: async () => {},
+          now,
+        }),
+      ).rejects.toThrow(/did not finish indexing/);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.FFF_ROUTER_FFF_MCP_READY_TIMEOUT_MS;
+      } else {
+        process.env.FFF_ROUTER_FFF_MCP_READY_TIMEOUT_MS = previous;
+      }
+    }
   });
 });
 
