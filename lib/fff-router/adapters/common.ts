@@ -6,12 +6,51 @@ export function normalizeRelativePath(relativePath: string): string {
   return relativePath.replace(/\\/g, "/");
 }
 
-export function pathWithinScope(request: BackendSearchRequest, candidatePath: string): boolean {
-  if (request.fileRestriction) {
-    return candidatePath === request.fileRestriction;
+function matchesSingleEntry(
+  entry: { within: string; fileRestriction?: string },
+  candidatePath: string,
+): boolean {
+  if (entry.fileRestriction) {
+    return candidatePath === entry.fileRestriction;
   }
 
-  return candidatePath === request.within || candidatePath.startsWith(request.within + path.sep);
+  return candidatePath === entry.within || candidatePath.startsWith(entry.within + path.sep);
+}
+
+export function pathWithinScope(request: BackendSearchRequest, candidatePath: string): boolean {
+  if (
+    matchesSingleEntry(
+      {
+        within: request.within,
+        ...(request.fileRestriction !== undefined
+          ? { fileRestriction: request.fileRestriction }
+          : {}),
+      },
+      candidatePath,
+    )
+  ) {
+    return true;
+  }
+
+  // Multi-path: accept results that fall under ANY of the additional entries
+  // (union semantics — same as `grep PAT file1 file2`).
+  for (const entry of request.additionalWithinEntries ?? []) {
+    if (
+      matchesSingleEntry(
+        {
+          within: entry.resolvedWithin,
+          ...(entry.fileRestriction !== undefined
+            ? { fileRestriction: entry.fileRestriction }
+            : {}),
+        },
+        candidatePath,
+      )
+    ) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 export function matchesExtension(extensions: string[], relativePath: string): boolean {

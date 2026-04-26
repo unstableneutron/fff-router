@@ -72,14 +72,10 @@ function parseOptionalNonNegativeInt(
   return { ok: true, value };
 }
 
-export function normalizeWithin(
+function normalizeWithinString(
   value: unknown,
-  env: NodeJS.ProcessEnv = process.env,
-): Result<string | undefined, PublicError> {
-  if (value === undefined) {
-    return { ok: true, value: undefined };
-  }
-
+  env: NodeJS.ProcessEnv,
+): Result<string, PublicError> {
   if (typeof value !== "string" || value.trim() === "") {
     return invalid("within must be a non-empty string when provided");
   }
@@ -94,6 +90,50 @@ export function normalizeWithin(
   }
 
   return { ok: true, value: expanded.value };
+}
+
+/**
+ * Resolve the `within` field of a public request. Accepts `string | string[]
+ * | undefined` and always returns either `undefined` or an array of ≥ 1
+ * absolute paths so downstream code has one shape to handle. A single
+ * string becomes a length-1 array; an empty array or duplicated entries
+ * are rejected up front.
+ */
+export function normalizeWithin(
+  value: unknown,
+  env: NodeJS.ProcessEnv = process.env,
+): Result<string[] | undefined, PublicError> {
+  if (value === undefined) {
+    return { ok: true, value: undefined };
+  }
+
+  if (!Array.isArray(value)) {
+    const single = normalizeWithinString(value, env);
+    if (!single.ok) {
+      return single;
+    }
+    return { ok: true, value: [single.value] };
+  }
+
+  if (value.length === 0) {
+    return invalid("within must not be an empty array when provided");
+  }
+
+  const resolved: string[] = [];
+  const seen = new Set<string>();
+  for (const entry of value) {
+    const result = normalizeWithinString(entry, env);
+    if (!result.ok) {
+      return result;
+    }
+    if (seen.has(result.value)) {
+      return invalid(`within contains duplicate path '${result.value}'`);
+    }
+    seen.add(result.value);
+    resolved.push(result.value);
+  }
+
+  return { ok: true, value: resolved };
 }
 
 export function normalizeExtensions(input: unknown): Result<string[], PublicError> {
@@ -283,10 +323,21 @@ function rejectUnknownFields(
   return { ok: true, value: true };
 }
 
+/**
+ * `within` accepts either a single absolute path or an array of absolute
+ * paths (length ≥ 1). The multi-path form compiles to a single brace-expanded
+ * constraint at the backend, so all entries must live under the same routing
+ * target (git root or allowlisted prefix); the coordinator enforces that.
+ */
+const withinSchema = Type.Union([
+  Type.String({ minLength: 1 }),
+  Type.Array(Type.String({ minLength: 1 }), { minItems: 1 }),
+]);
+
 export const findFilesInputSchema = Type.Object(
   {
     query: Type.String({ minLength: 1 }),
-    within: Type.Optional(Type.String({ minLength: 1 })),
+    within: Type.Optional(withinSchema),
     glob: Type.Optional(Type.String({ minLength: 1 })),
     extensions: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
     exclude_paths: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
@@ -300,7 +351,7 @@ export const findFilesInputSchema = Type.Object(
 export const searchTermsInputSchema = Type.Object(
   {
     terms: Type.Array(Type.String({ minLength: 1 }), { minItems: 1 }),
-    within: Type.Optional(Type.String({ minLength: 1 })),
+    within: Type.Optional(withinSchema),
     glob: Type.Optional(Type.String({ minLength: 1 })),
     extensions: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
     exclude_paths: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
@@ -319,7 +370,7 @@ export const grepInputSchema = Type.Object(
       description:
         "Required. If true, patterns are matched as literal text (safe for code, quotes, whitespace, and regex metacharacters). If false, patterns are regex. This tool does not guess; set it explicitly.",
     }),
-    within: Type.Optional(Type.String({ minLength: 1 })),
+    within: Type.Optional(withinSchema),
     glob: Type.Optional(Type.String({ minLength: 1 })),
     case_sensitive: Type.Optional(Type.Boolean()),
     extensions: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
@@ -335,7 +386,7 @@ export const grepInputSchema = Type.Object(
 export const PUBLIC_TOOL_DEFINITIONS = [
   defineTool(
     "fff_find_files",
-    "Fuzzy file search by name/path under an already-resolved within scope. Use it when you are exploring a topic or looking for files, not when you already have a specific code identifier. Keep queries short and let glob, extensions, and exclude_paths do the path narrowing.",
+    "Fuzzy file search by name/path under an already-resolved within scope. Use it when you are exploring a topic or looking for files, not when you already have a specific code identifier. `within` accepts a single absolute path or an array of absolute paths (multi-path unions the results — same semantics as passing multiple roots to `fd`). Keep queries short and let glob, extensions, and exclude_paths do the path narrowing.",
     '{"query":"openssl header","within":"/opt/homebrew/lib","glob":"**/*.h","exclude_paths":["pkgconfig"]}',
     findFilesInputSchema,
   ),
@@ -351,8 +402,8 @@ export const PUBLIC_TOOL_DEFINITIONS = [
     : []),
   defineTool(
     "fff_grep",
-    "Search file contents under an already-resolved within scope. `literal` is REQUIRED: set literal=true for identifier searches, code fragments, or any string containing whitespace, quotes, or punctuation where regex interpretation is unwanted; set literal=false only when you need regex features (anchors, character classes, quantifiers, alternation). This tool does not guess. Use `patterns` for one or more terms; multiple entries use OR semantics. Use `glob` / `extensions` / `exclude_paths` to prefilter files aggressively.",
-    '{"patterns":["ActorAuth","actor_auth","PopulatedActorAuth"],"literal":true,"within":"src","extensions":["rs"],"exclude_paths":["tests"]}',
+    "Search file contents under an already-resolved within scope. `literal` is REQUIRED: set literal=true for identifier searches, code fragments, or any string containing whitespace, quotes, or punctuation where regex interpretation is unwanted; set literal=false only when you need regex features (anchors, character classes, quantifiers, alternation). This tool does not guess. Use `patterns` for one or more terms; multiple entries use OR semantics. `within` accepts a single absolute path or an array of absolute paths — use the array form to replace shell patterns like `grep PAT file1 file2 dirA dirB` in one call (all entries must share a routing target). Use `glob` / `extensions` / `exclude_paths` to prefilter files aggressively.",
+    '{"patterns":["ActorAuth","actor_auth","PopulatedActorAuth"],"literal":true,"within":["crates/portl-cli/Cargo.toml","Cargo.toml"]}',
     grepInputSchema,
   ),
 ] as const;
@@ -439,29 +490,17 @@ function normalizeFindFilesInput(
     return outputMode;
   }
 
-  const value: PublicFindFilesRequest =
-    within.value === undefined
-      ? {
-          tool: "fff_find_files",
-          query: query.value,
-          ...(glob.value !== undefined ? { glob: glob.value } : {}),
-          extensions: extensions.value,
-          excludePaths: excludePaths.value,
-          limit: limit.value,
-          cursor: cursor.value,
-          outputMode: outputMode.value,
-        }
-      : {
-          tool: "fff_find_files",
-          query: query.value,
-          within: within.value,
-          ...(glob.value !== undefined ? { glob: glob.value } : {}),
-          extensions: extensions.value,
-          excludePaths: excludePaths.value,
-          limit: limit.value,
-          cursor: cursor.value,
-          outputMode: outputMode.value,
-        };
+  const value: PublicFindFilesRequest = {
+    tool: "fff_find_files",
+    query: query.value,
+    ...(within.value !== undefined ? { within: within.value } : {}),
+    ...(glob.value !== undefined ? { glob: glob.value } : {}),
+    extensions: extensions.value,
+    excludePaths: excludePaths.value,
+    limit: limit.value,
+    cursor: cursor.value,
+    outputMode: outputMode.value,
+  };
 
   return {
     ok: true,
@@ -526,31 +565,18 @@ function normalizeSearchTermsInput(
     return outputMode;
   }
 
-  const value: PublicSearchTermsRequest =
-    within.value === undefined
-      ? {
-          tool: "fff_search_terms",
-          terms: terms.value,
-          ...(glob.value !== undefined ? { glob: glob.value } : {}),
-          extensions: extensions.value,
-          excludePaths: excludePaths.value,
-          contextLines: contextLines.value,
-          limit: limit.value,
-          cursor: cursor.value,
-          outputMode: outputMode.value,
-        }
-      : {
-          tool: "fff_search_terms",
-          terms: terms.value,
-          within: within.value,
-          ...(glob.value !== undefined ? { glob: glob.value } : {}),
-          extensions: extensions.value,
-          excludePaths: excludePaths.value,
-          contextLines: contextLines.value,
-          limit: limit.value,
-          cursor: cursor.value,
-          outputMode: outputMode.value,
-        };
+  const value: PublicSearchTermsRequest = {
+    tool: "fff_search_terms",
+    terms: terms.value,
+    ...(within.value !== undefined ? { within: within.value } : {}),
+    ...(glob.value !== undefined ? { glob: glob.value } : {}),
+    extensions: extensions.value,
+    excludePaths: excludePaths.value,
+    contextLines: contextLines.value,
+    limit: limit.value,
+    cursor: cursor.value,
+    outputMode: outputMode.value,
+  };
 
   return {
     ok: true,
@@ -625,35 +651,20 @@ function normalizeGrepInput(
     return outputMode;
   }
 
-  const value: PublicGrepRequest =
-    within.value === undefined
-      ? {
-          tool: "fff_grep",
-          patterns: patterns.value,
-          literal: input.literal,
-          ...(glob.value !== undefined ? { glob: glob.value } : {}),
-          caseSensitive: input.case_sensitive ?? false,
-          extensions: extensions.value,
-          excludePaths: excludePaths.value,
-          contextLines: contextLines.value,
-          limit: limit.value,
-          cursor: cursor.value,
-          outputMode: outputMode.value,
-        }
-      : {
-          tool: "fff_grep",
-          patterns: patterns.value,
-          literal: input.literal,
-          within: within.value,
-          ...(glob.value !== undefined ? { glob: glob.value } : {}),
-          caseSensitive: input.case_sensitive ?? false,
-          extensions: extensions.value,
-          excludePaths: excludePaths.value,
-          contextLines: contextLines.value,
-          limit: limit.value,
-          cursor: cursor.value,
-          outputMode: outputMode.value,
-        };
+  const value: PublicGrepRequest = {
+    tool: "fff_grep",
+    patterns: patterns.value,
+    literal: input.literal,
+    ...(within.value !== undefined ? { within: within.value } : {}),
+    ...(glob.value !== undefined ? { glob: glob.value } : {}),
+    caseSensitive: input.case_sensitive ?? false,
+    extensions: extensions.value,
+    excludePaths: excludePaths.value,
+    contextLines: contextLines.value,
+    limit: limit.value,
+    cursor: cursor.value,
+    outputMode: outputMode.value,
+  };
 
   return {
     ok: true,

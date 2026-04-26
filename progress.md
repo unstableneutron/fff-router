@@ -1,4 +1,5 @@
 ## Review
+
 - What's correct: The strict file-only config model is fully enforced. All entry points and tests correctly initialize config strictly from the `config.json{c}` file (or defaults) via `getDaemonConfig` and `loadDaemonReloadConfig`. No CLI arguments or environment variables bypass the configuration policy. The test suite passes 100%.
 - Issues, potential fixes, and preferred choice: No material issues found. I removed the dead `getBackendSelection` export in `backend-config.ts` which was improperly reading the `FFF_ROUTER_BACKEND` environment variable. The `FFF_ROUTER_FFF_MCP_BIN` env var in `fff-mcp-stdio.ts` remains as an acceptable binary-path override.
 - Note: Observations: The codebase is very clean and consistent with the file-only policy. The removal of `getBackendSelection` fully sanitizes the config logic from any legacy environment overrides.

@@ -34,7 +34,15 @@ export type PublicError = {
 };
 
 export type PublicRequestBase = {
-  within?: string;
+  /**
+   * One or more already-resolved absolute paths to search under. Omitted
+   * falls back to the caller's cwd. When set, the public API accepted
+   * either a single string or an array and normalized both into this
+   * array form so downstream code has one shape to handle. Multi-path
+   * entries (length ≥ 2) must share a routing target; the coordinator
+   * enforces that and rejects mixed roots.
+   */
+  within?: string[];
   glob?: string;
   extensions: string[];
   excludePaths: string[];
@@ -143,10 +151,25 @@ export type ResolvedWithinFromCaller = {
   resolvedWithin: string;
 };
 
-export type ValidatedWithin = {
+export type ResolvedWithinPathsFromCaller = {
+  resolvedWithinPaths: string[];
+};
+
+export type ValidatedWithinEntry = {
   resolvedWithin: string;
   basePath: string;
   fileRestriction?: string;
+};
+
+export type ValidatedWithin = ValidatedWithinEntry & {
+  /**
+   * Extra entries from a multi-path request, in the order the caller supplied
+   * them. Omitted (or empty) for single-path requests so existing adapters
+   * keep reading `resolvedWithin` / `basePath` / `fileRestriction`
+   * unchanged. A multi-path-aware adapter should treat the overall entry set
+   * as `[self, ...additionalEntries]`.
+   */
+  additionalEntries?: ValidatedWithinEntry[];
 };
 
 export type ResolvedSearchPath = {

@@ -58,7 +58,7 @@ describe("createMcpServer", () => {
       {
         tool: "fff_find_files",
         query: "router",
-        within: "/repo/src",
+        within: ["/repo/src"],
         extensions: ["ts"],
         excludePaths: [],
         limit: 20,

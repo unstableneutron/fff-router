@@ -2,10 +2,15 @@ import * as z from "zod/v4";
 import { normalizePublicToolInput, PUBLIC_TOOL_DEFINITIONS } from "./public-api";
 import type { PublicToolName, SearchCoordinator } from "./types";
 
+// `within` accepts either a single absolute path or a non-empty array of
+// absolute paths. Multi-path is expressed as an array so the MCP schema
+// stays explicit — callers don't have to know about brace-syntax tricks.
+const withinZod = z.union([z.string().min(1), z.array(z.string().min(1)).min(1)]);
+
 const zodInputShapes = {
   fff_find_files: {
     query: z.string().min(1),
-    within: z.string().optional(),
+    within: withinZod.optional(),
     extensions: z.array(z.string().min(1)).optional(),
     exclude_paths: z.array(z.string().min(1)).optional(),
     limit: z.number().int().min(0).optional(),
@@ -14,7 +19,7 @@ const zodInputShapes = {
   },
   fff_search_terms: {
     terms: z.array(z.string().min(1)).min(1),
-    within: z.string().optional(),
+    within: withinZod.optional(),
     extensions: z.array(z.string().min(1)).optional(),
     exclude_paths: z.array(z.string().min(1)).optional(),
     context_lines: z.number().int().min(0).optional(),
@@ -25,7 +30,7 @@ const zodInputShapes = {
   fff_grep: {
     patterns: z.array(z.string().min(1)).min(1),
     literal: z.boolean(),
-    within: z.string().optional(),
+    within: withinZod.optional(),
     glob: z.string().optional(),
     case_sensitive: z.boolean().optional(),
     extensions: z.array(z.string().min(1)).optional(),

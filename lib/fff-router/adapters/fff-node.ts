@@ -170,6 +170,19 @@ export function createFffNodeAdapter(): SearchBackendAdapter<FffRuntime> {
         return backendUnavailable("FFF runtime is not available");
       }
 
+      // fff-node's query DSL joins scope tokens with AND (a file must match
+      // every token to match the query), so a multi-path `within` of
+      // `{src/**,tests/**}` cannot be expressed natively — two directory
+      // tokens would require a file to live under both. Reject up front so
+      // the coordinator's fallback path can route to a backend that does
+      // handle multi-path (rg spreads paths as positional args, fff-mcp
+      // uses brace expansion).
+      if ((args.request.additionalWithinEntries ?? []).length > 0) {
+        return backendUnavailable(
+          "fff-node does not support multi-path `within`; route multi-path requests to rg or fff-mcp",
+        );
+      }
+
       if (args.request.limit === 0) {
         return success(args.request.queryKind, []);
       }

@@ -26,7 +26,7 @@ function makePublicRequest(overrides: Partial<PublicToolRequest> = {}): PublicTo
   return {
     tool: "fff_find_files",
     query: "router",
-    within: "/repo/src",
+    within: ["/repo/src"],
     extensions: [],
     excludePaths: [],
     limit: 20,
@@ -116,7 +116,7 @@ describe("createSearchCoordinator", () => {
       fallbackBackendId: "rg",
       liveConfigRef,
       runtimeManager: new RuntimeManager(),
-      validateWithin: async ({ within }) => ({
+      validateWithin: async ({ withinPaths: [within = "/missing"] }) => ({
         ok: true,
         value: { resolvedWithin: within, basePath: within },
       }),
@@ -166,7 +166,7 @@ describe("createSearchCoordinator", () => {
       primaryBackendId: "rg",
       fallbackBackendId: null,
       runtimeManager: new RuntimeManager(),
-      validateWithin: async ({ within }) => ({
+      validateWithin: async ({ withinPaths: [within = "/missing"] }) => ({
         ok: true,
         value: { resolvedWithin: within, basePath: within },
       }),
@@ -224,7 +224,7 @@ describe("createSearchCoordinator", () => {
       primaryBackendId: "rg",
       fallbackBackendId: null,
       runtimeManager: new RuntimeManager(),
-      validateWithin: async ({ within }) => ({
+      validateWithin: async ({ withinPaths: [within = "/missing"] }) => ({
         ok: true,
         value: { resolvedWithin: within, basePath: within },
       }),
@@ -264,7 +264,7 @@ describe("createSearchCoordinator", () => {
       primaryBackendId: "fff-node",
       fallbackBackendId: "rg",
       runtimeManager: new RuntimeManager(),
-      validateWithin: async ({ within }) => ({
+      validateWithin: async ({ withinPaths: [within = "/missing"] }) => ({
         ok: true,
         value: { resolvedWithin: within, basePath: within },
       }),
@@ -314,7 +314,7 @@ describe("createSearchCoordinator", () => {
       primaryBackendId: "fff-mcp",
       fallbackBackendId: null,
       runtimeManager: new RuntimeManager(),
-      validateWithin: async ({ within }) => ({
+      validateWithin: async ({ withinPaths: [within = "/missing"] }) => ({
         ok: true,
         value: { resolvedWithin: within, basePath: within },
       }),
@@ -370,7 +370,7 @@ describe("createSearchCoordinator", () => {
       primaryBackendId: "fff-mcp",
       fallbackBackendId: null,
       runtimeManager: new RuntimeManager(),
-      validateWithin: async ({ within }) => ({
+      validateWithin: async ({ withinPaths: [within = "/missing"] }) => ({
         ok: true,
         value: { resolvedWithin: within, basePath: within },
       }),
@@ -435,7 +435,7 @@ describe("createSearchCoordinator", () => {
       primaryBackendId: "fff-mcp",
       fallbackBackendId: null,
       runtimeManager: new RuntimeManager(),
-      validateWithin: async ({ within }) => ({
+      validateWithin: async ({ withinPaths: [within = "/missing"] }) => ({
         ok: true,
         value: { resolvedWithin: within, basePath: within },
       }),
@@ -503,7 +503,7 @@ describe("createSearchCoordinator", () => {
       primaryBackendId: "fff-node",
       fallbackBackendId: "rg",
       runtimeManager: new RuntimeManager(),
-      validateWithin: async ({ within }) => ({
+      validateWithin: async ({ withinPaths: [within = "/missing"] }) => ({
         ok: true,
         value: { resolvedWithin: within, basePath: within },
       }),
@@ -590,7 +590,7 @@ describe("createSearchCoordinator", () => {
       primaryBackendId: "fff-node",
       fallbackBackendId: "rg",
       runtimeManager: new RuntimeManager(),
-      validateWithin: async ({ within }) => ({
+      validateWithin: async ({ withinPaths: [within = "/missing"] }) => ({
         ok: true,
         value: { resolvedWithin: within, basePath: within },
       }),
@@ -641,7 +641,7 @@ describe("createSearchCoordinator", () => {
       primaryBackendId: "fff-node",
       fallbackBackendId: "rg",
       runtimeManager: new RuntimeManager(),
-      validateWithin: async ({ within }) => ({
+      validateWithin: async ({ withinPaths: [within = "/missing"] }) => ({
         ok: true,
         value: { resolvedWithin: within, basePath: within },
       }),
@@ -683,7 +683,7 @@ describe("createSearchCoordinator", () => {
       primaryBackendId: "fff-node",
       fallbackBackendId: "rg",
       runtimeManager: new RuntimeManager(),
-      validateWithin: async ({ within }) => ({
+      validateWithin: async ({ withinPaths: [within = "/missing"] }) => ({
         ok: true,
         value: { resolvedWithin: within, basePath: "/repo/src" },
       }),
@@ -727,7 +727,7 @@ describe("createSearchCoordinator", () => {
       primaryBackendId: "fff-node",
       fallbackBackendId: "rg",
       runtimeManager: new RuntimeManager(),
-      validateWithin: async ({ within }) => ({
+      validateWithin: async ({ withinPaths: [within = "/missing"] }) => ({
         ok: true,
         value: { resolvedWithin: within, basePath: "/repo/Vendor/libghostty/include" },
       }),
@@ -743,7 +743,7 @@ describe("createSearchCoordinator", () => {
 
     const result = await coordinator.execute(
       makePublicRequest({
-        within: "/repo/Vendor/libghostty/include",
+        within: ["/repo/Vendor/libghostty/include"],
         excludePaths: ["generated"],
       }),
     );
@@ -794,7 +794,7 @@ describe("createSearchCoordinator", () => {
       primaryBackendId: "fff-node",
       fallbackBackendId: "rg",
       runtimeManager,
-      validateWithin: async ({ within }) => ({
+      validateWithin: async ({ withinPaths: [within = "/missing"] }) => ({
         ok: true,
         value: { resolvedWithin: within, basePath: within },
       }),
@@ -851,7 +851,7 @@ describe("createSearchCoordinator", () => {
       primaryBackendId: "fff-node",
       fallbackBackendId: "rg",
       runtimeManager: new RuntimeManager(),
-      validateWithin: async ({ within }) => ({
+      validateWithin: async ({ withinPaths: [within = "/missing"] }) => ({
         ok: true,
         value: { resolvedWithin: within, basePath: within },
       }),
@@ -895,7 +895,7 @@ describe("createSearchCoordinator", () => {
       primaryBackendId: "fff-node",
       fallbackBackendId: "rg",
       runtimeManager: new RuntimeManager(),
-      validateWithin: async ({ within }) => ({
+      validateWithin: async ({ withinPaths: [within = "/missing"] }) => ({
         ok: true,
         value: { resolvedWithin: within, basePath: within },
       }),
@@ -921,7 +921,7 @@ describe("createSearchCoordinator", () => {
       }),
     });
 
-    const result = await coordinator.execute(makePublicRequest({ within: "/allow/pkg-a" }));
+    const result = await coordinator.execute(makePublicRequest({ within: ["/allow/pkg-a"] }));
 
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error("expected success");
@@ -954,7 +954,7 @@ describe("createSearchCoordinator", () => {
       primaryBackendId: "fff-node",
       fallbackBackendId: "rg",
       runtimeManager: new RuntimeManager(),
-      validateWithin: async ({ within }) => ({
+      validateWithin: async ({ withinPaths: [within = "/missing"] }) => ({
         ok: true,
         value: { resolvedWithin: within, basePath: within },
       }),
@@ -1006,7 +1006,7 @@ describe("createSearchCoordinator", () => {
       primaryBackendId: "fff-node",
       fallbackBackendId: "rg",
       runtimeManager: new RuntimeManager(),
-      validateWithin: async ({ within: _within }) => ({
+      validateWithin: async ({ withinPaths: _withinPaths }) => ({
         ok: true,
         value: {
           resolvedWithin: "/repo/src/router.ts",
@@ -1053,5 +1053,180 @@ describe("createSearchCoordinator", () => {
     expect(invalid.ok).toBe(false);
     if (invalid.ok) throw new Error("expected failure");
     expect(invalid.error.code).toBe("INVALID_REQUEST");
+  });
+
+  test("multi-path within routes every entry through the backend adapter", async () => {
+    // End-to-end: public request with three file paths under the same git
+    // root. The coordinator must validate each entry, confirm they share
+    // a routing target, and hand the backend a request with one primary
+    // plus two `additionalWithinEntries`.
+    const liveConfigRef = createCoordinatorRuntimeConfigRef({
+      config,
+      primaryBackendId: "fff-mcp",
+      fallbackBackendId: "rg",
+    });
+    const primary = makeAdapter({
+      backendId: "fff-mcp",
+      execute: async (request) => ({
+        ok: true,
+        value: {
+          backendId: "fff-mcp",
+          queryKind: request.queryKind,
+          items: [
+            {
+              path: "/repo/Cargo.toml",
+              relativePath: "Cargo.toml",
+              line: 1,
+              text: 'rustls = "0.23"',
+            },
+          ],
+          nextCursor: null,
+        },
+      }),
+    });
+
+    const coordinator = createSearchCoordinator({
+      config,
+      adapters: {
+        "fff-mcp": primary.adapter,
+        rg: makeAdapter({
+          backendId: "rg",
+          execute: async () => ({
+            ok: true,
+            value: { backendId: "rg", queryKind: "grep", items: [], nextCursor: null },
+          }),
+        }).adapter,
+      },
+      primaryBackendId: "fff-mcp",
+      fallbackBackendId: "rg",
+      liveConfigRef,
+      runtimeManager: new RuntimeManager(),
+      validateWithin: async ({ withinPaths }) => {
+        const entries = withinPaths.map((p) => ({
+          resolvedWithin: p,
+          basePath: p.endsWith(".toml") ? p.replace(/\/[^/]+$/, "") : p,
+          ...(p.endsWith(".toml") ? { fileRestriction: p } : {}),
+        }));
+        const [head, ...rest] = entries as [
+          (typeof entries)[number],
+          ...(typeof entries)[number][],
+        ];
+        return {
+          ok: true,
+          value: {
+            resolvedWithin: head.resolvedWithin,
+            basePath: head.basePath,
+            ...(head.fileRestriction !== undefined
+              ? { fileRestriction: head.fileRestriction }
+              : {}),
+            ...(rest.length > 0 ? { additionalEntries: rest } : {}),
+          },
+        };
+      },
+      resolveRoutingPath: async (within) => ({
+        ok: true,
+        value: {
+          realPath: within,
+          statType: within.endsWith(".toml") ? "file" : "directory",
+          gitRoot: "/repo",
+        },
+      }),
+    });
+
+    const result = await coordinator.execute(
+      makePublicRequest({
+        tool: "fff_grep",
+        patterns: ["rustls"],
+        literal: true,
+        caseSensitive: false,
+        contextLines: 0,
+        within: [
+          "/repo/crates/portl-cli/Cargo.toml",
+          "/repo/crates/portl-agent/Cargo.toml",
+          "/repo/Cargo.toml",
+        ],
+      }),
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected success");
+
+    // Primary adapter must have received one backend call with both extras.
+    expect(primary.calls).toHaveLength(1);
+    const backendReq = primary.calls[0]!;
+    expect(backendReq.additionalWithinEntries).toHaveLength(2);
+    expect(backendReq.additionalWithinEntries?.map((e) => e.resolvedWithin)).toEqual([
+      "/repo/crates/portl-agent/Cargo.toml",
+      "/repo/Cargo.toml",
+    ]);
+  });
+
+  test("multi-path within rejects entries that live in different routing targets", async () => {
+    // Two paths, different git roots — coordinator must error out up front
+    // because one backend call can't operate across two persistence roots.
+    const liveConfigRef = createCoordinatorRuntimeConfigRef({
+      config,
+      primaryBackendId: "fff-mcp",
+      fallbackBackendId: "rg",
+    });
+    const primary = makeAdapter({
+      backendId: "fff-mcp",
+      execute: async () => ({
+        ok: true,
+        value: { backendId: "fff-mcp", queryKind: "grep", items: [], nextCursor: null },
+      }),
+    });
+
+    const coordinator = createSearchCoordinator({
+      config,
+      adapters: {
+        "fff-mcp": primary.adapter,
+        rg: makeAdapter({
+          backendId: "rg",
+          execute: async () => ({
+            ok: true,
+            value: { backendId: "rg", queryKind: "grep", items: [], nextCursor: null },
+          }),
+        }).adapter,
+      },
+      primaryBackendId: "fff-mcp",
+      fallbackBackendId: "rg",
+      liveConfigRef,
+      runtimeManager: new RuntimeManager(),
+      validateWithin: async ({ withinPaths }) => {
+        const [head, ...rest] = withinPaths.map((p) => ({ resolvedWithin: p, basePath: p })) as [
+          { resolvedWithin: string; basePath: string },
+          ...{ resolvedWithin: string; basePath: string }[],
+        ];
+        return {
+          ok: true,
+          value: {
+            resolvedWithin: head.resolvedWithin,
+            basePath: head.basePath,
+            ...(rest.length > 0 ? { additionalEntries: rest } : {}),
+          },
+        };
+      },
+      // Return a different gitRoot per request so the coordinator's
+      // cross-entry check trips.
+      resolveRoutingPath: async (within) => ({
+        ok: true,
+        value: {
+          realPath: within,
+          statType: "directory",
+          gitRoot: within.startsWith("/repo-a") ? "/repo-a" : "/repo-b",
+        },
+      }),
+    });
+
+    const result = await coordinator.execute(
+      makePublicRequest({ within: ["/repo-a/src", "/repo-b/src"] }),
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected failure");
+    expect(result.error.code).toBe("INVALID_REQUEST");
+    expect(result.error.message).toContain("share a routing target");
+    // Primary adapter must NOT have been called when routing enforcement
+    // fails — no partial state.
+    expect(primary.calls).toHaveLength(0);
   });
 });

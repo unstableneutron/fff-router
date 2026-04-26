@@ -54,7 +54,7 @@ function makeCoordinator(): SearchCoordinator {
         ok: true,
         value: {
           mode: "compact",
-          base_path: request.within || "/repo",
+          base_path: request.within?.[0] ?? "/repo",
           next_cursor: null,
           items: [],
         },

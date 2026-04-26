@@ -53,18 +53,18 @@ function toCoordinatorRuntimeConfigRef(env: NodeJS.ProcessEnv): CoordinatorRunti
 function makeCoordinator(liveConfig: CoordinatorRuntimeConfigRef): SearchCoordinator {
   return {
     async execute(request): Promise<SearchCoordinatorResult> {
-      if (!request.within) {
+      const primary = request.within?.[0];
+      if (!primary) {
         throw new Error("within is required");
       }
 
       const backendId = liveConfig.current.primaryBackendId;
-      const itemPath =
-        backendId === "rg" ? `${request.within}/from-rg.ts` : `${request.within}/from-fff-node.ts`;
+      const itemPath = backendId === "rg" ? `${primary}/from-rg.ts` : `${primary}/from-fff-node.ts`;
       return {
         ok: true,
         value: {
           mode: "json",
-          base_path: request.within,
+          base_path: primary,
           next_cursor: null,
           items: [{ path: itemPath, absolute_path: itemPath }],
           backend_used: backendId,
@@ -80,7 +80,7 @@ function makeRequest(within: string): PublicToolRequest {
   return {
     tool: "fff_find_files",
     query: "router",
-    within,
+    within: [within],
     extensions: [],
     excludePaths: [],
     limit: 20,

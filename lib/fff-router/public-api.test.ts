@@ -45,7 +45,7 @@ describe("public-api", () => {
     expect(result.value).toEqual({
       tool: "fff_find_files",
       query: "router",
-      within: "/tmp/project/src",
+      within: ["/tmp/project/src"],
       glob: "**/*.ts",
       extensions: ["ts", "tsx"],
       excludePaths: ["dist", "src/generated"],
@@ -74,7 +74,7 @@ describe("public-api", () => {
       tool: "fff_grep",
       patterns: ["plan(Request)?", "build(Request)?"],
       literal: false,
-      within: "/tmp/project/lib",
+      within: ["/tmp/project/lib"],
       glob: "**/*.ts",
       caseSensitive: true,
       extensions: [],
@@ -274,19 +274,19 @@ describe("public-api", () => {
   test("expands HOME-based direct-MCP within values", () => {
     expect(normalizeWithin("~/.config", { HOME: "/home/tester" } as NodeJS.ProcessEnv)).toEqual({
       ok: true,
-      value: "/home/tester/.config",
+      value: ["/home/tester/.config"],
     });
 
     expect(normalizeWithin("$HOME/.config", { HOME: "/home/tester" } as NodeJS.ProcessEnv)).toEqual(
       {
         ok: true,
-        value: "/home/tester/.config",
+        value: ["/home/tester/.config"],
       },
     );
 
     expect(normalizeWithin("${HOME}/src", { HOME: "/home/tester" } as NodeJS.ProcessEnv)).toEqual({
       ok: true,
-      value: "/home/tester/src",
+      value: ["/home/tester/src"],
     });
   });
 
