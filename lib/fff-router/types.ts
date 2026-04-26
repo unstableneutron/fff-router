@@ -34,7 +34,19 @@ export type PublicError = {
 };
 
 export type PublicRequestBase = {
+  /**
+   * Single resolved within, set only for the single-path form. Multi-path
+   * requests leave this undefined and populate `withinPaths` instead —
+   * mutually exclusive so adapters can branch on presence, not content.
+   */
   within?: string;
+  /**
+   * Multi-path within. Set only for the multi-path form (length ≥ 2).
+   * Every entry is an already-resolved absolute path and must share a
+   * routing target with the others; the coordinator validates that up
+   * front and errors out on mixed persistence roots.
+   */
+  withinPaths?: string[];
   glob?: string;
   extensions: string[];
   excludePaths: string[];
@@ -143,10 +155,25 @@ export type ResolvedWithinFromCaller = {
   resolvedWithin: string;
 };
 
-export type ValidatedWithin = {
+export type ResolvedWithinPathsFromCaller = {
+  resolvedWithinPaths: string[];
+};
+
+export type ValidatedWithinEntry = {
   resolvedWithin: string;
   basePath: string;
   fileRestriction?: string;
+};
+
+export type ValidatedWithin = ValidatedWithinEntry & {
+  /**
+   * Extra entries from a multi-path request, in the order the caller supplied
+   * them. Omitted (or empty) for single-path requests so existing adapters
+   * keep reading `resolvedWithin` / `basePath` / `fileRestriction`
+   * unchanged. A multi-path-aware adapter should treat the overall entry set
+   * as `[self, ...additionalEntries]`.
+   */
+  additionalEntries?: ValidatedWithinEntry[];
 };
 
 export type ResolvedSearchPath = {

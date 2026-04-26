@@ -96,6 +96,63 @@ export function normalizeWithin(
   return { ok: true, value: expanded.value };
 }
 
+/**
+ * Resolve the `within` field of a public request into either a single
+ * absolute path or a multi-path array. Accepts `string | string[]` but
+ * treats a single-element array as the single-path form so callers don't
+ * accidentally go through the multi-path code path just because they
+ * happened to wrap a scalar. Array of length 0 is rejected — `within`
+ * must either be omitted or supply ≥ 1 usable path.
+ */
+export function normalizeWithinOrWithinPaths(
+  value: unknown,
+  env: NodeJS.ProcessEnv = process.env,
+): Result<{ within?: string; withinPaths?: string[] }, PublicError> {
+  if (value === undefined) {
+    return { ok: true, value: {} };
+  }
+
+  if (Array.isArray(value)) {
+    if (value.length === 0) {
+      return invalid("within must not be an empty array when provided");
+    }
+
+    const resolved: string[] = [];
+    for (const entry of value) {
+      const result = normalizeWithin(entry, env);
+      if (!result.ok) {
+        return result;
+      }
+      if (result.value === undefined) {
+        return invalid("within array must contain only non-empty strings");
+      }
+      resolved.push(result.value);
+    }
+
+    if (resolved.length === 1) {
+      return { ok: true, value: { within: resolved[0] } };
+    }
+
+    // Reject trivially-duplicate entries so the downstream constraint
+    // compiler doesn't emit `{foo,foo}` and callers notice the typo.
+    const seen = new Set<string>();
+    for (const entry of resolved) {
+      if (seen.has(entry)) {
+        return invalid(`within contains duplicate path '${entry}'`);
+      }
+      seen.add(entry);
+    }
+
+    return { ok: true, value: { withinPaths: resolved } };
+  }
+
+  const single = normalizeWithin(value, env);
+  if (!single.ok) {
+    return single;
+  }
+  return { ok: true, value: single.value === undefined ? {} : { within: single.value } };
+}
+
 export function normalizeExtensions(input: unknown): Result<string[], PublicError> {
   if (input === undefined) {
     return { ok: true, value: [] };
@@ -283,10 +340,21 @@ function rejectUnknownFields(
   return { ok: true, value: true };
 }
 
+/**
+ * `within` accepts either a single absolute path or an array of absolute
+ * paths (length ≥ 1). The multi-path form compiles to a single brace-expanded
+ * constraint at the backend, so all entries must live under the same routing
+ * target (git root or allowlisted prefix); the coordinator enforces that.
+ */
+const withinSchema = Type.Union([
+  Type.String({ minLength: 1 }),
+  Type.Array(Type.String({ minLength: 1 }), { minItems: 1 }),
+]);
+
 export const findFilesInputSchema = Type.Object(
   {
     query: Type.String({ minLength: 1 }),
-    within: Type.Optional(Type.String({ minLength: 1 })),
+    within: Type.Optional(withinSchema),
     glob: Type.Optional(Type.String({ minLength: 1 })),
     extensions: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
     exclude_paths: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
@@ -300,7 +368,7 @@ export const findFilesInputSchema = Type.Object(
 export const searchTermsInputSchema = Type.Object(
   {
     terms: Type.Array(Type.String({ minLength: 1 }), { minItems: 1 }),
-    within: Type.Optional(Type.String({ minLength: 1 })),
+    within: Type.Optional(withinSchema),
     glob: Type.Optional(Type.String({ minLength: 1 })),
     extensions: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
     exclude_paths: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
@@ -319,7 +387,7 @@ export const grepInputSchema = Type.Object(
       description:
         "Required. If true, patterns are matched as literal text (safe for code, quotes, whitespace, and regex metacharacters). If false, patterns are regex. This tool does not guess; set it explicitly.",
     }),
-    within: Type.Optional(Type.String({ minLength: 1 })),
+    within: Type.Optional(withinSchema),
     glob: Type.Optional(Type.String({ minLength: 1 })),
     case_sensitive: Type.Optional(Type.Boolean()),
     extensions: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
@@ -404,7 +472,7 @@ function normalizeFindFilesInput(
     return query;
   }
 
-  const within = normalizeWithin(input.within);
+  const within = normalizeWithinOrWithinPaths(input.within);
   if (!within.ok) {
     return within;
   }
@@ -439,29 +507,18 @@ function normalizeFindFilesInput(
     return outputMode;
   }
 
-  const value: PublicFindFilesRequest =
-    within.value === undefined
-      ? {
-          tool: "fff_find_files",
-          query: query.value,
-          ...(glob.value !== undefined ? { glob: glob.value } : {}),
-          extensions: extensions.value,
-          excludePaths: excludePaths.value,
-          limit: limit.value,
-          cursor: cursor.value,
-          outputMode: outputMode.value,
-        }
-      : {
-          tool: "fff_find_files",
-          query: query.value,
-          within: within.value,
-          ...(glob.value !== undefined ? { glob: glob.value } : {}),
-          extensions: extensions.value,
-          excludePaths: excludePaths.value,
-          limit: limit.value,
-          cursor: cursor.value,
-          outputMode: outputMode.value,
-        };
+  const value: PublicFindFilesRequest = {
+    tool: "fff_find_files",
+    query: query.value,
+    ...(within.value.within !== undefined ? { within: within.value.within } : {}),
+    ...(within.value.withinPaths !== undefined ? { withinPaths: within.value.withinPaths } : {}),
+    ...(glob.value !== undefined ? { glob: glob.value } : {}),
+    extensions: extensions.value,
+    excludePaths: excludePaths.value,
+    limit: limit.value,
+    cursor: cursor.value,
+    outputMode: outputMode.value,
+  };
 
   return {
     ok: true,
@@ -482,7 +539,7 @@ function normalizeSearchTermsInput(
     return terms;
   }
 
-  const within = normalizeWithin(input.within);
+  const within = normalizeWithinOrWithinPaths(input.within);
   if (!within.ok) {
     return within;
   }
@@ -526,31 +583,19 @@ function normalizeSearchTermsInput(
     return outputMode;
   }
 
-  const value: PublicSearchTermsRequest =
-    within.value === undefined
-      ? {
-          tool: "fff_search_terms",
-          terms: terms.value,
-          ...(glob.value !== undefined ? { glob: glob.value } : {}),
-          extensions: extensions.value,
-          excludePaths: excludePaths.value,
-          contextLines: contextLines.value,
-          limit: limit.value,
-          cursor: cursor.value,
-          outputMode: outputMode.value,
-        }
-      : {
-          tool: "fff_search_terms",
-          terms: terms.value,
-          within: within.value,
-          ...(glob.value !== undefined ? { glob: glob.value } : {}),
-          extensions: extensions.value,
-          excludePaths: excludePaths.value,
-          contextLines: contextLines.value,
-          limit: limit.value,
-          cursor: cursor.value,
-          outputMode: outputMode.value,
-        };
+  const value: PublicSearchTermsRequest = {
+    tool: "fff_search_terms",
+    terms: terms.value,
+    ...(within.value.within !== undefined ? { within: within.value.within } : {}),
+    ...(within.value.withinPaths !== undefined ? { withinPaths: within.value.withinPaths } : {}),
+    ...(glob.value !== undefined ? { glob: glob.value } : {}),
+    extensions: extensions.value,
+    excludePaths: excludePaths.value,
+    contextLines: contextLines.value,
+    limit: limit.value,
+    cursor: cursor.value,
+    outputMode: outputMode.value,
+  };
 
   return {
     ok: true,
@@ -577,7 +622,7 @@ function normalizeGrepInput(
     );
   }
 
-  const within = normalizeWithin(input.within);
+  const within = normalizeWithinOrWithinPaths(input.within);
   if (!within.ok) {
     return within;
   }
@@ -625,35 +670,21 @@ function normalizeGrepInput(
     return outputMode;
   }
 
-  const value: PublicGrepRequest =
-    within.value === undefined
-      ? {
-          tool: "fff_grep",
-          patterns: patterns.value,
-          literal: input.literal,
-          ...(glob.value !== undefined ? { glob: glob.value } : {}),
-          caseSensitive: input.case_sensitive ?? false,
-          extensions: extensions.value,
-          excludePaths: excludePaths.value,
-          contextLines: contextLines.value,
-          limit: limit.value,
-          cursor: cursor.value,
-          outputMode: outputMode.value,
-        }
-      : {
-          tool: "fff_grep",
-          patterns: patterns.value,
-          literal: input.literal,
-          within: within.value,
-          ...(glob.value !== undefined ? { glob: glob.value } : {}),
-          caseSensitive: input.case_sensitive ?? false,
-          extensions: extensions.value,
-          excludePaths: excludePaths.value,
-          contextLines: contextLines.value,
-          limit: limit.value,
-          cursor: cursor.value,
-          outputMode: outputMode.value,
-        };
+  const value: PublicGrepRequest = {
+    tool: "fff_grep",
+    patterns: patterns.value,
+    literal: input.literal,
+    ...(within.value.within !== undefined ? { within: within.value.within } : {}),
+    ...(within.value.withinPaths !== undefined ? { withinPaths: within.value.withinPaths } : {}),
+    ...(glob.value !== undefined ? { glob: glob.value } : {}),
+    caseSensitive: input.case_sensitive ?? false,
+    extensions: extensions.value,
+    excludePaths: excludePaths.value,
+    contextLines: contextLines.value,
+    limit: limit.value,
+    cursor: cursor.value,
+    outputMode: outputMode.value,
+  };
 
   return {
     ok: true,
