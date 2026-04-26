@@ -7,7 +7,7 @@ import type {
 } from "./adapters/types";
 import { planRoutingLifecycle } from "./lifecycle";
 import { resolveSearchPath } from "./resolve-path";
-import { validateResolvedWithin, validateResolvedWithinPaths } from "./resolve-within";
+import { validateResolvedWithinPaths } from "./resolve-within";
 import type { RuntimeManager } from "./runtime-manager";
 import type {
   DaemonRegistryState,
@@ -39,8 +39,7 @@ type CoordinatorDeps = {
   fallbackBackendId: SearchBackendId | null;
   runtimeManager: RuntimeManager<any>;
   liveConfigRef?: CoordinatorRuntimeConfigRef;
-  validateWithin?: typeof validateResolvedWithin;
-  validateWithinPaths?: typeof validateResolvedWithinPaths;
+  validateWithin?: typeof validateResolvedWithinPaths;
   resolveRoutingPath?: typeof resolveSearchPath;
   planLifecycle?: typeof planRoutingLifecycle;
   now?: () => number;
@@ -272,14 +271,12 @@ export class SearchCoordinatorImpl implements SearchCoordinator {
   private planningLocked = false;
   private planningWaiters: Array<() => void> = [];
   private readonly validateWithin;
-  private readonly validateWithinPaths;
   private readonly resolveRoutingPath;
   private readonly planLifecycle;
   private readonly now;
 
   constructor(private readonly deps: CoordinatorDeps) {
-    this.validateWithin = deps.validateWithin ?? validateResolvedWithin;
-    this.validateWithinPaths = deps.validateWithinPaths ?? validateResolvedWithinPaths;
+    this.validateWithin = deps.validateWithin ?? validateResolvedWithinPaths;
     this.resolveRoutingPath = deps.resolveRoutingPath ?? resolveSearchPath;
     this.planLifecycle = deps.planLifecycle ?? planRoutingLifecycle;
     this.now = deps.now ?? Date.now;
@@ -453,11 +450,8 @@ export class SearchCoordinatorImpl implements SearchCoordinator {
   }
 
   async execute(request: PublicToolRequest): Promise<SearchCoordinatorResult> {
-    if (!request.within && !request.withinPaths) {
+    if (!request.within || request.within.length === 0) {
       return invalid("within must be resolved client-side before reaching the coordinator");
-    }
-    if (request.within && request.withinPaths) {
-      return invalid("within and withinPaths are mutually exclusive");
     }
 
     const queryKind = queryKindForRequest(request);
@@ -473,10 +467,7 @@ export class SearchCoordinatorImpl implements SearchCoordinator {
       };
     }
 
-    const validatedWithin = request.withinPaths
-      ? await this.validateWithinPaths({ withinPaths: request.withinPaths })
-      : // biome-ignore lint/style/noNonNullAssertion: the branch above guarantees one of the two is set.
-        await this.validateWithin({ within: request.within! });
+    const validatedWithin = await this.validateWithin({ withinPaths: request.within });
     if (!validatedWithin.ok) {
       return validatedWithin;
     }

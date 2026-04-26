@@ -35,18 +35,14 @@ export type PublicError = {
 
 export type PublicRequestBase = {
   /**
-   * Single resolved within, set only for the single-path form. Multi-path
-   * requests leave this undefined and populate `withinPaths` instead —
-   * mutually exclusive so adapters can branch on presence, not content.
+   * One or more already-resolved absolute paths to search under. Omitted
+   * falls back to the caller's cwd. When set, the public API accepted
+   * either a single string or an array and normalized both into this
+   * array form so downstream code has one shape to handle. Multi-path
+   * entries (length ≥ 2) must share a routing target; the coordinator
+   * enforces that and rejects mixed roots.
    */
-  within?: string;
-  /**
-   * Multi-path within. Set only for the multi-path form (length ≥ 2).
-   * Every entry is an already-resolved absolute path and must share a
-   * routing target with the others; the coordinator validates that up
-   * front and errors out on mixed persistence roots.
-   */
-  withinPaths?: string[];
+  within?: string[];
   glob?: string;
   extensions: string[];
   excludePaths: string[];

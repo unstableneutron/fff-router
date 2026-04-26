@@ -131,8 +131,10 @@ export async function buildWrapperInvocation(args: {
     throw new Error(resolvedWithin.error.message);
   }
 
+  // The CLI wrapper only accepts a single `--within`, so the public request's
+  // array shape always carries exactly one entry.
   const base = {
-    within: resolvedWithin.value.resolvedWithin,
+    within: [resolvedWithin.value.resolvedWithin],
     ...(parsed.common.glob ? { glob: parsed.common.glob } : {}),
     extensions: parsed.common.extensions,
     excludePaths: parsed.common.excludePaths,

@@ -1,6 +1,7 @@
 import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import type { ValidatedWithinEntry } from "../types";
 import { filterItems } from "./common";
 import type {
   BackendSearchResult,
@@ -61,25 +62,102 @@ function formatExcludeConstraint(excludePath: string): string {
     : `!${excludePath}/`;
 }
 
+/**
+ * Encode a single validated within entry into the DSL token fff-mcp uses for
+ * file-vs-directory scoping:
+ *
+ * - File entries become anchored-glob tokens `**\/rel/path/file.ts` — the
+ *   only form fff-mcp treats as an exact-file pin (bare path tokens are
+ *   fuzzy filename hints, not filters).
+ * - Directory entries become recursive-glob tokens `rel/dir/**` — trailing
+ *   `/` alone does NOT restrict to that dir's files in fff-mcp's DSL
+ *   (probing shows it matches nothing). `**` is required for the intended
+ *   "files anywhere under this dir" semantics.
+ *
+ * Returns null if the entry normalizes to the persistence root itself,
+ * meaning no scoping constraint is needed.
+ */
+function encodeWithinEntryToken(
+  entry: Pick<ValidatedWithinEntry, "basePath" | "fileRestriction">,
+  persistenceRoot: string,
+): string | null {
+  if (entry.fileRestriction) {
+    const relativeFile = normalizeRelative(path.relative(persistenceRoot, entry.fileRestriction));
+    if (!relativeFile || relativeFile === ".") {
+      return null;
+    }
+    return `**/${relativeFile}`;
+  }
+
+  const baseRelative = normalizeRelative(path.relative(persistenceRoot, entry.basePath));
+  if (!baseRelative || baseRelative === ".") {
+    return null;
+  }
+  const withoutTrailingSlash = baseRelative.replace(/\/+$/, "");
+  return `${withoutTrailingSlash}/**`;
+}
+
+/**
+ * Compile a brace-expanded within token `{tokenA,tokenB,...}` for multi-path
+ * requests. fff-mcp's constraint DSL supports brace expansion for both files
+ * and directories as long as each directory term carries a `/**\/` or `*`
+ * suffix; `encodeWithinEntryToken` handles that. Returns null if every entry
+ * collapses to the persistence root (no scoping needed).
+ */
+function compileMultiWithinConstraint(
+  entries: Array<Pick<ValidatedWithinEntry, "basePath" | "fileRestriction">>,
+  persistenceRoot: string,
+): string | null {
+  const tokens: string[] = [];
+  for (const entry of entries) {
+    const token = encodeWithinEntryToken(entry, persistenceRoot);
+    if (token !== null) {
+      tokens.push(token);
+    }
+  }
+  if (tokens.length === 0) {
+    return null;
+  }
+  if (tokens.length === 1) {
+    return tokens[0] ?? null;
+  }
+  return `{${tokens.join(",")}}`;
+}
+
 function buildConstraintTokens(request: {
   persistenceRoot: string;
   basePath: string;
   fileRestriction?: string;
+  additionalWithinEntries?: ValidatedWithinEntry[];
   glob?: string;
   extensions: string[];
   excludePaths: string[];
 }): string[] {
   const tokens: string[] = [];
-  if (request.fileRestriction) {
-    // fff-mcp's constraint DSL treats a bare path token (`deep/sub/target.ts`)
-    // as a fuzzy filename hint, not an exact-file pin. Probing against
-    // fff-mcp directly shows the anchored-glob form `**/deep/sub/target.ts`
-    // is the only reliable way to restrict matches to a single file — it
-    // selects just that path even when siblings share the basename. The
-    // adapter still post-filters via `filterRenderedCompactText` so
-    // correctness does not depend on fff-mcp honouring the glob, but
-    // emitting the tighter token keeps the backend from scanning unrelated
-    // files in the first place.
+  const additional = request.additionalWithinEntries ?? [];
+
+  if (additional.length > 0) {
+    // Multi-path: compile `{entryA,entryB,...}` from every entry (primary
+    // plus extras). fff-mcp unions the brace alternatives, which matches
+    // the union semantics of `grep PAT file1 file2 ...`.
+    const multi = compileMultiWithinConstraint(
+      [
+        {
+          basePath: request.basePath,
+          ...(request.fileRestriction !== undefined
+            ? { fileRestriction: request.fileRestriction }
+            : {}),
+        },
+        ...additional,
+      ],
+      request.persistenceRoot,
+    );
+    if (multi !== null) {
+      tokens.push(multi);
+    }
+  } else if (request.fileRestriction) {
+    // Single-file form — anchored glob. See `encodeWithinEntryToken` for
+    // the rationale (bare path tokens are fuzzy hints, not exact pins).
     const relativeFile = normalizeRelative(
       path.relative(request.persistenceRoot, request.fileRestriction),
     );
@@ -87,6 +165,7 @@ function buildConstraintTokens(request: {
       tokens.push(`**/${relativeFile}`);
     }
   } else {
+    // Single-dir form — dir-prefix token with trailing slash.
     const baseRelative = normalizeRelative(
       path.relative(request.persistenceRoot, request.basePath),
     );

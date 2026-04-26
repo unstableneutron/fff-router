@@ -72,14 +72,10 @@ function parseOptionalNonNegativeInt(
   return { ok: true, value };
 }
 
-export function normalizeWithin(
+function normalizeWithinString(
   value: unknown,
-  env: NodeJS.ProcessEnv = process.env,
-): Result<string | undefined, PublicError> {
-  if (value === undefined) {
-    return { ok: true, value: undefined };
-  }
-
+  env: NodeJS.ProcessEnv,
+): Result<string, PublicError> {
   if (typeof value !== "string" || value.trim() === "") {
     return invalid("within must be a non-empty string when provided");
   }
@@ -97,60 +93,47 @@ export function normalizeWithin(
 }
 
 /**
- * Resolve the `within` field of a public request into either a single
- * absolute path or a multi-path array. Accepts `string | string[]` but
- * treats a single-element array as the single-path form so callers don't
- * accidentally go through the multi-path code path just because they
- * happened to wrap a scalar. Array of length 0 is rejected — `within`
- * must either be omitted or supply ≥ 1 usable path.
+ * Resolve the `within` field of a public request. Accepts `string | string[]
+ * | undefined` and always returns either `undefined` or an array of ≥ 1
+ * absolute paths so downstream code has one shape to handle. A single
+ * string becomes a length-1 array; an empty array or duplicated entries
+ * are rejected up front.
  */
-export function normalizeWithinOrWithinPaths(
+export function normalizeWithin(
   value: unknown,
   env: NodeJS.ProcessEnv = process.env,
-): Result<{ within?: string; withinPaths?: string[] }, PublicError> {
+): Result<string[] | undefined, PublicError> {
   if (value === undefined) {
-    return { ok: true, value: {} };
+    return { ok: true, value: undefined };
   }
 
-  if (Array.isArray(value)) {
-    if (value.length === 0) {
-      return invalid("within must not be an empty array when provided");
+  if (!Array.isArray(value)) {
+    const single = normalizeWithinString(value, env);
+    if (!single.ok) {
+      return single;
     }
-
-    const resolved: string[] = [];
-    for (const entry of value) {
-      const result = normalizeWithin(entry, env);
-      if (!result.ok) {
-        return result;
-      }
-      if (result.value === undefined) {
-        return invalid("within array must contain only non-empty strings");
-      }
-      resolved.push(result.value);
-    }
-
-    if (resolved.length === 1) {
-      return { ok: true, value: { within: resolved[0] } };
-    }
-
-    // Reject trivially-duplicate entries so the downstream constraint
-    // compiler doesn't emit `{foo,foo}` and callers notice the typo.
-    const seen = new Set<string>();
-    for (const entry of resolved) {
-      if (seen.has(entry)) {
-        return invalid(`within contains duplicate path '${entry}'`);
-      }
-      seen.add(entry);
-    }
-
-    return { ok: true, value: { withinPaths: resolved } };
+    return { ok: true, value: [single.value] };
   }
 
-  const single = normalizeWithin(value, env);
-  if (!single.ok) {
-    return single;
+  if (value.length === 0) {
+    return invalid("within must not be an empty array when provided");
   }
-  return { ok: true, value: single.value === undefined ? {} : { within: single.value } };
+
+  const resolved: string[] = [];
+  const seen = new Set<string>();
+  for (const entry of value) {
+    const result = normalizeWithinString(entry, env);
+    if (!result.ok) {
+      return result;
+    }
+    if (seen.has(result.value)) {
+      return invalid(`within contains duplicate path '${result.value}'`);
+    }
+    seen.add(result.value);
+    resolved.push(result.value);
+  }
+
+  return { ok: true, value: resolved };
 }
 
 export function normalizeExtensions(input: unknown): Result<string[], PublicError> {
@@ -472,7 +455,7 @@ function normalizeFindFilesInput(
     return query;
   }
 
-  const within = normalizeWithinOrWithinPaths(input.within);
+  const within = normalizeWithin(input.within);
   if (!within.ok) {
     return within;
   }
@@ -510,8 +493,7 @@ function normalizeFindFilesInput(
   const value: PublicFindFilesRequest = {
     tool: "fff_find_files",
     query: query.value,
-    ...(within.value.within !== undefined ? { within: within.value.within } : {}),
-    ...(within.value.withinPaths !== undefined ? { withinPaths: within.value.withinPaths } : {}),
+    ...(within.value !== undefined ? { within: within.value } : {}),
     ...(glob.value !== undefined ? { glob: glob.value } : {}),
     extensions: extensions.value,
     excludePaths: excludePaths.value,
@@ -539,7 +521,7 @@ function normalizeSearchTermsInput(
     return terms;
   }
 
-  const within = normalizeWithinOrWithinPaths(input.within);
+  const within = normalizeWithin(input.within);
   if (!within.ok) {
     return within;
   }
@@ -586,8 +568,7 @@ function normalizeSearchTermsInput(
   const value: PublicSearchTermsRequest = {
     tool: "fff_search_terms",
     terms: terms.value,
-    ...(within.value.within !== undefined ? { within: within.value.within } : {}),
-    ...(within.value.withinPaths !== undefined ? { withinPaths: within.value.withinPaths } : {}),
+    ...(within.value !== undefined ? { within: within.value } : {}),
     ...(glob.value !== undefined ? { glob: glob.value } : {}),
     extensions: extensions.value,
     excludePaths: excludePaths.value,
@@ -622,7 +603,7 @@ function normalizeGrepInput(
     );
   }
 
-  const within = normalizeWithinOrWithinPaths(input.within);
+  const within = normalizeWithin(input.within);
   if (!within.ok) {
     return within;
   }
@@ -674,8 +655,7 @@ function normalizeGrepInput(
     tool: "fff_grep",
     patterns: patterns.value,
     literal: input.literal,
-    ...(within.value.within !== undefined ? { within: within.value.within } : {}),
-    ...(within.value.withinPaths !== undefined ? { withinPaths: within.value.withinPaths } : {}),
+    ...(within.value !== undefined ? { within: within.value } : {}),
     ...(glob.value !== undefined ? { glob: glob.value } : {}),
     caseSensitive: input.case_sensitive ?? false,
     extensions: extensions.value,
