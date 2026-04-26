@@ -1,4 +1,10 @@
-import type { Result, RuntimeRequestKey, SearchBackendId, SearchQueryKind } from "../types";
+import type {
+  Result,
+  RuntimeRequestKey,
+  SearchBackendId,
+  SearchQueryKind,
+  ValidatedWithinEntry,
+} from "../types";
 
 export type SearchBackendRuntime = {
   id: string;
@@ -14,6 +20,15 @@ export type BackendRequestBase = RuntimeRequestKey & {
   within: string;
   basePath: string;
   fileRestriction?: string;
+  /**
+   * Extra within entries for multi-path requests. Omitted (or empty) for
+   * single-path requests so existing adapters and tests that construct
+   * `BackendRequestBase` literals keep working. Multi-path-aware adapters
+   * should read `additionalWithinEntries ?? []` and branch on length;
+   * adapters that don't support multi-path should reject when the array
+   * is non-empty rather than silently dropping the extras.
+   */
+  additionalWithinEntries?: ValidatedWithinEntry[];
   glob?: string;
   extensions: string[];
   excludePaths: string[];

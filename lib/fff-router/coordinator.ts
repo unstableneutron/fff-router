@@ -7,7 +7,7 @@ import type {
 } from "./adapters/types";
 import { planRoutingLifecycle } from "./lifecycle";
 import { resolveSearchPath } from "./resolve-path";
-import { validateResolvedWithin } from "./resolve-within";
+import { validateResolvedWithin, validateResolvedWithinPaths } from "./resolve-within";
 import type { RuntimeManager } from "./runtime-manager";
 import type {
   DaemonRegistryState,
@@ -40,6 +40,7 @@ type CoordinatorDeps = {
   runtimeManager: RuntimeManager<any>;
   liveConfigRef?: CoordinatorRuntimeConfigRef;
   validateWithin?: typeof validateResolvedWithin;
+  validateWithinPaths?: typeof validateResolvedWithinPaths;
   resolveRoutingPath?: typeof resolveSearchPath;
   planLifecycle?: typeof planRoutingLifecycle;
   now?: () => number;
@@ -105,6 +106,7 @@ function buildBackendRequest(args: {
     within: args.validatedWithin.resolvedWithin,
     basePath: args.validatedWithin.basePath,
     fileRestriction: args.validatedWithin.fileRestriction,
+    additionalWithinEntries: args.validatedWithin.additionalEntries ?? [],
     ...(args.request.glob !== undefined ? { glob: args.request.glob } : {}),
     extensions: args.request.extensions,
     excludePaths: translateExcludePaths(
@@ -270,12 +272,14 @@ export class SearchCoordinatorImpl implements SearchCoordinator {
   private planningLocked = false;
   private planningWaiters: Array<() => void> = [];
   private readonly validateWithin;
+  private readonly validateWithinPaths;
   private readonly resolveRoutingPath;
   private readonly planLifecycle;
   private readonly now;
 
   constructor(private readonly deps: CoordinatorDeps) {
     this.validateWithin = deps.validateWithin ?? validateResolvedWithin;
+    this.validateWithinPaths = deps.validateWithinPaths ?? validateResolvedWithinPaths;
     this.resolveRoutingPath = deps.resolveRoutingPath ?? resolveSearchPath;
     this.planLifecycle = deps.planLifecycle ?? planRoutingLifecycle;
     this.now = deps.now ?? Date.now;
@@ -449,8 +453,11 @@ export class SearchCoordinatorImpl implements SearchCoordinator {
   }
 
   async execute(request: PublicToolRequest): Promise<SearchCoordinatorResult> {
-    if (!request.within) {
+    if (!request.within && !request.withinPaths) {
       return invalid("within must be resolved client-side before reaching the coordinator");
+    }
+    if (request.within && request.withinPaths) {
+      return invalid("within and withinPaths are mutually exclusive");
     }
 
     const queryKind = queryKindForRequest(request);
@@ -466,9 +473,10 @@ export class SearchCoordinatorImpl implements SearchCoordinator {
       };
     }
 
-    const validatedWithin = await this.validateWithin({
-      within: request.within,
-    });
+    const validatedWithin = request.withinPaths
+      ? await this.validateWithinPaths({ withinPaths: request.withinPaths })
+      : // biome-ignore lint/style/noNonNullAssertion: the branch above guarantees one of the two is set.
+        await this.validateWithin({ within: request.within! });
     if (!validatedWithin.ok) {
       return validatedWithin;
     }
@@ -495,6 +503,38 @@ export class SearchCoordinatorImpl implements SearchCoordinator {
           };
         default:
           return internalError(resolvedPath.error.message);
+      }
+    }
+
+    // All multi-path entries must share the same routing target (git root
+    // or allowlisted non-git prefix). A single fff-mcp / rg call can only
+    // operate under one persistence root, so mixing roots in one request
+    // has no natural semantics — error out up front with a clear message.
+    const additionalEntries = validatedWithin.value.additionalEntries ?? [];
+    if (additionalEntries.length > 0) {
+      for (const entry of additionalEntries) {
+        const entryPath = await this.resolveRoutingPath(entry.resolvedWithin);
+        if (!entryPath.ok) {
+          return {
+            ok: false,
+            error: {
+              code:
+                entryPath.error.code === "SEARCH_PATH_NOT_FOUND"
+                  ? "WITHIN_NOT_FOUND"
+                  : entryPath.error.code === "OUTSIDE_ALLOWED_SCOPE"
+                    ? "OUTSIDE_ALLOWED_SCOPE"
+                    : entryPath.error.code === "INVALID_REQUEST"
+                      ? "INVALID_REQUEST"
+                      : "INTERNAL_ERROR",
+              message: entryPath.error.message,
+            },
+          };
+        }
+        if (entryPath.value.gitRoot !== resolvedPath.value.gitRoot) {
+          return invalid(
+            `within array entries must share a routing target; '${entry.resolvedWithin}' resolves to a different root than '${validatedWithin.value.resolvedWithin}'`,
+          );
+        }
       }
     }
 

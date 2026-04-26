@@ -1,7 +1,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expandHomePath } from "./home-path";
-import type { PublicError, ResolvedWithinFromCaller, Result, ValidatedWithin } from "./types";
+import type {
+  PublicError,
+  ResolvedWithinFromCaller,
+  Result,
+  ValidatedWithin,
+  ValidatedWithinEntry,
+} from "./types";
 
 function invalid(message: string): Result<never, PublicError> {
   return {
@@ -93,10 +99,10 @@ export async function resolveWithinFromCaller(args: {
   };
 }
 
-export async function validateResolvedWithin(args: {
-  within: string;
-}): Promise<Result<ValidatedWithin, PublicError>> {
-  const within = validateAbsolutePath(args.within, "within");
+async function validateResolvedWithinEntry(
+  candidate: string,
+): Promise<Result<ValidatedWithinEntry, PublicError>> {
+  const within = validateAbsolutePath(candidate, "within");
   if (!within.ok) {
     return within;
   }
@@ -141,6 +147,55 @@ export async function validateResolvedWithin(args: {
       resolvedWithin,
       basePath: path.dirname(resolvedWithin),
       fileRestriction: resolvedWithin,
+    },
+  };
+}
+
+export async function validateResolvedWithin(args: {
+  within: string;
+}): Promise<Result<ValidatedWithin, PublicError>> {
+  const entry = await validateResolvedWithinEntry(args.within);
+  if (!entry.ok) {
+    return entry;
+  }
+  return { ok: true, value: entry.value };
+}
+
+/**
+ * Multi-path counterpart to `validateResolvedWithin`: resolves + validates
+ * each path independently, preserves order, and returns a `ValidatedWithin`
+ * whose primary entry is the first input (so the coordinator's existing
+ * routing / persistence-root logic can keep operating on the head entry).
+ *
+ * Downstream checks (all entries share a routing target) live in the
+ * coordinator — this function only does per-entry path resolution.
+ */
+export async function validateResolvedWithinPaths(args: {
+  withinPaths: string[];
+}): Promise<Result<ValidatedWithin, PublicError>> {
+  if (args.withinPaths.length === 0) {
+    return invalid("withinPaths must contain at least one entry");
+  }
+
+  const entries: ValidatedWithinEntry[] = [];
+  for (const candidate of args.withinPaths) {
+    const entry = await validateResolvedWithinEntry(candidate);
+    if (!entry.ok) {
+      return entry;
+    }
+    entries.push(entry.value);
+  }
+
+  const [primary, ...rest] = entries as [ValidatedWithinEntry, ...ValidatedWithinEntry[]];
+  return {
+    ok: true,
+    value: {
+      resolvedWithin: primary.resolvedWithin,
+      basePath: primary.basePath,
+      ...(primary.fileRestriction !== undefined
+        ? { fileRestriction: primary.fileRestriction }
+        : {}),
+      additionalEntries: rest,
     },
   };
 }
