@@ -345,3 +345,87 @@ describe("createRgAdapter", () => {
     expect(result.ok).toBe(true);
   });
 });
+
+describe("rg adapter multi-path within", () => {
+  // ripgrep natively accepts multiple positional path args; the adapter
+  // just has to spread them at the end of the argv. These tests pin the
+  // argv shape so a future refactor can't silently drop the extras.
+
+  test("grep multi-path appends each within path as a separate positional arg", async () => {
+    const calls: Array<{ command: string; args: string[] }> = [];
+    const adapter = createRgAdapter({
+      runCommand: async (command, args) => {
+        calls.push({ command, args });
+        return { ok: true, stdout: "" };
+      },
+    });
+
+    const request: GrepBackendRequest = {
+      ...grepRequest,
+      glob: undefined,
+      extensions: [],
+      excludePaths: [],
+      within: "/repo/crates/portl-cli/Cargo.toml",
+      basePath: "/repo/crates/portl-cli",
+      fileRestriction: "/repo/crates/portl-cli/Cargo.toml",
+      additionalWithinEntries: [
+        {
+          resolvedWithin: "/repo/crates/portl-agent/Cargo.toml",
+          basePath: "/repo/crates/portl-agent",
+          fileRestriction: "/repo/crates/portl-agent/Cargo.toml",
+        },
+        {
+          resolvedWithin: "/repo/Cargo.toml",
+          basePath: "/repo",
+          fileRestriction: "/repo/Cargo.toml",
+        },
+      ],
+      literal: false,
+      patterns: ["rustls"],
+    };
+
+    const result = await adapter.execute({ request });
+    expect(result.ok).toBe(true);
+
+    expect(calls).toHaveLength(1);
+    const args = calls[0]!.args;
+    // Every file-restriction path becomes its own trailing positional arg.
+    const trailingPaths = args.slice(-3);
+    expect(trailingPaths).toEqual([
+      "/repo/crates/portl-cli/Cargo.toml",
+      "/repo/crates/portl-agent/Cargo.toml",
+      "/repo/Cargo.toml",
+    ]);
+  });
+
+  test("find_files multi-path passes each target as a fd positional (relative)", async () => {
+    const calls: Array<{ args: string[] }> = [];
+    const adapter = createRgAdapter({
+      runCommand: async (_command, args) => {
+        calls.push({ args });
+        return { ok: true, stdout: "" };
+      },
+    });
+
+    const request: FindFilesBackendRequest = {
+      ...findFilesRequest,
+      glob: undefined,
+      extensions: [],
+      excludePaths: [],
+      within: "/repo/crates/portl-cli",
+      basePath: "/repo/crates/portl-cli",
+      additionalWithinEntries: [
+        { resolvedWithin: "/repo/crates/portl-agent", basePath: "/repo/crates/portl-agent" },
+      ],
+    };
+
+    const result = await adapter.execute({ request });
+    expect(result.ok).toBe(true);
+
+    expect(calls).toHaveLength(1);
+    const args = calls[0]!.args;
+    const queryIndex = args.indexOf(".");
+    expect(queryIndex).toBeGreaterThan(-1);
+    expect(args.slice(queryIndex + 1)).toEqual(["crates/portl-cli", "crates/portl-agent"]);
+  });
+});

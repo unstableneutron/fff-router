@@ -129,16 +129,32 @@ function buildGlobArgs(request: BackendSearchRequest): string[] {
   return args;
 }
 
-function buildSearchTarget(request: BackendSearchRequest): string {
-  return request.fileRestriction ?? request.within;
+/**
+ * Collect every `within` path a ripgrep / fd call should search under.
+ * ripgrep and fd both natively accept multiple positional path args and
+ * union the results, so multi-path `grep PAT file1 file2` maps 1:1 to
+ * passing `[file1, file2]` at the end of the argv. The primary entry's
+ * `fileRestriction` / `within` still takes priority (mirrors the
+ * single-path behaviour) and each additional entry contributes either
+ * its file restriction or its dir-scope within.
+ */
+function collectSearchTargets(request: BackendSearchRequest): string[] {
+  const targets: string[] = [];
+  targets.push(request.fileRestriction ?? request.within);
+  for (const entry of request.additionalWithinEntries ?? []) {
+    targets.push(entry.fileRestriction ?? entry.resolvedWithin);
+  }
+  return targets;
 }
 
-function buildFdTarget(request: BackendSearchRequest): string {
-  if (request.fileRestriction) {
-    return toRelativePath(request.persistenceRoot, request.fileRestriction);
-  }
+function buildSearchTargets(request: BackendSearchRequest): string[] {
+  return collectSearchTargets(request);
+}
 
-  return toRelativePath(request.persistenceRoot, request.within) || ".";
+function buildFdTargets(request: BackendSearchRequest): string[] {
+  return collectSearchTargets(request).map(
+    (absolute) => toRelativePath(request.persistenceRoot, absolute) || ".",
+  );
 }
 
 function fuzzyMatch(relativePath: string, query: string): boolean {
@@ -257,7 +273,7 @@ export function createRgAdapter(deps?: { runCommand?: RunCommand }): SearchBacke
               request.persistenceRoot,
               ...buildGlobArgs(request),
               ".",
-              buildFdTarget(request),
+              ...buildFdTargets(request),
             ],
             request.persistenceRoot,
           );
@@ -298,7 +314,7 @@ export function createRgAdapter(deps?: { runCommand?: RunCommand }): SearchBacke
               String(request.contextLines),
               ...buildGlobArgs(request),
               ...request.terms.flatMap((term) => ["-e", term] as const),
-              buildSearchTarget(request),
+              ...buildSearchTargets(request),
             ],
             request.persistenceRoot,
           );
@@ -338,7 +354,7 @@ export function createRgAdapter(deps?: { runCommand?: RunCommand }): SearchBacke
             rgArgs.push("--fixed-strings");
           }
           rgArgs.push(...request.patterns.flatMap((pattern) => ["-e", pattern] as const));
-          rgArgs.push(buildSearchTarget(request));
+          rgArgs.push(...buildSearchTargets(request));
 
           const command = await runCommand("rg", rgArgs, request.persistenceRoot);
           if (!command.ok) {

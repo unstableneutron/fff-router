@@ -716,3 +716,152 @@ describe("filterRenderedCompactText", () => {
     expect(out).toBe(synthetic);
   });
 });
+
+describe("createFffMcpStdioAdapter multi-path within", () => {
+  // The adapter compiles multi-path within into a single brace-expanded
+  // constraint token and sends ONE call to fff-mcp. We capture the outgoing
+  // constraint string to assert shape without needing a live backend.
+  function captureConstraint(): {
+    runtime: Parameters<
+      NonNullable<ReturnType<typeof createFffMcpStdioAdapter>["startRuntime"]>
+    > extends infer _A
+      ? {
+          id: string;
+          close: () => void;
+          callTool: (name: string, args: Record<string, unknown>) => Promise<string>;
+        }
+      : never;
+    captured: { name: string; args: Record<string, unknown> }[];
+  } {
+    const captured: { name: string; args: Record<string, unknown> }[] = [];
+    return {
+      captured,
+      runtime: {
+        id: "fff-mcp::/repo",
+        close: () => {},
+        callTool: async (name, args) => {
+          captured.push({ name, args });
+          // Empty response with shownCount/totalCount absent — enough for
+          // the adapter to produce a result without us having to fake
+          // parse-compatible content.
+          return "0 matches shown\n";
+        },
+      },
+    };
+  }
+
+  test("multi-dir within compiles to a brace-expanded {dirA/**,dirB/**} constraint", async () => {
+    const adapter = createFffMcpStdioAdapter();
+    const { runtime, captured } = captureConstraint();
+
+    const request: GrepBackendRequest = {
+      backendId: "fff-mcp",
+      persistenceRoot: "/repo",
+      queryKind: "grep",
+      within: "/repo/crates/portl-cli",
+      basePath: "/repo/crates/portl-cli",
+      additionalWithinEntries: [
+        { resolvedWithin: "/repo/crates/portl-agent", basePath: "/repo/crates/portl-agent" },
+      ],
+      extensions: [],
+      excludePaths: [],
+      limit: 5,
+      patterns: ["rustls"],
+      literal: true,
+      caseSensitive: false,
+      contextLines: 0,
+    };
+
+    const result = await adapter.execute({ request, runtime });
+    expect(result.ok).toBe(true);
+
+    expect(captured).toHaveLength(1);
+    // Single call, constraints field carries the brace expansion.
+    const constraints = String((captured[0]!.args as { constraints?: string }).constraints ?? "");
+    expect(constraints).toContain("{crates/portl-cli/**,crates/portl-agent/**}");
+  });
+
+  test("multi-file within compiles to {**/fileA,**/fileB} anchored-glob pins", async () => {
+    const adapter = createFffMcpStdioAdapter();
+    const { runtime, captured } = captureConstraint();
+
+    const request: GrepBackendRequest = {
+      backendId: "fff-mcp",
+      persistenceRoot: "/repo",
+      queryKind: "grep",
+      within: "/repo/crates/portl-cli/Cargo.toml",
+      basePath: "/repo/crates/portl-cli",
+      fileRestriction: "/repo/crates/portl-cli/Cargo.toml",
+      additionalWithinEntries: [
+        {
+          resolvedWithin: "/repo/Cargo.toml",
+          basePath: "/repo",
+          fileRestriction: "/repo/Cargo.toml",
+        },
+      ],
+      extensions: [],
+      excludePaths: [],
+      limit: 5,
+      patterns: ["rustls"],
+      literal: true,
+      caseSensitive: false,
+      contextLines: 0,
+    };
+
+    const result = await adapter.execute({ request, runtime });
+    expect(result.ok).toBe(true);
+
+    const constraints = String((captured[0]!.args as { constraints?: string }).constraints ?? "");
+    expect(constraints).toContain("{**/crates/portl-cli/Cargo.toml,**/Cargo.toml}");
+  });
+
+  test("mixed file + dir entries emit {**/file,dir/**} in brace", async () => {
+    const adapter = createFffMcpStdioAdapter();
+    const { runtime, captured } = captureConstraint();
+
+    const request: GrepBackendRequest = {
+      backendId: "fff-mcp",
+      persistenceRoot: "/repo",
+      queryKind: "grep",
+      within: "/repo/Cargo.toml",
+      basePath: "/repo",
+      fileRestriction: "/repo/Cargo.toml",
+      additionalWithinEntries: [
+        { resolvedWithin: "/repo/crates/portl-cli", basePath: "/repo/crates/portl-cli" },
+      ],
+      extensions: [],
+      excludePaths: [],
+      limit: 5,
+      patterns: ["rustls"],
+      literal: true,
+      caseSensitive: false,
+      contextLines: 0,
+    };
+
+    const result = await adapter.execute({ request, runtime });
+    expect(result.ok).toBe(true);
+
+    const constraints = String((captured[0]!.args as { constraints?: string }).constraints ?? "");
+    expect(constraints).toContain("{**/Cargo.toml,crates/portl-cli/**}");
+  });
+
+  test("single-path within (no additional entries) still emits the single-path token", async () => {
+    // Regression guard: the multi-path branch should be dormant when
+    // `additionalWithinEntries` is absent or empty. Use literal so the
+    // adapter routes through multi_grep (which exposes `constraints`).
+    const adapter = createFffMcpStdioAdapter();
+    const { runtime, captured } = captureConstraint();
+
+    const literalRequest: GrepBackendRequest = {
+      ...grepRequest,
+      literal: true,
+      patterns: ["createSearchCoordinator"],
+    };
+    const result = await adapter.execute({ request: literalRequest, runtime });
+    expect(result.ok).toBe(true);
+
+    const constraints = String((captured[0]!.args as { constraints?: string }).constraints ?? "");
+    expect(constraints).not.toContain("{");
+    expect(constraints).toContain("lib/");
+  });
+});
