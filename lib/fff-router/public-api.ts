@@ -1,5 +1,7 @@
 import path from "node:path";
+import fs from "node:fs";
 import { type TSchema, Type } from "@sinclair/typebox";
+import picomatch from "picomatch";
 import { expandHomePath } from "./home-path";
 import type {
   PublicError,
@@ -16,6 +18,7 @@ import type {
 
 const EXTENSION_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._+-]*$/;
 const PATH_META_PATTERN = /[*?[\]{}!]/;
+const EXCLUDE_GLOB_META_PATTERN = /[*?[\]{}]/;
 const DEFAULT_LIMIT = 20;
 const DEFAULT_CONTEXT_LINES = 0;
 
@@ -46,6 +49,10 @@ function invalid(
 
 function containsPathMeta(value: string): boolean {
   return PATH_META_PATTERN.test(value);
+}
+
+function containsExcludeGlobMeta(value: string): boolean {
+  return EXCLUDE_GLOB_META_PATTERN.test(value);
 }
 
 function parseRequiredString(value: unknown, field: string): Result<string, PublicError> {
@@ -209,7 +216,7 @@ export function normalizeGlob(input: unknown): Result<string | undefined, Public
   return normalizeGlobPattern(input);
 }
 
-function normalizeExcludePath(entry: string): Result<string, PublicError> {
+function validateExcludePathSyntax(entry: string): Result<string, PublicError> {
   const trimmed = entry.trim().replace(/\\/g, "/");
   if (!trimmed) {
     return invalid("exclude_paths must not contain empty values");
@@ -219,8 +226,8 @@ function normalizeExcludePath(entry: string): Result<string, PublicError> {
     return invalid("exclude_paths must be relative to the resolved base path");
   }
 
-  if (containsPathMeta(trimmed)) {
-    return invalid("exclude_paths must be literal descendant paths");
+  if (trimmed.startsWith("!")) {
+    return invalid("exclude_paths entries are already exclusions; omit leading !");
   }
 
   const segments = trimmed.split("/");
@@ -235,7 +242,87 @@ function normalizeExcludePath(entry: string): Result<string, PublicError> {
   return { ok: true, value: segments.join("/") };
 }
 
-export function normalizeExcludePaths(input: unknown): Result<string[], PublicError> {
+function normalizeExcludePath(entry: string): Result<string, PublicError> {
+  const normalized = validateExcludePathSyntax(entry);
+  if (!normalized.ok) {
+    return normalized;
+  }
+
+  if (containsPathMeta(normalized.value)) {
+    return invalid("exclude_paths must be literal descendant paths");
+  }
+
+  return normalized;
+}
+
+function resolveExcludeExpansionBase(within: string[] | undefined): string | undefined {
+  const primaryWithin = within?.[0];
+  if (primaryWithin === undefined) {
+    return undefined;
+  }
+
+  try {
+    const stats = fs.statSync(primaryWithin);
+    return stats.isFile() ? path.dirname(primaryWithin) : primaryWithin;
+  } catch {
+    return primaryWithin;
+  }
+}
+
+function expandExcludeGlobPath(basePath: string, pattern: string): string[] {
+  const segments = pattern.split("/");
+
+  function expand(absDir: string, prefix: string[], remaining: string[]): string[] {
+    const [segment, ...rest] = remaining;
+    if (segment === undefined) {
+      return [prefix.join("/")];
+    }
+
+    if (!containsExcludeGlobMeta(segment)) {
+      const nextAbs = path.join(absDir, segment);
+      if (rest.length === 0) {
+        return fs.existsSync(nextAbs) ? [[...prefix, segment].join("/")] : [];
+      }
+      try {
+        if (!fs.statSync(nextAbs).isDirectory()) {
+          return [];
+        }
+      } catch {
+        return [];
+      }
+      return expand(nextAbs, [...prefix, segment], rest);
+    }
+
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(absDir, { withFileTypes: true });
+    } catch {
+      return [];
+    }
+
+    const matches = picomatch(segment, { dot: true });
+    return entries
+      .filter((entry) => matches(entry.name))
+      .sort((left, right) => left.name.localeCompare(right.name))
+      .flatMap((entry) => {
+        const nextPrefix = [...prefix, entry.name];
+        if (rest.length === 0) {
+          return [nextPrefix.join("/")];
+        }
+        if (!entry.isDirectory()) {
+          return [];
+        }
+        return expand(path.join(absDir, entry.name), nextPrefix, rest);
+      });
+  }
+
+  return expand(basePath, [], segments);
+}
+
+export function normalizeExcludePaths(
+  input: unknown,
+  within?: string[],
+): Result<string[], PublicError> {
   if (input === undefined) {
     return { ok: true, value: [] };
   }
@@ -245,17 +332,31 @@ export function normalizeExcludePaths(input: unknown): Result<string[], PublicEr
   }
 
   const normalized: string[] = [];
+  const seen = new Set<string>();
+  const expansionBase = resolveExcludeExpansionBase(within);
   for (const entry of input) {
     if (typeof entry !== "string") {
       return invalid("exclude_paths must contain only strings");
     }
 
-    const excludePath = normalizeExcludePath(entry);
+    const excludePath = expansionBase
+      ? validateExcludePathSyntax(entry)
+      : normalizeExcludePath(entry);
     if (!excludePath.ok) {
       return excludePath;
     }
 
-    normalized.push(excludePath.value);
+    const paths =
+      containsExcludeGlobMeta(excludePath.value) && expansionBase !== undefined
+        ? expandExcludeGlobPath(expansionBase, excludePath.value)
+        : [excludePath.value];
+
+    for (const pathValue of paths) {
+      if (!seen.has(pathValue)) {
+        seen.add(pathValue);
+        normalized.push(pathValue);
+      }
+    }
   }
 
   return { ok: true, value: normalized };
@@ -470,7 +571,7 @@ function normalizeFindFilesInput(
     return extensions;
   }
 
-  const excludePaths = normalizeExcludePaths(input.exclude_paths);
+  const excludePaths = normalizeExcludePaths(input.exclude_paths, within.value);
   if (!excludePaths.ok) {
     return excludePaths;
   }
@@ -536,7 +637,7 @@ function normalizeSearchTermsInput(
     return extensions;
   }
 
-  const excludePaths = normalizeExcludePaths(input.exclude_paths);
+  const excludePaths = normalizeExcludePaths(input.exclude_paths, within.value);
   if (!excludePaths.ok) {
     return excludePaths;
   }
@@ -622,7 +723,7 @@ function normalizeGrepInput(
     return extensions;
   }
 
-  const excludePaths = normalizeExcludePaths(input.exclude_paths);
+  const excludePaths = normalizeExcludePaths(input.exclude_paths, within.value);
   if (!excludePaths.ok) {
     return excludePaths;
   }

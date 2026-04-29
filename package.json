@@ -1,6 +1,6 @@
 {
   "name": "fff-router",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "bin": {
     "fff-find-files": "./dist/bin/fff-find-files.js",
     "fff-grep": "./dist/bin/fff-grep.js",

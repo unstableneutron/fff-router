@@ -1,4 +1,7 @@
 import { Value } from "@sinclair/typebox/value";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, test } from "vitest";
 import {
   findFilesInputSchema,
@@ -209,8 +212,8 @@ describe("public-api", () => {
     expect(nonNullCursor.error.code).toBe("INVALID_REQUEST");
   });
 
-  test("rejects absolute, traversing, and globbed exclude_paths", () => {
-    for (const excludePath of ["/tmp/project/dist", "../dist", "src/*"]) {
+  test("rejects absolute and traversing exclude_paths", () => {
+    for (const excludePath of ["/tmp/project/dist", "../dist"]) {
       const result = normalizePublicToolInput("fff_find_files", {
         query: "router",
         within: "/tmp/project",
@@ -222,6 +225,65 @@ describe("public-api", () => {
         throw new Error("expected failure");
       }
       expect(result.error.code).toBe("INVALID_REQUEST");
+    }
+  });
+
+  test("expands globbed exclude_paths into existing literal descendants", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "fff-router-exclude-glob-"));
+    try {
+      mkdirSync(path.join(root, "bazel-bin"));
+      mkdirSync(path.join(root, "bazel-out"));
+      mkdirSync(path.join(root, "bazel-testlogs"));
+      mkdirSync(path.join(root, "src"));
+
+      const result = normalizePublicToolInput("fff_find_files", {
+        query: "yak",
+        within: root,
+        exclude_paths: ["bazel-*", "dist", "node_modules"],
+      });
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) {
+        throw new Error("expected success");
+      }
+      expect(result.value.excludePaths).toEqual([
+        "bazel-bin",
+        "bazel-out",
+        "bazel-testlogs",
+        "dist",
+        "node_modules",
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("expands nested globbed exclude_paths relative to within", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "fff-router-nested-exclude-glob-"));
+    try {
+      mkdirSync(path.join(root, "src", "generated"), { recursive: true });
+      mkdirSync(path.join(root, "src", "fixtures"), { recursive: true });
+      mkdirSync(path.join(root, "src", "manual"), { recursive: true });
+      writeFileSync(path.join(root, "src", "generated-file.ts"), "generated");
+
+      const result = normalizePublicToolInput("fff_grep", {
+        patterns: ["Confirm"],
+        literal: true,
+        within: root,
+        exclude_paths: ["src/g*", "src/fixtures"],
+      });
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) {
+        throw new Error("expected success");
+      }
+      expect(result.value.excludePaths).toEqual([
+        "src/generated",
+        "src/generated-file.ts",
+        "src/fixtures",
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 

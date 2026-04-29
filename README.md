@@ -40,7 +40,9 @@ Where:
 - `within` is the hard scope boundary
 - `glob` is an optional include filter relative to `within`
 - `extensions` is optional suffix filtering
-- `exclude_paths` stays literal-only (no wildcard syntax)
+- `exclude_paths` excludes relative descendants; simple wildcard entries such as
+  `bazel-*` are expanded against the resolved `within` path into existing
+  literal descendants before backend execution
 
 Supported output modes:
 
