@@ -14,6 +14,7 @@ import {
 import { readDaemonMetadata, type DaemonMetadata } from "./http-daemon";
 
 type DaemonHealthMismatchKind = "protocol" | "version" | "server" | "reload";
+type VersionCompatibility = "same" | "running-newer";
 
 class DaemonHealthMismatchError extends Error {
   constructor(
@@ -133,8 +134,73 @@ async function fetchHealthMetadata(env?: NodeJS.ProcessEnv): Promise<Partial<Dae
   return payload.metadata;
 }
 
-function assertMatchingProtocolAndVersion(metadata: Partial<DaemonMetadata>): void {
+function parsePackageVersion(version: unknown): [number, number, number] | null {
+  if (typeof version !== "string") {
+    return null;
+  }
+  const match = version.match(/^v?(\d+)\.(\d+)\.(\d+)(?:[.-].*)?$/);
+  if (!match) {
+    return null;
+  }
+  return [Number(match[1]), Number(match[2]), Number(match[3])];
+}
+
+function comparePackageVersions(left: unknown, right: unknown): number | null {
+  const leftParts = parsePackageVersion(left);
+  const rightParts = parsePackageVersion(right);
+  if (!leftParts || !rightParts) {
+    return null;
+  }
+
+  for (const index of [0, 1, 2] as const) {
+    if (leftParts[index] < rightParts[index]) {
+      return -1;
+    }
+    if (leftParts[index] > rightParts[index]) {
+      return 1;
+    }
+  }
+  return 0;
+}
+
+function endpointMatchesConfig(
+  metadata: Partial<DaemonMetadata>,
+  config = getDaemonConfig(),
+): boolean {
+  return (
+    metadata.host === config.host &&
+    metadata.port === config.port &&
+    metadata.mcpPath === config.mcpPath
+  );
+}
+
+function isNewerCompatibleDaemon(
+  metadata: Partial<DaemonMetadata> | null | undefined,
+  env?: NodeJS.ProcessEnv,
+): boolean {
+  if (!metadata) {
+    return false;
+  }
+  return (
+    comparePackageVersions(metadata.packageVersion, PACKAGE_VERSION) === 1 &&
+    metadata.protocolVersion === DAEMON_PROTOCOL_VERSION &&
+    endpointMatchesConfig(metadata, getDaemonConfig({ env }))
+  );
+}
+
+function assertCompatibleProtocolAndVersion(
+  metadata: Partial<DaemonMetadata>,
+  env?: NodeJS.ProcessEnv,
+): VersionCompatibility {
+  const versionComparison = comparePackageVersions(metadata.packageVersion, PACKAGE_VERSION);
+  const runningDaemonIsNewer = versionComparison === 1;
+
   if (metadata.protocolVersion !== DAEMON_PROTOCOL_VERSION) {
+    if (runningDaemonIsNewer) {
+      throw new Error(
+        `newer incompatible fff-routerd is already running: expected protocol ${DAEMON_PROTOCOL_VERSION}, got ${metadata.protocolVersion}. Update this client or stop fff-routerd manually.`,
+      );
+    }
     throw new DaemonHealthMismatchError(
       `daemon protocol mismatch: expected ${DAEMON_PROTOCOL_VERSION}, got ${metadata.protocolVersion}`,
       "protocol",
@@ -142,18 +208,31 @@ function assertMatchingProtocolAndVersion(metadata: Partial<DaemonMetadata>): vo
     );
   }
 
-  if (metadata.packageVersion !== PACKAGE_VERSION) {
+  if (versionComparison === 1) {
+    if (!endpointMatchesConfig(metadata, getDaemonConfig({ env }))) {
+      throw new Error(
+        "newer fff-routerd is already running at this endpoint, but its metadata does not match the expected daemon endpoint. Stop fff-routerd manually before starting this client.",
+      );
+    }
+    return "running-newer";
+  }
+
+  if (versionComparison !== 0 || metadata.packageVersion !== PACKAGE_VERSION) {
     throw new DaemonHealthMismatchError(
       `daemon package version mismatch: expected ${PACKAGE_VERSION}, got ${metadata.packageVersion}`,
       "version",
       metadata,
     );
   }
+
+  return "same";
 }
 
 export async function checkDaemonBaseHealth(env?: NodeJS.ProcessEnv): Promise<void> {
   const metadata = await fetchHealthMetadata(env);
-  assertMatchingProtocolAndVersion(metadata);
+  if (assertCompatibleProtocolAndVersion(metadata, env) === "running-newer") {
+    return;
+  }
 
   const expectedServerFingerprint = getDaemonServerFingerprint({ env });
   if (metadata.serverFingerprint !== expectedServerFingerprint) {
@@ -167,7 +246,9 @@ export async function checkDaemonBaseHealth(env?: NodeJS.ProcessEnv): Promise<vo
 
 export async function checkDaemonHealth(env?: NodeJS.ProcessEnv): Promise<void> {
   const metadata = await fetchHealthMetadata(env);
-  assertMatchingProtocolAndVersion(metadata);
+  if (assertCompatibleProtocolAndVersion(metadata, env) === "running-newer") {
+    return;
+  }
 
   const expectedServerFingerprint = getDaemonServerFingerprint({ env });
   if (metadata.serverFingerprint !== expectedServerFingerprint) {
@@ -283,6 +364,28 @@ function mismatchPid(error: unknown): number | null {
   return null;
 }
 
+function mismatchMetadata(error: unknown): Partial<DaemonMetadata> | null {
+  if (error instanceof DaemonHealthMismatchError) {
+    return error.metadata;
+  }
+
+  if (
+    typeof error === "object" &&
+    error &&
+    "metadata" in error &&
+    typeof error.metadata === "object" &&
+    error.metadata
+  ) {
+    return error.metadata as Partial<DaemonMetadata>;
+  }
+
+  return null;
+}
+
+function shouldPreserveNewerDaemonMismatch(error: unknown, env?: NodeJS.ProcessEnv): boolean {
+  return mismatchKind(error) !== null && isNewerCompatibleDaemon(mismatchMetadata(error), env);
+}
+
 function spawnDaemon(
   env?: NodeJS.ProcessEnv,
   options?: { preferPackaged?: boolean },
@@ -373,6 +476,9 @@ export async function ensureDaemonRunningWithDeps(
     await deps.checkDaemonHealth(env);
     return;
   } catch (error) {
+    if (shouldPreserveNewerDaemonMismatch(error, env)) {
+      return;
+    }
     if (!isRecoverableHealthError(error) && mismatchKind(error) === null) {
       throw error;
     }
@@ -383,6 +489,9 @@ export async function ensureDaemonRunningWithDeps(
       await deps.checkDaemonHealth(env);
       return;
     } catch (error) {
+      if (shouldPreserveNewerDaemonMismatch(error, env)) {
+        return;
+      }
       const pid = mismatchPid(error) ?? (await deps.readRunningDaemonMetadata(env))?.pid ?? null;
 
       if (mismatchKind(error) === "reload") {
@@ -421,6 +530,9 @@ export async function ensureDaemonRunningWithDeps(
       try {
         await deps.waitForDaemonReady(env);
       } catch (error) {
+        if (shouldPreserveNewerDaemonMismatch(error, env)) {
+          return;
+        }
         if (
           child.source === "path" &&
           (mismatchKind(error) === "protocol" || mismatchKind(error) === "version")

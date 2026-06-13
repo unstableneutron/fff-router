@@ -356,6 +356,58 @@ describe("ensureDaemonRunningWithDeps", () => {
     expect(spawnDaemon).toHaveBeenNthCalledWith(2, { HOME: home }, { preferPackaged: true });
     expect(waitForDaemonReady).toHaveBeenCalledTimes(2);
   });
+
+  test("does not replace a newer compatible daemon", async () => {
+    const home = await makeTempHome();
+    await writeConfigFile({ home, port: 46309, backend: "fff-node" });
+    const signalProcess = vi.fn(async () => {});
+    const terminateProcess = vi.fn(async () => {});
+    const spawnDaemon = vi.fn(() => ({ unref() {}, source: "packaged" as const }));
+    const waitForDaemonReady = vi.fn(async () => {});
+    const newerMismatch = Object.assign(
+      new Error("daemon package version mismatch; expected older, got newer"),
+      {
+        mismatchKind: "version",
+        metadata: {
+          pid: 123,
+          host: "127.0.0.1",
+          port: 46309,
+          mcpPath: "/mcp",
+          protocolVersion: DAEMON_PROTOCOL_VERSION,
+          packageVersion: "999.0.0",
+        },
+      },
+    );
+    const checkHealth = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(newerMismatch)
+      .mockRejectedValueOnce(newerMismatch);
+
+    await ensureDaemonRunningWithDeps({ HOME: home } as NodeJS.ProcessEnv, {
+      checkDaemonHealth: checkHealth,
+      readRunningDaemonMetadata: async () => ({
+        pid: 123,
+        host: "127.0.0.1",
+        port: 46309,
+        mcpPath: "/mcp",
+        protocolVersion: DAEMON_PROTOCOL_VERSION,
+        packageVersion: "999.0.0",
+        serverFingerprint: "newer-server",
+        reloadFingerprint: "newer-reload",
+        startedAt: Date.now(),
+      }),
+      signalProcess,
+      terminateProcess,
+      spawnDaemon,
+      waitForDaemonReady,
+      withStartupLock: async (callback) => await callback(),
+    });
+
+    expect(signalProcess).not.toHaveBeenCalled();
+    expect(terminateProcess).not.toHaveBeenCalled();
+    expect(spawnDaemon).not.toHaveBeenCalled();
+    expect(waitForDaemonReady).not.toHaveBeenCalled();
+  });
 });
 
 describe("checkDaemonHealth", () => {
@@ -372,6 +424,40 @@ describe("checkDaemonHealth", () => {
     startedDaemons.push(daemon);
 
     await expect(checkDaemonHealth(env)).resolves.toBeUndefined();
+  });
+
+  test("accepts a newer compatible daemon without recomputing old fingerprints", async () => {
+    const home = await makeTempHome();
+    const port = 46310;
+    await writeConfigFile({ home, port, backend: "fff-node" });
+    const env = { HOME: home } as NodeJS.ProcessEnv;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            ok: true,
+            metadata: {
+              pid: 123,
+              host: "127.0.0.1",
+              port,
+              mcpPath: "/mcp",
+              protocolVersion: DAEMON_PROTOCOL_VERSION,
+              packageVersion: "999.0.0",
+              serverFingerprint: "newer-server-fingerprint",
+              reloadFingerprint: "newer-reload-fingerprint",
+              startedAt: Date.now(),
+            },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+    ) as unknown as typeof fetch;
+
+    try {
+      await expect(checkDaemonHealth(env)).resolves.toBeUndefined();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   test("fails when the canonical config file becomes invalid", async () => {

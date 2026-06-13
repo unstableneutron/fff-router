@@ -6044,25 +6044,78 @@ async function fetchHealthMetadata(env) {
   }
   return payload.metadata;
 }
-function assertMatchingProtocolAndVersion(metadata) {
+function parsePackageVersion(version) {
+  if (typeof version !== "string") {
+    return null;
+  }
+  const match = version.match(/^v?(\d+)\.(\d+)\.(\d+)(?:[.-].*)?$/);
+  if (!match) {
+    return null;
+  }
+  return [Number(match[1]), Number(match[2]), Number(match[3])];
+}
+function comparePackageVersions(left, right) {
+  const leftParts = parsePackageVersion(left);
+  const rightParts = parsePackageVersion(right);
+  if (!leftParts || !rightParts) {
+    return null;
+  }
+  for (const index of [0, 1, 2]) {
+    if (leftParts[index] < rightParts[index]) {
+      return -1;
+    }
+    if (leftParts[index] > rightParts[index]) {
+      return 1;
+    }
+  }
+  return 0;
+}
+function endpointMatchesConfig(metadata, config = getDaemonConfig()) {
+  return metadata.host === config.host && metadata.port === config.port && metadata.mcpPath === config.mcpPath;
+}
+function isNewerCompatibleDaemon(metadata, env) {
+  if (!metadata) {
+    return false;
+  }
+  return comparePackageVersions(metadata.packageVersion, PACKAGE_VERSION) === 1 && metadata.protocolVersion === DAEMON_PROTOCOL_VERSION && endpointMatchesConfig(metadata, getDaemonConfig({ env }));
+}
+function assertCompatibleProtocolAndVersion(metadata, env) {
+  const versionComparison = comparePackageVersions(metadata.packageVersion, PACKAGE_VERSION);
+  const runningDaemonIsNewer = versionComparison === 1;
   if (metadata.protocolVersion !== DAEMON_PROTOCOL_VERSION) {
+    if (runningDaemonIsNewer) {
+      throw new Error(
+        `newer incompatible fff-routerd is already running: expected protocol ${DAEMON_PROTOCOL_VERSION}, got ${metadata.protocolVersion}. Update this client or stop fff-routerd manually.`
+      );
+    }
     throw new DaemonHealthMismatchError(
       `daemon protocol mismatch: expected ${DAEMON_PROTOCOL_VERSION}, got ${metadata.protocolVersion}`,
       "protocol",
       metadata
     );
   }
-  if (metadata.packageVersion !== PACKAGE_VERSION) {
+  if (versionComparison === 1) {
+    if (!endpointMatchesConfig(metadata, getDaemonConfig({ env }))) {
+      throw new Error(
+        "newer fff-routerd is already running at this endpoint, but its metadata does not match the expected daemon endpoint. Stop fff-routerd manually before starting this client."
+      );
+    }
+    return "running-newer";
+  }
+  if (versionComparison !== 0 || metadata.packageVersion !== PACKAGE_VERSION) {
     throw new DaemonHealthMismatchError(
       `daemon package version mismatch: expected ${PACKAGE_VERSION}, got ${metadata.packageVersion}`,
       "version",
       metadata
     );
   }
+  return "same";
 }
 async function checkDaemonBaseHealth(env) {
   const metadata = await fetchHealthMetadata(env);
-  assertMatchingProtocolAndVersion(metadata);
+  if (assertCompatibleProtocolAndVersion(metadata, env) === "running-newer") {
+    return;
+  }
   const expectedServerFingerprint = getDaemonServerFingerprint({ env });
   if (metadata.serverFingerprint !== expectedServerFingerprint) {
     throw new DaemonHealthMismatchError(
@@ -6074,7 +6127,9 @@ async function checkDaemonBaseHealth(env) {
 }
 async function checkDaemonHealth(env) {
   const metadata = await fetchHealthMetadata(env);
-  assertMatchingProtocolAndVersion(metadata);
+  if (assertCompatibleProtocolAndVersion(metadata, env) === "running-newer") {
+    return;
+  }
   const expectedServerFingerprint = getDaemonServerFingerprint({ env });
   if (metadata.serverFingerprint !== expectedServerFingerprint) {
     throw new DaemonHealthMismatchError(
@@ -6153,6 +6208,18 @@ function mismatchPid(error) {
   }
   return null;
 }
+function mismatchMetadata(error) {
+  if (error instanceof DaemonHealthMismatchError) {
+    return error.metadata;
+  }
+  if (typeof error === "object" && error && "metadata" in error && typeof error.metadata === "object" && error.metadata) {
+    return error.metadata;
+  }
+  return null;
+}
+function shouldPreserveNewerDaemonMismatch(error, env) {
+  return mismatchKind(error) !== null && isNewerCompatibleDaemon(mismatchMetadata(error), env);
+}
 function spawnDaemon(env, options) {
   const launchCommand = resolveDaemonLaunchCommand(env ?? process.env, options);
   const child = spawnChildProcess(launchCommand.command, launchCommand.args, {
@@ -6216,6 +6283,9 @@ async function ensureDaemonRunningWithDeps(env, deps) {
     await deps.checkDaemonHealth(env);
     return;
   } catch (error) {
+    if (shouldPreserveNewerDaemonMismatch(error, env)) {
+      return;
+    }
     if (!isRecoverableHealthError(error) && mismatchKind(error) === null) {
       throw error;
     }
@@ -6225,6 +6295,9 @@ async function ensureDaemonRunningWithDeps(env, deps) {
       await deps.checkDaemonHealth(env);
       return;
     } catch (error) {
+      if (shouldPreserveNewerDaemonMismatch(error, env)) {
+        return;
+      }
       const pid = mismatchPid(error) ?? (await deps.readRunningDaemonMetadata(env))?.pid ?? null;
       if (mismatchKind(error) === "reload") {
         if (pid) {
@@ -6253,6 +6326,9 @@ async function ensureDaemonRunningWithDeps(env, deps) {
       try {
         await deps.waitForDaemonReady(env);
       } catch (error) {
+        if (shouldPreserveNewerDaemonMismatch(error, env)) {
+          return;
+        }
         if (child.source === "path" && (mismatchKind(error) === "protocol" || mismatchKind(error) === "version")) {
           const spawnedPid = mismatchPid(error) ?? (await deps.readRunningDaemonMetadata(env))?.pid ?? null;
           if (spawnedPid) {
