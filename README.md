@@ -242,10 +242,20 @@ fff-routerd mcp
 Accepted updates stop the shared daemon afterward so the next request restarts
 with fresh binaries.
 
-`fff-routerd mcp` runs a stdio MCP proxy for clients that only launch MCP
-servers as child processes. The proxy starts or reloads the shared daemon when
-needed, then byte-bridges its stdin/stdout to the daemon's local MCP socket. It
-does not create a separate search runtime pool.
+`fff-routerd mcp` runs an agent-friendly stdio MCP server for clients that only
+launch MCP servers as child processes. It exposes `find_files`, `grep`, and
+`multi_grep` with fff-mcp-style inputs and plain text outputs, while executing
+searches through the shared `fff-routerd` daemon over HTTP. It does not create a
+separate search runtime pool.
+
+To expose the structured extension-oriented tools instead (`fff_find_files` and
+`fff_grep` with JSON result envelopes), use:
+
+```bash
+fff-routerd mcp --profile structured
+# or:
+fff-routerd mcp --structured
+```
 
 ## CLI wrappers
 
@@ -296,6 +306,15 @@ Clients that need a stdio MCP command can use:
 [mcp_servers.fff]
 command = "fff-routerd"
 args = ["mcp"]
+enabled_tools = ["find_files", "grep", "multi_grep"]
+```
+
+Clients that need the structured tool names can opt in with:
+
+```toml
+[mcp_servers.fff]
+command = "fff-routerd"
+args = ["mcp", "--profile", "structured"]
 enabled_tools = ["fff_find_files", "fff_grep"]
 ```
 

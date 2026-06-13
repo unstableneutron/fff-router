@@ -3,6 +3,7 @@ import {
   installFffMcpBinary,
   type DoctorFffMcpStatus,
 } from "./fff-mcp-installer";
+import { runAgentMcpServer } from "./agent-mcp";
 import { runInteractiveUpdate } from "./daemon-update";
 import { readDaemonMetadata, startHttpDaemon, type DaemonMetadata } from "./http-daemon";
 import {
@@ -15,7 +16,7 @@ import { runMcpSocketBridge } from "./mcp-bridge";
 
 export type DaemonCliCommand =
   | { name: "run" }
-  | { name: "mcp" }
+  | { name: "mcp"; profile: "agent" | "structured" }
   | { name: "status" }
   | { name: "reload" }
   | { name: "stop" }
@@ -44,7 +45,7 @@ type ExecuteDaemonCliDeps = {
   installFffMcp: () => Promise<string>;
   runUpdate?: () => Promise<number>;
   runDaemon: () => Promise<void>;
-  runMcpServer?: () => Promise<void>;
+  runMcpServer?: (profile: "agent" | "structured") => Promise<void>;
   writeStdout: (text: string) => void;
   writeStderr: (text: string) => void;
 };
@@ -59,13 +60,25 @@ function isProcessAlive(pid: number): boolean {
 }
 
 export function parseDaemonCliCommand(argv: string[]): DaemonCliCommand {
-  const [command] = argv;
+  const [command, ...rest] = argv;
   switch (command) {
     case undefined:
     case "run":
       return { name: "run" };
     case "mcp":
-      return { name: "mcp" };
+      if (rest.length === 0) {
+        return { name: "mcp", profile: "agent" };
+      }
+      if (rest.length === 1 && rest[0] === "--structured") {
+        return { name: "mcp", profile: "structured" };
+      }
+      if (rest.length === 2 && rest[0] === "--profile") {
+        if (rest[1] === "agent" || rest[1] === "structured") {
+          return { name: "mcp", profile: rest[1] };
+        }
+        throw new Error(`unknown mcp profile: ${rest[1]}`);
+      }
+      throw new Error(`unknown mcp arguments: ${rest.join(" ")}`);
     case "status":
       return { name: "status" };
     case "reload":
@@ -185,7 +198,7 @@ export async function executeDaemonCliCommand(
       await deps.runDaemon();
       return 0;
     case "mcp":
-      await (deps.runMcpServer ?? runMcpSocketBridge)();
+      await (deps.runMcpServer ?? runSelectedMcpServer)(command.profile);
       return 0;
     case "status": {
       const status = await deps.getStatus();
@@ -225,6 +238,14 @@ export async function executeDaemonCliCommand(
   }
 }
 
+async function runSelectedMcpServer(profile: "agent" | "structured"): Promise<void> {
+  if (profile === "structured") {
+    await runMcpSocketBridge();
+    return;
+  }
+  await runAgentMcpServer();
+}
+
 export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env): Promise<number> {
   const command = parseDaemonCliCommand(argv);
   return await executeDaemonCliCommand(command, {
@@ -239,7 +260,13 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
         stopDaemon: async () => await stopDaemon(env),
       }),
     runDaemon: async () => await runForegroundDaemon(env),
-    runMcpServer: async () => await runMcpSocketBridge({ env }),
+    runMcpServer: async (profile) => {
+      if (profile === "structured") {
+        await runMcpSocketBridge({ env });
+        return;
+      }
+      await runAgentMcpServer({ env });
+    },
     writeStdout: (text) => process.stdout.write(text),
     writeStderr: (text) => process.stderr.write(text),
   });

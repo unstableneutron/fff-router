@@ -14,7 +14,25 @@ describe("parseDaemonCliCommand", () => {
     expect(parseDaemonCliCommand(["doctor"])).toEqual({ name: "doctor" });
     expect(parseDaemonCliCommand(["install-fff-mcp"])).toEqual({ name: "install-fff-mcp" });
     expect(parseDaemonCliCommand(["update"])).toEqual({ name: "update" });
-    expect(parseDaemonCliCommand(["mcp"])).toEqual({ name: "mcp" });
+    expect(parseDaemonCliCommand(["mcp"])).toEqual({ name: "mcp", profile: "agent" });
+    expect(parseDaemonCliCommand(["mcp", "--profile", "agent"])).toEqual({
+      name: "mcp",
+      profile: "agent",
+    });
+    expect(parseDaemonCliCommand(["mcp", "--profile", "structured"])).toEqual({
+      name: "mcp",
+      profile: "structured",
+    });
+    expect(parseDaemonCliCommand(["mcp", "--structured"])).toEqual({
+      name: "mcp",
+      profile: "structured",
+    });
+  });
+
+  test("rejects unknown mcp profiles", () => {
+    expect(() => parseDaemonCliCommand(["mcp", "--profile", "wat"])).toThrow(
+      /unknown mcp profile/i,
+    );
   });
 
   test("rejects unknown commands", () => {
@@ -121,11 +139,11 @@ describe("executeDaemonCliCommand", () => {
     expect(runDaemon).toHaveBeenCalledTimes(1);
   });
 
-  test("mcp delegates to the stdio MCP proxy runner", async () => {
+  test("mcp delegates to the selected MCP profile runner", async () => {
     const runMcpServer = vi.fn(async () => {});
 
     const exitCode = await executeDaemonCliCommand(
-      { name: "mcp" },
+      { name: "mcp", profile: "agent" },
       {
         getStatus: async () => ({ running: false, metadata: null }),
         reloadDaemon: async () => false,
@@ -140,7 +158,7 @@ describe("executeDaemonCliCommand", () => {
     );
 
     expect(exitCode).toBe(0);
-    expect(runMcpServer).toHaveBeenCalledTimes(1);
+    expect(runMcpServer).toHaveBeenCalledWith("agent");
   });
 
   test("doctor prints JSON diagnostics", async () => {

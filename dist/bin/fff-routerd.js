@@ -280,8 +280,8 @@ var require_utils = __commonJS({
       }
       return output;
     };
-    exports.basename = (path15, { windows } = {}) => {
-      const segs = path15.split(windows ? /[\\/]/ : "/");
+    exports.basename = (path16, { windows } = {}) => {
+      const segs = path16.split(windows ? /[\\/]/ : "/");
       const last = segs[segs.length - 1];
       if (last === "") {
         return segs[segs.length - 2];
@@ -1869,17 +1869,18 @@ async function installFffMcpBinary(args = {}) {
   return finalPath;
 }
 
-// lib/fff-router/daemon-update.ts
-import { createHash as createHash2 } from "node:crypto";
-import { spawn } from "node:child_process";
-import { access, chmod as chmod2, mkdir as mkdir2, rename as rename2, writeFile as writeFile2 } from "node:fs/promises";
-import { constants as fsConstants } from "node:fs";
-import os3 from "node:os";
-import path4 from "node:path";
-import { createInterface } from "node:readline/promises";
-import { stdin as processStdin, stdout as processStdout } from "node:process";
-import { promisify } from "node:util";
-import { execFile } from "node:child_process";
+// lib/fff-router/agent-mcp.ts
+import path14 from "node:path";
+import { stdin as processStdin } from "node:process";
+import * as z2 from "zod/v4";
+import { McpServer as McpServer2 } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StdioServerTransport as StdioServerTransport3 } from "@modelcontextprotocol/sdk/server/stdio.js";
+
+// lib/fff-router/daemon-autostart.ts
+import { spawn as spawnChildProcess } from "node:child_process";
+import { constants as fsConstants, accessSync, existsSync as existsSync3 } from "node:fs";
+import { mkdir as mkdir3, open, readFile as readFile2, rm as rm2 } from "node:fs/promises";
+import path13 from "node:path";
 
 // lib/fff-router/daemon-config.ts
 import { createHash } from "node:crypto";
@@ -2383,372 +2384,20 @@ function getDaemonPaths(args = {}) {
   };
 }
 
-// lib/fff-router/daemon-update.ts
-var execFileAsync = promisify(execFile);
-var FFF_MCP_REPO = "dmtrKovalenko/fff.nvim";
-var FFF_ROUTER_GITHUB_PACKAGE_JSON = "https://raw.githubusercontent.com/unstableneutron/fff-router/main/package.json";
-var FFF_ROUTER_AUBE_SPEC = "github:unstableneutron/fff-router";
-function defaultInstallDir2(env) {
-  return env.FFF_MCP_INSTALL_DIR || path4.join(env.HOME || os3.homedir(), ".local", "bin");
-}
-function fffMcpBinaryPath(env, target) {
-  return path4.join(defaultInstallDir2(env), target.includes("windows") ? "fff-mcp.exe" : "fff-mcp");
-}
-function releaseFilename2(target) {
-  const extension = target.includes("windows") ? ".exe" : "";
-  return `fff-mcp-${target}${extension}`;
-}
-function stripLeadingV(version) {
-  return version.replace(/^v/i, "");
-}
-function compareVersions(left, right) {
-  const leftParts = stripLeadingV(left).split(/[.-]/).map((part) => Number(part));
-  const rightParts = stripLeadingV(right).split(/[.-]/).map((part) => Number(part));
-  const length = Math.max(leftParts.length, rightParts.length);
-  for (let index = 0; index < length; index += 1) {
-    const leftValue = Number.isFinite(leftParts[index]) ? leftParts[index] : 0;
-    const rightValue = Number.isFinite(rightParts[index]) ? rightParts[index] : 0;
-    if (leftValue < rightValue) {
-      return -1;
-    }
-    if (leftValue > rightValue) {
-      return 1;
-    }
-  }
-  return 0;
-}
-function parseFffMcpVersion(text) {
-  const match = text.match(/fff-mcp\s+([0-9]+(?:\.[0-9]+){1,3})/i) ?? text.match(/([0-9]+(?:\.[0-9]+){1,3})/);
-  return match?.[1] ?? null;
-}
-async function readInstalledFffMcpVersion(binaryPath) {
-  try {
-    const { stdout, stderr } = await execFileAsync(binaryPath, ["--version"], { timeout: 5e3 });
-    return parseFffMcpVersion(`${stdout}
-${stderr}`);
-  } catch {
-    return null;
-  }
-}
-async function fetchJson(url) {
-  const response = await fetch(url, {
-    headers: {
-      accept: "application/vnd.github+json, application/json",
-      "user-agent": "fff-routerd-update"
-    }
-  });
-  if (!response.ok) {
-    throw new Error(`GET ${url} failed with status ${response.status}`);
-  }
-  return await response.json();
-}
-async function fetchText(url) {
-  const response = await fetch(url, {
-    headers: { "user-agent": "fff-routerd-update" }
-  });
-  if (!response.ok) {
-    throw new Error(`GET ${url} failed with status ${response.status}`);
-  }
-  return await response.text();
-}
-function isReleaseAsset(value) {
-  return typeof value === "object" && value !== null && "name" in value && typeof value.name === "string" && "browser_download_url" in value && typeof value.browser_download_url === "string";
-}
-function isStableReleaseTag(tag) {
-  return /^v?\d+\.\d+\.\d+$/.test(tag);
-}
-function selectLatestFffMcpRelease(releases, target) {
-  if (!Array.isArray(releases)) {
-    throw new Error("GitHub releases response was not an array");
-  }
-  const filename = releaseFilename2(target);
-  for (const release of releases) {
-    if (typeof release !== "object" || release === null) {
-      continue;
-    }
-    const releaseRecord = release;
-    const tag = typeof releaseRecord.tag_name === "string" ? releaseRecord.tag_name : null;
-    if (!tag || releaseRecord.prerelease === true || !isStableReleaseTag(tag)) {
-      continue;
-    }
-    const assets = Array.isArray(releaseRecord.assets) ? releaseRecord.assets : [];
-    const asset = assets.find(
-      (candidate) => isReleaseAsset(candidate) && candidate.name === filename
-    );
-    if (!isReleaseAsset(asset)) {
-      continue;
-    }
-    const checksumAsset = assets.find(
-      (candidate) => isReleaseAsset(candidate) && candidate.name === `${filename}.sha256`
-    );
-    return {
-      tag,
-      version: stripLeadingV(tag),
-      assetUrl: asset.browser_download_url,
-      checksumUrl: isReleaseAsset(checksumAsset) ? checksumAsset.browser_download_url : `${asset.browser_download_url}.sha256`
-    };
-  }
-  throw new Error(`No fff-mcp release contains ${filename}`);
-}
-async function getLatestFffMcpRelease(target) {
-  const releases = await fetchJson(`https://api.github.com/repos/${FFF_MCP_REPO}/releases`);
-  if (!Array.isArray(releases)) {
-    throw new Error("GitHub releases response was not an array");
-  }
-  return selectLatestFffMcpRelease(releases, target);
-}
-async function checkFffMcpUpdate(args = {}) {
-  const env = args.env ?? process.env;
-  let target;
-  let binaryPath;
-  try {
-    target = args.target ?? detectFffMcpTarget();
-    binaryPath = fffMcpBinaryPath(env, target);
-    const [currentVersion, latest] = await Promise.all([
-      (args.readInstalledVersion ?? readInstalledFffMcpVersion)(binaryPath),
-      (args.getLatestRelease ?? getLatestFffMcpRelease)(target)
-    ]);
-    const common = {
-      binaryPath,
-      target,
-      latestVersion: latest.version,
-      latestTag: latest.tag
-    };
-    if (!currentVersion) {
-      return {
-        kind: "missing",
-        ...common,
-        currentVersion: null,
-        assetUrl: latest.assetUrl,
-        checksumUrl: latest.checksumUrl
-      };
-    }
-    if (compareVersions(currentVersion, latest.version) >= 0) {
-      return { kind: "current", ...common, currentVersion };
-    }
-    return {
-      kind: "outdated",
-      ...common,
-      currentVersion,
-      assetUrl: latest.assetUrl,
-      checksumUrl: latest.checksumUrl
-    };
-  } catch (error) {
-    target = args.target ?? "unknown";
-    binaryPath = fffMcpBinaryPath(env, target);
-    return {
-      kind: "unavailable",
-      binaryPath,
-      message: error instanceof Error ? error.message : String(error)
-    };
-  }
-}
-async function downloadToFile(url, destinationPath) {
-  const response = await fetch(url, { headers: { "user-agent": "fff-routerd-update" } });
-  if (!response.ok) {
-    throw new Error(`GET ${url} failed with status ${response.status}`);
-  }
-  await writeFile2(destinationPath, Buffer.from(await response.arrayBuffer()));
-}
-function extractSha256(text) {
-  const match = text.match(/[a-f0-9]{64}/i);
-  if (!match) {
-    throw new Error("checksum response did not contain a SHA256 digest");
-  }
-  return match[0].toLowerCase();
-}
-async function sha256File(filePath) {
-  const { readFile: readFile3 } = await import("node:fs/promises");
-  return createHash2("sha256").update(await readFile3(filePath)).digest("hex");
-}
-async function installFffMcpUpdate(plan, deps = {}) {
-  const directory = path4.dirname(plan.binaryPath);
-  const tempPath = path4.join(directory, `.fff-mcp.${process.pid}.${Date.now()}.download`);
-  await mkdir2(directory, { recursive: true });
-  await (deps.downloadToFile ?? downloadToFile)(plan.assetUrl, tempPath);
-  const expectedDigest = extractSha256(await (deps.fetchText ?? fetchText)(plan.checksumUrl));
-  const actualDigest = await sha256File(tempPath);
-  if (actualDigest !== expectedDigest) {
-    throw new Error(`fff-mcp checksum mismatch: expected ${expectedDigest}, got ${actualDigest}`);
-  }
-  await chmod2(tempPath, 493);
-  await rename2(tempPath, plan.binaryPath);
-  await writeFile2(
-    path4.join(directory, ".fff-mcp-install.json"),
-    `${JSON.stringify(
-      {
-        tag: plan.latestTag,
-        target: plan.target,
-        version: plan.latestVersion,
-        installedAt: Date.now()
-      },
-      null,
-      2
-    )}
-`
-  );
-  return plan.binaryPath;
-}
-function commandExtensions(env) {
-  if (process.platform !== "win32") {
-    return [""];
-  }
-  return env.PATHEXT?.split(";").filter(Boolean) ?? [".EXE", ".CMD", ".BAT", ".COM"];
-}
-async function commandExists(command, env = process.env) {
-  const directories = (env.PATH || process.env.PATH || "").split(path4.delimiter).filter(Boolean);
-  for (const directory of directories) {
-    for (const extension of commandExtensions(env)) {
-      const candidate = path4.join(directory, extension ? `${command}${extension}` : command);
-      try {
-        await access(candidate, fsConstants.X_OK);
-        return true;
-      } catch {
-      }
-    }
-  }
-  return false;
-}
-async function getLatestFffRouterdVersion() {
-  const parsed = await fetchJson(FFF_ROUTER_GITHUB_PACKAGE_JSON);
-  if (typeof parsed !== "object" || parsed === null || !("version" in parsed) || typeof parsed.version !== "string") {
-    throw new Error("fff-router package.json did not contain a version");
-  }
-  return parsed.version;
-}
-async function checkFffRouterdUpdate(args = {}) {
-  const currentVersion = args.currentVersion ?? PACKAGE_VERSION;
-  try {
-    if (!await (args.commandExists ?? commandExists)("aube")) {
-      return {
-        kind: "unavailable",
-        currentVersion,
-        message: "aube is not available on PATH; install with: aube add -g github:unstableneutron/fff-router"
-      };
-    }
-    const latestVersion = await (args.getLatestVersion ?? getLatestFffRouterdVersion)();
-    if (compareVersions(currentVersion, latestVersion) >= 0) {
-      return { kind: "current", currentVersion, latestVersion };
-    }
-    return {
-      kind: "outdated",
-      currentVersion,
-      latestVersion,
-      command: ["aube", "add", "-g", FFF_ROUTER_AUBE_SPEC]
-    };
-  } catch (error) {
-    return {
-      kind: "unavailable",
-      currentVersion,
-      message: error instanceof Error ? error.message : String(error)
-    };
-  }
-}
-async function installFffRouterdUpdate(plan) {
-  await new Promise((resolve, reject) => {
-    const child = spawn(plan.command[0], plan.command.slice(1), { stdio: "inherit" });
-    child.once("error", reject);
-    child.once("exit", (code) => {
-      if (code === 0) {
-        resolve();
-        return;
-      }
-      reject(new Error(`${plan.command.join(" ")} exited with code ${code ?? "null"}`));
-    });
-  });
-}
-async function defaultConfirm(question) {
-  const rl = createInterface({ input: processStdin, output: processStdout });
-  try {
-    const answer = await rl.question(`${question} [y/N] `);
-    return /^(y|yes)$/i.test(answer.trim());
-  } finally {
-    rl.close();
-  }
-}
-async function runInteractiveUpdate(options = {}) {
-  const env = options.env ?? process.env;
-  const writeStdout = options.writeStdout ?? ((text) => process.stdout.write(text));
-  const writeStderr = options.writeStderr ?? ((text) => process.stderr.write(text));
-  const confirm = options.confirm ?? defaultConfirm;
-  const checkMcp = options.checkFffMcpUpdate ?? (() => checkFffMcpUpdate({ env }));
-  const checkRouterd = options.checkFffRouterdUpdate ?? (() => checkFffRouterdUpdate());
-  const applyMcp = options.installFffMcpUpdate ?? installFffMcpUpdate;
-  const applyRouterd = options.installFffRouterdUpdate ?? installFffRouterdUpdate;
-  const stopDaemon2 = options.stopDaemon ?? (async () => false);
-  let updatedSomething = false;
-  const mcp = await checkMcp();
-  switch (mcp.kind) {
-    case "current":
-      writeStdout(`fff-mcp is already up to date (${mcp.currentVersion}).
-`);
-      break;
-    case "unavailable":
-      writeStderr(`Could not check fff-mcp at ${mcp.binaryPath}: ${mcp.message}
-`);
-      break;
-    case "missing":
-    case "outdated": {
-      const label = mcp.currentVersion ?? "not installed";
-      if (await confirm(`Update fff-mcp ${label} -> ${mcp.latestVersion}?`)) {
-        const installedPath = await applyMcp(mcp);
-        writeStdout(`Updated fff-mcp to ${mcp.latestVersion} at ${installedPath}.
-`);
-        updatedSomething = true;
-      } else {
-        writeStdout("Skipped fff-mcp update.\n");
-      }
-      break;
-    }
-  }
-  const routerd = await checkRouterd();
-  switch (routerd.kind) {
-    case "current":
-      writeStdout(`fff-routerd is already up to date (${routerd.currentVersion}).
-`);
-      break;
-    case "unavailable":
-      writeStderr(`Could not check fff-routerd: ${routerd.message}
-`);
-      break;
-    case "outdated":
-      if (await confirm(
-        `Update fff-routerd ${routerd.currentVersion} -> ${routerd.latestVersion} with aube?`
-      )) {
-        await applyRouterd(routerd);
-        writeStdout(`Updated fff-routerd to ${routerd.latestVersion}.
-`);
-        updatedSomething = true;
-      } else {
-        writeStdout("Skipped fff-routerd update.\n");
-      }
-      break;
-  }
-  if (updatedSomething) {
-    const stopped = await stopDaemon2();
-    if (stopped) {
-      writeStdout("Stopped fff-routerd; it will restart on the next request.\n");
-    } else {
-      writeStdout("fff-routerd was not running; it will start on the next request.\n");
-    }
-  }
-  return 0;
-}
-
 // lib/fff-router/http-daemon.ts
 import { watch } from "node:fs";
 import { createServer } from "node:http";
 import { createServer as createNetServer } from "node:net";
-import { mkdir as mkdir3, readFile, rm, writeFile as writeFile3 } from "node:fs/promises";
+import { mkdir as mkdir2, readFile, rm, writeFile as writeFile2 } from "node:fs/promises";
 
 // lib/fff-router/adapters/fff-mcp-stdio.ts
-import path6 from "node:path";
+import path5 from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
 // lib/fff-router/adapters/common.ts
 var import_picomatch = __toESM(require_picomatch2(), 1);
-import path5 from "node:path";
+import path4 from "node:path";
 function normalizeRelativePath(relativePath) {
   return relativePath.replace(/\\/g, "/");
 }
@@ -2756,7 +2405,7 @@ function matchesSingleEntry(entry, candidatePath) {
   if (entry.fileRestriction) {
     return candidatePath === entry.fileRestriction;
   }
-  return candidatePath === entry.within || candidatePath.startsWith(entry.within + path5.sep);
+  return candidatePath === entry.within || candidatePath.startsWith(entry.within + path4.sep);
 }
 function pathWithinScope(request, candidatePath) {
   if (matchesSingleEntry(
@@ -2808,7 +2457,7 @@ function filterItems(request, items) {
   return items.filter((item) => pathWithinScope(request, item.path)).filter((item) => matchesGlob(request.glob, item.relativePath)).filter((item) => matchesExtension(request.extensions, item.relativePath)).filter((item) => matchesExcludePaths(request.excludePaths, item.relativePath)).slice(0, request.limit);
 }
 function toRelativePath(persistenceRoot, absolutePath) {
-  return normalizeRelativePath(path5.relative(persistenceRoot, absolutePath));
+  return normalizeRelativePath(path4.relative(persistenceRoot, absolutePath));
 }
 
 // lib/fff-router/adapters/fff-mcp-stdio.ts
@@ -2853,13 +2502,13 @@ function formatExcludeConstraint(excludePath) {
 }
 function encodeWithinEntryToken(entry, persistenceRoot) {
   if (entry.fileRestriction) {
-    const relativeFile = normalizeRelative(path6.relative(persistenceRoot, entry.fileRestriction));
+    const relativeFile = normalizeRelative(path5.relative(persistenceRoot, entry.fileRestriction));
     if (!relativeFile || relativeFile === ".") {
       return null;
     }
     return `**/${relativeFile}`;
   }
-  const baseRelative = normalizeRelative(path6.relative(persistenceRoot, entry.basePath));
+  const baseRelative = normalizeRelative(path5.relative(persistenceRoot, entry.basePath));
   if (!baseRelative || baseRelative === ".") {
     return null;
   }
@@ -2901,14 +2550,14 @@ function buildConstraintTokens(request) {
     }
   } else if (request.fileRestriction) {
     const relativeFile = normalizeRelative(
-      path6.relative(request.persistenceRoot, request.fileRestriction)
+      path5.relative(request.persistenceRoot, request.fileRestriction)
     );
     if (relativeFile && relativeFile !== ".") {
       tokens.push(`**/${relativeFile}`);
     }
   } else {
     const baseRelative = normalizeRelative(
-      path6.relative(request.persistenceRoot, request.basePath)
+      path5.relative(request.persistenceRoot, request.basePath)
     );
     if (baseRelative && baseRelative !== ".") {
       tokens.push(baseRelative.endsWith("/") ? baseRelative : `${baseRelative}/`);
@@ -2954,7 +2603,7 @@ function parseFindFilesOutput(text, persistenceRoot) {
       continue;
     }
     items.push({
-      path: path6.join(persistenceRoot, relativePath),
+      path: path5.join(persistenceRoot, relativePath),
       relativePath
     });
   }
@@ -3056,7 +2705,7 @@ function parseTextMatchOutput(text, persistenceRoot) {
           continue;
         }
         currentMatch = {
-          path: path6.join(persistenceRoot, currentPath),
+          path: path5.join(persistenceRoot, currentPath),
           relativePath: currentPath,
           line: lineNumber,
           text: content,
@@ -3284,12 +2933,12 @@ function createFffMcpStdioAdapter() {
 
 // lib/fff-router/adapters/fff-scope.ts
 import fs from "node:fs";
-import path7 from "node:path";
+import path6 from "node:path";
 function isEncodableToken(token) {
   return token !== "" && token !== "." && !/\s/.test(token);
 }
 function looksLikeFile(relativePath) {
-  const base = path7.posix.basename(relativePath);
+  const base = path6.posix.basename(relativePath);
   const dot = base.lastIndexOf(".");
   if (dot <= 0 || dot === base.length - 1) {
     return false;
@@ -3298,7 +2947,7 @@ function looksLikeFile(relativePath) {
   return /^[A-Za-z][A-Za-z0-9]{0,9}$/.test(ext);
 }
 function classifyPathKind(persistenceRoot, relativePath) {
-  const absolutePath = path7.join(persistenceRoot, relativePath);
+  const absolutePath = path6.join(persistenceRoot, relativePath);
   try {
     const stats = fs.statSync(absolutePath);
     return stats.isFile() ? "file" : "dir";
@@ -3315,7 +2964,7 @@ function encodePathToken(relativePath, kind, negate = false) {
   return `${negate ? "!" : ""}${normalized}${suffix}`;
 }
 function toRepoRelativeToken(request, candidatePath) {
-  if (path7.isAbsolute(candidatePath)) {
+  if (path6.isAbsolute(candidatePath)) {
     return toRelativePath(request.persistenceRoot, candidatePath);
   }
   return normalizeRelativePath(candidatePath);
@@ -3559,8 +3208,8 @@ function createFffNodeAdapter() {
 }
 
 // lib/fff-router/adapters/rg.ts
-import { spawn as spawn2 } from "node:child_process";
-import path8 from "node:path";
+import { spawn } from "node:child_process";
+import path7 from "node:path";
 function readStream(stream) {
   if (!stream) {
     return Promise.resolve("");
@@ -3578,7 +3227,7 @@ function readStream(stream) {
 }
 async function runCommandWithSpawn(command, args, cwd) {
   try {
-    const proc = spawn2(command, args, {
+    const proc = spawn(command, args, {
       cwd,
       stdio: ["ignore", "pipe", "pipe"]
     });
@@ -3755,7 +3404,7 @@ function createRgAdapter(deps) {
           const items = filterItems(
             request,
             command.stdout.split(/\r?\n/).filter(Boolean).map((relativePath) => ({
-              path: path8.join(request.persistenceRoot, relativePath),
+              path: path7.join(request.persistenceRoot, relativePath),
               relativePath: relativePath.replace(/\\/g, "/")
             })).filter((item) => fuzzyMatch(item.relativePath, request.query))
           );
@@ -3849,7 +3498,7 @@ import * as z from "zod/v4";
 
 // lib/fff-router/public-api.ts
 var import_picomatch2 = __toESM(require_picomatch2(), 1);
-import path9 from "node:path";
+import path8 from "node:path";
 import fs2 from "node:fs";
 import { Type } from "@sinclair/typebox";
 var EXTENSION_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._+-]*$/;
@@ -3898,7 +3547,7 @@ function normalizeWithinString(value, env) {
   if (!expanded.ok) {
     return expanded;
   }
-  if (!path9.isAbsolute(expanded.value)) {
+  if (!path8.isAbsolute(expanded.value)) {
     return invalid2("within must be absolute for direct MCP callers");
   }
   return { ok: true, value: expanded.value };
@@ -3960,7 +3609,7 @@ function normalizeGlobPattern(value) {
   if (!trimmed) {
     return invalid2("glob must not be empty");
   }
-  if (path9.isAbsolute(trimmed)) {
+  if (path8.isAbsolute(trimmed)) {
     return invalid2("glob must be relative to the resolved base path");
   }
   if (trimmed.startsWith("!")) {
@@ -3989,7 +3638,7 @@ function validateExcludePathSyntax(entry) {
   if (!trimmed) {
     return invalid2("exclude_paths must not contain empty values");
   }
-  if (path9.isAbsolute(trimmed)) {
+  if (path8.isAbsolute(trimmed)) {
     return invalid2("exclude_paths must be relative to the resolved base path");
   }
   if (trimmed.startsWith("!")) {
@@ -4021,7 +3670,7 @@ function resolveExcludeExpansionBase(within) {
   }
   try {
     const stats = fs2.statSync(primaryWithin);
-    return stats.isFile() ? path9.dirname(primaryWithin) : primaryWithin;
+    return stats.isFile() ? path8.dirname(primaryWithin) : primaryWithin;
   } catch {
     return primaryWithin;
   }
@@ -4034,7 +3683,7 @@ function expandExcludeGlobPath(basePath, pattern) {
       return [prefix.join("/")];
     }
     if (!containsExcludeGlobMeta(segment)) {
-      const nextAbs = path9.join(absDir, segment);
+      const nextAbs = path8.join(absDir, segment);
       if (rest.length === 0) {
         return fs2.existsSync(nextAbs) ? [[...prefix, segment].join("/")] : [];
       }
@@ -4062,7 +3711,7 @@ function expandExcludeGlobPath(basePath, pattern) {
       if (!entry.isDirectory()) {
         return [];
       }
-      return expand(path9.join(absDir, entry.name), nextPrefix, rest);
+      return expand(path8.join(absDir, entry.name), nextPrefix, rest);
     });
   }
   return expand(basePath, [], segments);
@@ -4668,10 +4317,10 @@ var RuntimeManager = class {
 };
 
 // lib/fff-router/coordinator.ts
-import path13 from "node:path";
+import path12 from "node:path";
 
 // lib/fff-router/routing.ts
-import path10 from "node:path";
+import path9 from "node:path";
 function invalidConfig(message) {
   return {
     ok: false,
@@ -4693,10 +4342,10 @@ function outsideAllowedScope(realPath) {
 function normalizeAllowlistedPrefixes(config) {
   const normalized = /* @__PURE__ */ new Set();
   for (const entry of config.allowlistedNonGitPrefixes) {
-    if (!path10.isAbsolute(entry.prefix)) {
+    if (!path9.isAbsolute(entry.prefix)) {
       return invalidConfig("allowlisted non-git prefixes must be absolute paths");
     }
-    normalized.add(path10.normalize(entry.prefix));
+    normalized.add(path9.normalize(entry.prefix));
   }
   return {
     ok: true,
@@ -4705,22 +4354,22 @@ function normalizeAllowlistedPrefixes(config) {
 }
 function longestMatchingPrefix(realPath, prefixes) {
   for (const prefix of prefixes) {
-    if (realPath === prefix || realPath.startsWith(prefix + path10.sep)) {
+    if (realPath === prefix || realPath.startsWith(prefix + path9.sep)) {
       return prefix;
     }
   }
   return null;
 }
 function deriveFirstChildRoot(prefix, realPath) {
-  const relative = path10.relative(prefix, realPath);
-  if (!relative || relative.startsWith("..") || path10.isAbsolute(relative)) {
+  const relative = path9.relative(prefix, realPath);
+  if (!relative || relative.startsWith("..") || path9.isAbsolute(relative)) {
     return null;
   }
-  const firstSegment = relative.split(path10.sep)[0];
+  const firstSegment = relative.split(path9.sep)[0];
   if (!firstSegment) {
     return null;
   }
-  return path10.join(prefix, firstSegment);
+  return path9.join(prefix, firstSegment);
 }
 function deriveRoutingTarget(args) {
   if (args.gitRoot) {
@@ -4728,7 +4377,7 @@ function deriveRoutingTarget(args) {
       ok: true,
       value: {
         rootType: "git",
-        persistenceRoot: path10.normalize(args.gitRoot),
+        persistenceRoot: path9.normalize(args.gitRoot),
         searchScope: args.realPath,
         backendMode: "persistent",
         ttlMs: args.config.ttl.gitMs
@@ -4933,7 +4582,7 @@ function planRoutingLifecycle(args) {
 
 // lib/fff-router/resolve-path.ts
 import fs3 from "node:fs/promises";
-import path11 from "node:path";
+import path10 from "node:path";
 function searchPathError(code, message) {
   return { ok: false, error: { code, message } };
 }
@@ -4946,12 +4595,12 @@ async function pathExists(candidatePath) {
   }
 }
 async function discoverGitRoot(realPath, statType) {
-  let current = statType === "directory" ? realPath : path11.dirname(realPath);
+  let current = statType === "directory" ? realPath : path10.dirname(realPath);
   while (true) {
-    if (await pathExists(path11.join(current, ".git"))) {
+    if (await pathExists(path10.join(current, ".git"))) {
       return current;
     }
-    const parent = path11.dirname(current);
+    const parent = path10.dirname(current);
     if (parent === current) {
       return null;
     }
@@ -5009,7 +4658,7 @@ async function resolveSearchPath(searchPath) {
 
 // lib/fff-router/resolve-within.ts
 import fs4 from "node:fs/promises";
-import path12 from "node:path";
+import path11 from "node:path";
 function invalid3(message) {
   return {
     ok: false,
@@ -5042,7 +4691,7 @@ function validateAbsolutePath(candidate, field) {
   if (trimmed === "") {
     return invalid3(`${field} must be a non-empty path`);
   }
-  if (!path12.isAbsolute(trimmed)) {
+  if (!path11.isAbsolute(trimmed)) {
     return invalid3(`${field} must be absolute`);
   }
   return { ok: true, value: trimmed };
@@ -5097,7 +4746,7 @@ async function validateResolvedWithinEntry(candidate) {
     ok: true,
     value: {
       resolvedWithin,
-      basePath: path12.dirname(resolvedWithin),
+      basePath: path11.dirname(resolvedWithin),
       fileRestriction: resolvedWithin
     }
   };
@@ -5152,13 +4801,13 @@ function queryKindForRequest(request) {
 }
 function translateExcludePaths(validatedWithin, persistenceRoot, excludePaths) {
   const baseRelative = normalizeRelativePath(
-    path13.relative(persistenceRoot, validatedWithin.basePath)
+    path12.relative(persistenceRoot, validatedWithin.basePath)
   );
   return excludePaths.map((excludePath) => {
     if (!baseRelative || baseRelative === ".") {
       return excludePath;
     }
-    return normalizeRelativePath(path13.join(baseRelative, excludePath));
+    return normalizeRelativePath(path12.join(baseRelative, excludePath));
   });
 }
 function buildBackendRequest(args) {
@@ -5202,12 +4851,12 @@ function buildBackendRequest(args) {
 function shapePublicResult(args) {
   if (args.request.outputMode === "json") {
     const readRecommendation = args.summary?.readRecommendation ? (() => {
-      const absolutePath = path13.join(
+      const absolutePath = path12.join(
         args.persistenceRoot,
         args.summary.readRecommendation.relativePath
       );
       return {
-        path: normalizeCoordinatorPath(path13.relative(args.basePath, absolutePath)),
+        path: normalizeCoordinatorPath(path12.relative(args.basePath, absolutePath)),
         absolute_path: absolutePath,
         ...args.summary?.readRecommendation?.reason ? { reason: args.summary.readRecommendation.reason } : {}
       };
@@ -5263,7 +4912,7 @@ function normalizeBackendItems(basePath, items) {
     const absolutePath = String(item.path);
     const normalized = {
       ...item,
-      path: normalizeCoordinatorPath(path13.relative(basePath, absolutePath))
+      path: normalizeCoordinatorPath(path12.relative(basePath, absolutePath))
     };
     if (typeof item.line === "number") {
       return {
@@ -5650,15 +5299,15 @@ async function readJsonBody(req) {
   }
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
 }
-async function readDaemonMetadata(path15) {
+async function readDaemonMetadata(path16) {
   try {
-    return JSON.parse(await readFile(path15, "utf8"));
+    return JSON.parse(await readFile(path16, "utf8"));
   } catch {
     return null;
   }
 }
-async function writeDaemonMetadata(path15, metadata) {
-  await writeFile3(path15, `${JSON.stringify(metadata, null, 2)}
+async function writeDaemonMetadata(path16, metadata) {
+  await writeFile2(path16, `${JSON.stringify(metadata, null, 2)}
 `);
 }
 function toCoordinatorRuntimeConfig(reloadConfig) {
@@ -5758,8 +5407,8 @@ async function startHttpDaemon(args = {}) {
     });
     return await nextReload;
   };
-  await mkdir3(paths.dir, { recursive: true });
-  await mkdir3(policyConfigPaths.dir, { recursive: true });
+  await mkdir2(paths.dir, { recursive: true });
+  await mkdir2(policyConfigPaths.dir, { recursive: true });
   await rm(paths.mcpSocketPath, { force: true });
   mcpSocketServer = createNetServer((socket) => {
     mcpSockets.add(socket);
@@ -5951,14 +5600,7 @@ async function startHttpDaemon(args = {}) {
   };
 }
 
-// lib/fff-router/mcp-bridge.ts
-import { createConnection } from "node:net";
-
 // lib/fff-router/daemon-autostart.ts
-import { spawn as spawnChildProcess } from "node:child_process";
-import { constants as fsConstants2, accessSync, existsSync as existsSync3 } from "node:fs";
-import { mkdir as mkdir4, open, readFile as readFile2, rm as rm2 } from "node:fs/promises";
-import path14 from "node:path";
 var DaemonHealthMismatchError = class extends Error {
   constructor(message, mismatchKind2, metadata) {
     super(message);
@@ -5967,10 +5609,10 @@ var DaemonHealthMismatchError = class extends Error {
   }
 };
 function packagedDaemonEntrypointPath() {
-  const primaryCandidatePath = path14.resolve(import.meta.dirname, "../../dist/bin/fff-routerd.js");
+  const primaryCandidatePath = path13.resolve(import.meta.dirname, "../../dist/bin/fff-routerd.js");
   const candidatePaths = [
     primaryCandidatePath,
-    path14.resolve(import.meta.dirname, "../../bin/fff-routerd.js")
+    path13.resolve(import.meta.dirname, "../../bin/fff-routerd.js")
   ];
   for (const candidatePath of candidatePaths) {
     if (existsSync3(candidatePath)) {
@@ -5992,13 +5634,13 @@ function isProcessAlive(pid) {
 }
 function isExecutable(pathValue) {
   try {
-    accessSync(pathValue, fsConstants2.X_OK);
+    accessSync(pathValue, fsConstants.X_OK);
     return true;
   } catch {
     return false;
   }
 }
-function commandExtensions2(env) {
+function commandExtensions(env) {
   if (process.platform !== "win32") {
     return [""];
   }
@@ -6007,11 +5649,11 @@ function commandExtensions2(env) {
 }
 function defaultResolveExecutableOnPath(command, env) {
   const pathValue = env.PATH || process.env.PATH || "";
-  const directories = pathValue.split(path14.delimiter).filter(Boolean);
-  const extensions = commandExtensions2(env);
+  const directories = pathValue.split(path13.delimiter).filter(Boolean);
+  const extensions = commandExtensions(env);
   for (const directory of directories) {
     for (const extension of extensions) {
-      const candidatePath = process.platform === "win32" && extension && !command.toUpperCase().endsWith(extension) ? path14.join(directory, `${command}${extension}`) : path14.join(directory, command);
+      const candidatePath = process.platform === "win32" && extension && !command.toUpperCase().endsWith(extension) ? path13.join(directory, `${command}${extension}`) : path13.join(directory, command);
       if (existsSync3(candidatePath) && isExecutable(candidatePath)) {
         return candidatePath;
       }
@@ -6149,7 +5791,7 @@ async function checkDaemonHealth(env) {
 }
 async function withStartupLock(callback, env) {
   const paths = getDaemonPaths({ env });
-  await mkdir4(paths.dir, { recursive: true });
+  await mkdir3(paths.dir, { recursive: true });
   const startedAt = Date.now();
   while (true) {
     try {
@@ -6362,7 +6004,808 @@ async function readRunningDaemonMetadata(env) {
   return await readDaemonMetadata(paths.metadataPath);
 }
 
+// lib/fff-router/http-client.ts
+import { Client as Client2 } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+function toToolCall(request) {
+  const common = {
+    within: request.within,
+    glob: request.glob,
+    extensions: request.extensions,
+    exclude_paths: request.excludePaths,
+    limit: request.limit,
+    cursor: request.cursor,
+    output_mode: request.outputMode
+  };
+  switch (request.tool) {
+    case "fff_find_files": {
+      const findRequest = request;
+      return {
+        name: request.tool,
+        input: {
+          query: findRequest.query,
+          ...common
+        }
+      };
+    }
+    case "fff_search_terms": {
+      const searchTermsRequest = request;
+      return {
+        name: request.tool,
+        input: {
+          terms: searchTermsRequest.terms,
+          context_lines: searchTermsRequest.contextLines,
+          ...common
+        }
+      };
+    }
+    case "fff_grep": {
+      const grepRequest = request;
+      return {
+        name: request.tool,
+        input: {
+          patterns: grepRequest.patterns,
+          literal: grepRequest.literal,
+          case_sensitive: grepRequest.caseSensitive,
+          context_lines: grepRequest.contextLines,
+          ...common
+        }
+      };
+    }
+  }
+}
+function unwrapToolResponse(response) {
+  const first = response.content?.[0];
+  if (!first || first.type !== "text" || typeof first.text !== "string") {
+    return {
+      ok: false,
+      error: {
+        code: "INTERNAL_ERROR",
+        message: "daemon returned a non-text MCP tool response"
+      }
+    };
+  }
+  const parsed = JSON.parse(first.text);
+  if (response.isError) {
+    return {
+      ok: false,
+      error: {
+        code: typeof parsed === "object" && parsed && "code" in parsed && typeof parsed.code === "string" ? parsed.code : "INTERNAL_ERROR",
+        message: typeof parsed === "object" && parsed && "message" in parsed && typeof parsed.message === "string" ? parsed.message : "daemon call failed"
+      }
+    };
+  }
+  return {
+    ok: true,
+    value: parsed
+  };
+}
+async function createPersistentHttpToolClient(env) {
+  const transport = new StreamableHTTPClientTransport(new URL(getDaemonEndpoint({ env })));
+  const client = new Client2(
+    { name: "fff-router-http-client", version: "1.0.0" },
+    { capabilities: {} }
+  );
+  await client.connect(transport);
+  return {
+    async callPublicTool(request) {
+      const toolCall = toToolCall(request);
+      const response = await client.callTool({
+        name: toolCall.name,
+        arguments: toolCall.input
+      });
+      return unwrapToolResponse(response);
+    },
+    async close() {
+      await client.close().catch(() => {
+      });
+      await transport.close().catch(() => {
+      });
+    }
+  };
+}
+async function callPublicToolOverHttp(request, env) {
+  const client = await createPersistentHttpToolClient(env);
+  try {
+    return await client.callPublicTool(request);
+  } finally {
+    await client.close();
+  }
+}
+
+// lib/fff-router/agent-mcp.ts
+var agentMcpInputShapes = {
+  find_files: {
+    query: z2.string().min(1).describe("Fuzzy search query. Keep it short; glob/exclude tokens are allowed."),
+    within: z2.string().min(1).optional().describe("Optional path to search within. Defaults to the MCP process cwd."),
+    glob: z2.string().min(1).optional().describe("Optional include glob relative to within."),
+    exclude_paths: z2.array(z2.string().min(1)).optional().describe("Optional relative paths/globs to exclude."),
+    extensions: z2.array(z2.string().min(1)).optional().describe("Optional file extensions without leading dots."),
+    maxResults: z2.number().int().min(0).optional().describe("Max results (default 20)."),
+    cursor: z2.union([z2.string(), z2.null()]).optional().describe("Pagination is not supported; omit or pass null.")
+  },
+  grep: {
+    query: z2.string().min(1).describe(
+      "Regex search query with optional constraint prefixes, e.g. '*.ts createMcpServer'."
+    ),
+    within: z2.string().min(1).optional().describe("Optional path to search within. Defaults to the MCP process cwd."),
+    glob: z2.string().min(1).optional().describe("Optional include glob relative to within."),
+    exclude_paths: z2.array(z2.string().min(1)).optional().describe("Optional relative paths/globs to exclude."),
+    extensions: z2.array(z2.string().min(1)).optional().describe("Optional file extensions without leading dots."),
+    maxResults: z2.number().int().min(0).optional().describe("Max matching lines (default 20)."),
+    cursor: z2.union([z2.string(), z2.null()]).optional().describe("Pagination is not supported; omit or pass null.")
+  },
+  multi_grep: {
+    patterns: z2.array(z2.string().min(1)).min(1).describe("Literal patterns to match with OR semantics."),
+    constraints: z2.string().min(1).optional().describe("Optional file constraints, e.g. '*.{ts,tsx} !test/'."),
+    within: z2.string().min(1).optional().describe("Optional path to search within. Defaults to the MCP process cwd."),
+    glob: z2.string().min(1).optional().describe("Optional include glob relative to within."),
+    exclude_paths: z2.array(z2.string().min(1)).optional().describe("Optional relative paths/globs to exclude."),
+    extensions: z2.array(z2.string().min(1)).optional().describe("Optional file extensions without leading dots."),
+    context: z2.number().int().min(0).optional().describe("Context lines before/after each match."),
+    maxResults: z2.number().int().min(0).optional().describe("Max matching lines (default 20)."),
+    cursor: z2.union([z2.string(), z2.null()]).optional().describe("Pagination is not supported; omit or pass null.")
+  }
+};
+var AGENT_MCP_TOOLS = [
+  {
+    name: "find_files",
+    description: "Fuzzy file search by name. Searches file names, not file contents. Keep queries short; use glob, within, extensions, and exclude_paths to narrow results.",
+    inputSchema: z2.toJSONSchema(z2.object(agentMcpInputShapes.find_files)),
+    zodInputShape: agentMcpInputShapes.find_files
+  },
+  {
+    name: "grep",
+    description: "Search file contents with a regex-style query. Put optional file constraints before the pattern, e.g. '*.ts createMcpServer'. Use multi_grep for literal OR searches.",
+    inputSchema: z2.toJSONSchema(z2.object(agentMcpInputShapes.grep)),
+    zodInputShape: agentMcpInputShapes.grep
+  },
+  {
+    name: "multi_grep",
+    description: "Search file contents for lines matching ANY literal pattern. Patterns are literal text; use constraints, glob, extensions, and exclude_paths to prefilter files.",
+    inputSchema: z2.toJSONSchema(z2.object(agentMcpInputShapes.multi_grep)),
+    zodInputShape: agentMcpInputShapes.multi_grep
+  }
+];
+function errorResponse(message) {
+  return { isError: true, content: [{ type: "text", text: message }] };
+}
+function textResponse(text) {
+  return { isError: false, content: [{ type: "text", text }] };
+}
+function normalizeOptionalNonNegativeInt(value, field) {
+  if (value === void 0 || value === null) {
+    return void 0;
+  }
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
+    throw new Error(`${field} must be a non-negative integer`);
+  }
+  return value;
+}
+function normalizeStringArray(value, field) {
+  if (value === void 0 || value === null) {
+    return [];
+  }
+  if (!Array.isArray(value) || value.some((entry) => typeof entry !== "string" || entry.trim() === "")) {
+    throw new Error(`${field} must be an array of non-empty strings`);
+  }
+  return value;
+}
+function normalizeCursor2(value) {
+  if (value === void 0 || value === null) {
+    return null;
+  }
+  throw new Error("cursor pagination is not supported by fff-routerd's agent MCP profile");
+}
+function resolveAgentWithin(value, cwd, env) {
+  if (value === void 0 || value === null) {
+    return cwd;
+  }
+  if (typeof value !== "string" || value.trim() === "") {
+    throw new Error("within must be a non-empty string when provided");
+  }
+  const expanded = expandHomePath(value, env);
+  if (!expanded.ok) {
+    throw new Error(expanded.error.message);
+  }
+  return path14.isAbsolute(expanded.value) ? expanded.value : path14.resolve(cwd, expanded.value);
+}
+var GLOB_META_PATTERN = /[*?[\]{}!]/;
+function isConstraintToken(token) {
+  return token.startsWith("!") || token.endsWith("/") || token.includes("/") || GLOB_META_PATTERN.test(token);
+}
+function normalizeExcludeToken(token) {
+  return token.replace(/^!/, "").replace(/^\.\//, "").replace(/\/\*\*$/, "").replace(/\/+$/, "");
+}
+function normalizeIncludeToken(token) {
+  const normalized = token.replace(/^\.\//, "");
+  if (normalized.endsWith("/")) {
+    return `${normalized}**`;
+  }
+  return normalized;
+}
+function mergeGlobTokens(tokens) {
+  const unique = Array.from(new Set(tokens.filter(Boolean)));
+  if (unique.length === 0) {
+    return void 0;
+  }
+  if (unique.length === 1) {
+    return unique[0];
+  }
+  return `{${unique.join(",")}}`;
+}
+function parseConstraints(text) {
+  const includeTokens = [];
+  const excludePaths = [];
+  for (const token of text?.trim().split(/\s+/).filter(Boolean) ?? []) {
+    if (token.startsWith("!")) {
+      excludePaths.push(normalizeExcludeToken(token));
+      continue;
+    }
+    includeTokens.push(normalizeIncludeToken(token));
+  }
+  return { glob: mergeGlobTokens(includeTokens), excludePaths };
+}
+function combineGlobs(left, right) {
+  return mergeGlobTokens([left, right].filter((value) => Boolean(value)));
+}
+function parseFindFilesQuery(query) {
+  const queryTokens = [];
+  const constraintTokens = [];
+  for (const token of query.trim().split(/\s+/).filter(Boolean)) {
+    if (isConstraintToken(token)) {
+      constraintTokens.push(token);
+    } else {
+      queryTokens.push(token);
+    }
+  }
+  return {
+    query: queryTokens.length > 0 ? queryTokens.join(" ") : query.trim(),
+    constraints: parseConstraints(constraintTokens.join(" "))
+  };
+}
+function parseGrepQuery(query) {
+  const tokens = query.trim().split(/\s+/).filter(Boolean);
+  const pattern = tokens.pop();
+  if (!pattern) {
+    throw new Error("query must include a search pattern");
+  }
+  return { pattern, constraints: parseConstraints(tokens.join(" ")) };
+}
+function normalizePublicRequest(tool, input) {
+  const normalized = normalizePublicToolInput(tool, input);
+  if (!normalized.ok) {
+    throw new Error(`${normalized.error.code}: ${normalized.error.message}`);
+  }
+  return normalized.value;
+}
+function buildFindFilesRequest(input, cwd, env) {
+  if (typeof input.query !== "string" || input.query.trim() === "") {
+    throw new Error("query must be a non-empty string");
+  }
+  const parsed = parseFindFilesQuery(input.query);
+  const explicitGlob = typeof input.glob === "string" ? input.glob : void 0;
+  return normalizePublicRequest("fff_find_files", {
+    query: parsed.query,
+    within: resolveAgentWithin(input.within, cwd, env),
+    glob: combineGlobs(parsed.constraints.glob, explicitGlob),
+    extensions: normalizeStringArray(input.extensions, "extensions"),
+    exclude_paths: [
+      ...parsed.constraints.excludePaths,
+      ...normalizeStringArray(input.exclude_paths, "exclude_paths")
+    ],
+    limit: normalizeOptionalNonNegativeInt(input.maxResults, "maxResults"),
+    cursor: normalizeCursor2(input.cursor),
+    output_mode: "compact"
+  });
+}
+function buildGrepRequest(input, cwd, env) {
+  if (typeof input.query !== "string" || input.query.trim() === "") {
+    throw new Error("query must be a non-empty string");
+  }
+  const parsed = parseGrepQuery(input.query);
+  const explicitGlob = typeof input.glob === "string" ? input.glob : void 0;
+  return normalizePublicRequest("fff_grep", {
+    patterns: [parsed.pattern],
+    literal: false,
+    within: resolveAgentWithin(input.within, cwd, env),
+    glob: combineGlobs(parsed.constraints.glob, explicitGlob),
+    extensions: normalizeStringArray(input.extensions, "extensions"),
+    exclude_paths: [
+      ...parsed.constraints.excludePaths,
+      ...normalizeStringArray(input.exclude_paths, "exclude_paths")
+    ],
+    limit: normalizeOptionalNonNegativeInt(input.maxResults, "maxResults"),
+    cursor: normalizeCursor2(input.cursor),
+    output_mode: "compact"
+  });
+}
+function buildMultiGrepRequest(input, cwd, env) {
+  const patterns = normalizeStringArray(input.patterns, "patterns");
+  if (patterns.length === 0) {
+    throw new Error("patterns must contain at least one entry");
+  }
+  const constraints = parseConstraints(
+    typeof input.constraints === "string" ? input.constraints : void 0
+  );
+  const explicitGlob = typeof input.glob === "string" ? input.glob : void 0;
+  return normalizePublicRequest("fff_grep", {
+    patterns,
+    literal: true,
+    within: resolveAgentWithin(input.within, cwd, env),
+    glob: combineGlobs(constraints.glob, explicitGlob),
+    extensions: normalizeStringArray(input.extensions, "extensions"),
+    exclude_paths: [
+      ...constraints.excludePaths,
+      ...normalizeStringArray(input.exclude_paths, "exclude_paths")
+    ],
+    context_lines: normalizeOptionalNonNegativeInt(input.context, "context"),
+    limit: normalizeOptionalNonNegativeInt(input.maxResults, "maxResults"),
+    cursor: normalizeCursor2(input.cursor),
+    output_mode: "compact"
+  });
+}
+function formatFindFilesResult(result) {
+  const body = result.items.length > 0 ? result.items.map((item) => item.path).join("\n") : "(no files found)";
+  return `base_path: ${result.base_path}
+
+${body}`;
+}
+function formatStructuredGrepResult(result) {
+  const body = result.items.length > 0 ? result.items.map((item) => `${item.path}
+  ${item.line}: ${item.text}`).join("\n--\n") : "(no matches found)";
+  return `base_path: ${result.base_path}
+
+${body}`;
+}
+function formatJsonResult(result) {
+  return JSON.stringify(result, null, 2);
+}
+function formatAgentResult(result) {
+  if (result.mode === "compact" && "text" in result) {
+    return result.text;
+  }
+  if (result.mode === "compact" && "items" in result) {
+    const first = result.items[0];
+    if (!first || "line" in first) {
+      return formatStructuredGrepResult(
+        result
+      );
+    }
+    return formatFindFilesResult(result);
+  }
+  return formatJsonResult(result);
+}
+function buildRequest(name, input, cwd, env) {
+  switch (name) {
+    case "find_files":
+      return buildFindFilesRequest(input, cwd, env);
+    case "grep":
+      return buildGrepRequest(input, cwd, env);
+    case "multi_grep":
+      return buildMultiGrepRequest(input, cwd, env);
+  }
+}
+async function executeAgentMcpTool(args) {
+  if (!args.input || typeof args.input !== "object" || Array.isArray(args.input)) {
+    return errorResponse("request must be an object");
+  }
+  const env = args.env ?? process.env;
+  const cwd = args.cwd ?? process.cwd();
+  const ensureDaemonRunning2 = args.ensureDaemonRunning ?? ensureDaemonRunning;
+  const callPublicToolOverHttp2 = args.callPublicToolOverHttp ?? callPublicToolOverHttp;
+  try {
+    const request = buildRequest(args.name, args.input, cwd, env);
+    await ensureDaemonRunning2(env);
+    const result = await callPublicToolOverHttp2(request, env);
+    if (!result.ok) {
+      return errorResponse(`${result.error.code}: ${result.error.message}`);
+    }
+    return textResponse(formatAgentResult(result.value));
+  } catch (error) {
+    return errorResponse(error instanceof Error ? error.message : String(error));
+  }
+}
+function createAgentMcpServer(args = {}) {
+  const server = new McpServer2({ name: "fff-router-agent-mcp", version: "1.0.0" });
+  for (const tool of AGENT_MCP_TOOLS) {
+    server.registerTool(
+      tool.name,
+      {
+        description: tool.description,
+        inputSchema: tool.zodInputShape
+      },
+      async (input) => await executeAgentMcpTool({
+        name: tool.name,
+        input,
+        cwd: args.cwd,
+        env: args.env,
+        ensureDaemonRunning: args.ensureDaemonRunning,
+        callPublicToolOverHttp: args.callPublicToolOverHttp
+      })
+    );
+  }
+  return server;
+}
+async function runAgentMcpServer(args = {}) {
+  const server = createAgentMcpServer({ cwd: args.cwd, env: args.env });
+  const transport = new StdioServerTransport3();
+  await server.connect(transport);
+  await new Promise((resolve, reject) => {
+    const stdin = args.stdin ?? processStdin;
+    stdin.once("end", resolve);
+    stdin.once("close", resolve);
+    stdin.once("error", reject);
+  }).finally(async () => {
+    await server.close().catch(() => {
+    });
+  });
+}
+
+// lib/fff-router/daemon-update.ts
+import { createHash as createHash2 } from "node:crypto";
+import { spawn as spawn2 } from "node:child_process";
+import { access, chmod as chmod2, mkdir as mkdir4, rename as rename2, writeFile as writeFile3 } from "node:fs/promises";
+import { constants as fsConstants2 } from "node:fs";
+import os3 from "node:os";
+import path15 from "node:path";
+import { createInterface } from "node:readline/promises";
+import { stdin as processStdin2, stdout as processStdout } from "node:process";
+import { promisify } from "node:util";
+import { execFile } from "node:child_process";
+var execFileAsync = promisify(execFile);
+var FFF_MCP_REPO = "dmtrKovalenko/fff.nvim";
+var FFF_ROUTER_GITHUB_PACKAGE_JSON = "https://raw.githubusercontent.com/unstableneutron/fff-router/main/package.json";
+var FFF_ROUTER_AUBE_SPEC = "github:unstableneutron/fff-router";
+function defaultInstallDir2(env) {
+  return env.FFF_MCP_INSTALL_DIR || path15.join(env.HOME || os3.homedir(), ".local", "bin");
+}
+function fffMcpBinaryPath(env, target) {
+  return path15.join(defaultInstallDir2(env), target.includes("windows") ? "fff-mcp.exe" : "fff-mcp");
+}
+function releaseFilename2(target) {
+  const extension = target.includes("windows") ? ".exe" : "";
+  return `fff-mcp-${target}${extension}`;
+}
+function stripLeadingV(version) {
+  return version.replace(/^v/i, "");
+}
+function compareVersions(left, right) {
+  const leftParts = stripLeadingV(left).split(/[.-]/).map((part) => Number(part));
+  const rightParts = stripLeadingV(right).split(/[.-]/).map((part) => Number(part));
+  const length = Math.max(leftParts.length, rightParts.length);
+  for (let index = 0; index < length; index += 1) {
+    const leftValue = Number.isFinite(leftParts[index]) ? leftParts[index] : 0;
+    const rightValue = Number.isFinite(rightParts[index]) ? rightParts[index] : 0;
+    if (leftValue < rightValue) {
+      return -1;
+    }
+    if (leftValue > rightValue) {
+      return 1;
+    }
+  }
+  return 0;
+}
+function parseFffMcpVersion(text) {
+  const match = text.match(/fff-mcp\s+([0-9]+(?:\.[0-9]+){1,3})/i) ?? text.match(/([0-9]+(?:\.[0-9]+){1,3})/);
+  return match?.[1] ?? null;
+}
+async function readInstalledFffMcpVersion(binaryPath) {
+  try {
+    const { stdout, stderr } = await execFileAsync(binaryPath, ["--version"], { timeout: 5e3 });
+    return parseFffMcpVersion(`${stdout}
+${stderr}`);
+  } catch {
+    return null;
+  }
+}
+async function fetchJson(url) {
+  const response = await fetch(url, {
+    headers: {
+      accept: "application/vnd.github+json, application/json",
+      "user-agent": "fff-routerd-update"
+    }
+  });
+  if (!response.ok) {
+    throw new Error(`GET ${url} failed with status ${response.status}`);
+  }
+  return await response.json();
+}
+async function fetchText(url) {
+  const response = await fetch(url, {
+    headers: { "user-agent": "fff-routerd-update" }
+  });
+  if (!response.ok) {
+    throw new Error(`GET ${url} failed with status ${response.status}`);
+  }
+  return await response.text();
+}
+function isReleaseAsset(value) {
+  return typeof value === "object" && value !== null && "name" in value && typeof value.name === "string" && "browser_download_url" in value && typeof value.browser_download_url === "string";
+}
+function isStableReleaseTag(tag) {
+  return /^v?\d+\.\d+\.\d+$/.test(tag);
+}
+function selectLatestFffMcpRelease(releases, target) {
+  if (!Array.isArray(releases)) {
+    throw new Error("GitHub releases response was not an array");
+  }
+  const filename = releaseFilename2(target);
+  for (const release of releases) {
+    if (typeof release !== "object" || release === null) {
+      continue;
+    }
+    const releaseRecord = release;
+    const tag = typeof releaseRecord.tag_name === "string" ? releaseRecord.tag_name : null;
+    if (!tag || releaseRecord.prerelease === true || !isStableReleaseTag(tag)) {
+      continue;
+    }
+    const assets = Array.isArray(releaseRecord.assets) ? releaseRecord.assets : [];
+    const asset = assets.find(
+      (candidate) => isReleaseAsset(candidate) && candidate.name === filename
+    );
+    if (!isReleaseAsset(asset)) {
+      continue;
+    }
+    const checksumAsset = assets.find(
+      (candidate) => isReleaseAsset(candidate) && candidate.name === `${filename}.sha256`
+    );
+    return {
+      tag,
+      version: stripLeadingV(tag),
+      assetUrl: asset.browser_download_url,
+      checksumUrl: isReleaseAsset(checksumAsset) ? checksumAsset.browser_download_url : `${asset.browser_download_url}.sha256`
+    };
+  }
+  throw new Error(`No fff-mcp release contains ${filename}`);
+}
+async function getLatestFffMcpRelease(target) {
+  const releases = await fetchJson(`https://api.github.com/repos/${FFF_MCP_REPO}/releases`);
+  if (!Array.isArray(releases)) {
+    throw new Error("GitHub releases response was not an array");
+  }
+  return selectLatestFffMcpRelease(releases, target);
+}
+async function checkFffMcpUpdate(args = {}) {
+  const env = args.env ?? process.env;
+  let target;
+  let binaryPath;
+  try {
+    target = args.target ?? detectFffMcpTarget();
+    binaryPath = fffMcpBinaryPath(env, target);
+    const [currentVersion, latest] = await Promise.all([
+      (args.readInstalledVersion ?? readInstalledFffMcpVersion)(binaryPath),
+      (args.getLatestRelease ?? getLatestFffMcpRelease)(target)
+    ]);
+    const common = {
+      binaryPath,
+      target,
+      latestVersion: latest.version,
+      latestTag: latest.tag
+    };
+    if (!currentVersion) {
+      return {
+        kind: "missing",
+        ...common,
+        currentVersion: null,
+        assetUrl: latest.assetUrl,
+        checksumUrl: latest.checksumUrl
+      };
+    }
+    if (compareVersions(currentVersion, latest.version) >= 0) {
+      return { kind: "current", ...common, currentVersion };
+    }
+    return {
+      kind: "outdated",
+      ...common,
+      currentVersion,
+      assetUrl: latest.assetUrl,
+      checksumUrl: latest.checksumUrl
+    };
+  } catch (error) {
+    target = args.target ?? "unknown";
+    binaryPath = fffMcpBinaryPath(env, target);
+    return {
+      kind: "unavailable",
+      binaryPath,
+      message: error instanceof Error ? error.message : String(error)
+    };
+  }
+}
+async function downloadToFile(url, destinationPath) {
+  const response = await fetch(url, { headers: { "user-agent": "fff-routerd-update" } });
+  if (!response.ok) {
+    throw new Error(`GET ${url} failed with status ${response.status}`);
+  }
+  await writeFile3(destinationPath, Buffer.from(await response.arrayBuffer()));
+}
+function extractSha256(text) {
+  const match = text.match(/[a-f0-9]{64}/i);
+  if (!match) {
+    throw new Error("checksum response did not contain a SHA256 digest");
+  }
+  return match[0].toLowerCase();
+}
+async function sha256File(filePath) {
+  const { readFile: readFile3 } = await import("node:fs/promises");
+  return createHash2("sha256").update(await readFile3(filePath)).digest("hex");
+}
+async function installFffMcpUpdate(plan, deps = {}) {
+  const directory = path15.dirname(plan.binaryPath);
+  const tempPath = path15.join(directory, `.fff-mcp.${process.pid}.${Date.now()}.download`);
+  await mkdir4(directory, { recursive: true });
+  await (deps.downloadToFile ?? downloadToFile)(plan.assetUrl, tempPath);
+  const expectedDigest = extractSha256(await (deps.fetchText ?? fetchText)(plan.checksumUrl));
+  const actualDigest = await sha256File(tempPath);
+  if (actualDigest !== expectedDigest) {
+    throw new Error(`fff-mcp checksum mismatch: expected ${expectedDigest}, got ${actualDigest}`);
+  }
+  await chmod2(tempPath, 493);
+  await rename2(tempPath, plan.binaryPath);
+  await writeFile3(
+    path15.join(directory, ".fff-mcp-install.json"),
+    `${JSON.stringify(
+      {
+        tag: plan.latestTag,
+        target: plan.target,
+        version: plan.latestVersion,
+        installedAt: Date.now()
+      },
+      null,
+      2
+    )}
+`
+  );
+  return plan.binaryPath;
+}
+function commandExtensions2(env) {
+  if (process.platform !== "win32") {
+    return [""];
+  }
+  return env.PATHEXT?.split(";").filter(Boolean) ?? [".EXE", ".CMD", ".BAT", ".COM"];
+}
+async function commandExists(command, env = process.env) {
+  const directories = (env.PATH || process.env.PATH || "").split(path15.delimiter).filter(Boolean);
+  for (const directory of directories) {
+    for (const extension of commandExtensions2(env)) {
+      const candidate = path15.join(directory, extension ? `${command}${extension}` : command);
+      try {
+        await access(candidate, fsConstants2.X_OK);
+        return true;
+      } catch {
+      }
+    }
+  }
+  return false;
+}
+async function getLatestFffRouterdVersion() {
+  const parsed = await fetchJson(FFF_ROUTER_GITHUB_PACKAGE_JSON);
+  if (typeof parsed !== "object" || parsed === null || !("version" in parsed) || typeof parsed.version !== "string") {
+    throw new Error("fff-router package.json did not contain a version");
+  }
+  return parsed.version;
+}
+async function checkFffRouterdUpdate(args = {}) {
+  const currentVersion = args.currentVersion ?? PACKAGE_VERSION;
+  try {
+    if (!await (args.commandExists ?? commandExists)("aube")) {
+      return {
+        kind: "unavailable",
+        currentVersion,
+        message: "aube is not available on PATH; install with: aube add -g github:unstableneutron/fff-router"
+      };
+    }
+    const latestVersion = await (args.getLatestVersion ?? getLatestFffRouterdVersion)();
+    if (compareVersions(currentVersion, latestVersion) >= 0) {
+      return { kind: "current", currentVersion, latestVersion };
+    }
+    return {
+      kind: "outdated",
+      currentVersion,
+      latestVersion,
+      command: ["aube", "add", "-g", FFF_ROUTER_AUBE_SPEC]
+    };
+  } catch (error) {
+    return {
+      kind: "unavailable",
+      currentVersion,
+      message: error instanceof Error ? error.message : String(error)
+    };
+  }
+}
+async function installFffRouterdUpdate(plan) {
+  await new Promise((resolve, reject) => {
+    const child = spawn2(plan.command[0], plan.command.slice(1), { stdio: "inherit" });
+    child.once("error", reject);
+    child.once("exit", (code) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      reject(new Error(`${plan.command.join(" ")} exited with code ${code ?? "null"}`));
+    });
+  });
+}
+async function defaultConfirm(question) {
+  const rl = createInterface({ input: processStdin2, output: processStdout });
+  try {
+    const answer = await rl.question(`${question} [y/N] `);
+    return /^(y|yes)$/i.test(answer.trim());
+  } finally {
+    rl.close();
+  }
+}
+async function runInteractiveUpdate(options = {}) {
+  const env = options.env ?? process.env;
+  const writeStdout = options.writeStdout ?? ((text) => process.stdout.write(text));
+  const writeStderr = options.writeStderr ?? ((text) => process.stderr.write(text));
+  const confirm = options.confirm ?? defaultConfirm;
+  const checkMcp = options.checkFffMcpUpdate ?? (() => checkFffMcpUpdate({ env }));
+  const checkRouterd = options.checkFffRouterdUpdate ?? (() => checkFffRouterdUpdate());
+  const applyMcp = options.installFffMcpUpdate ?? installFffMcpUpdate;
+  const applyRouterd = options.installFffRouterdUpdate ?? installFffRouterdUpdate;
+  const stopDaemon2 = options.stopDaemon ?? (async () => false);
+  let updatedSomething = false;
+  const mcp = await checkMcp();
+  switch (mcp.kind) {
+    case "current":
+      writeStdout(`fff-mcp is already up to date (${mcp.currentVersion}).
+`);
+      break;
+    case "unavailable":
+      writeStderr(`Could not check fff-mcp at ${mcp.binaryPath}: ${mcp.message}
+`);
+      break;
+    case "missing":
+    case "outdated": {
+      const label = mcp.currentVersion ?? "not installed";
+      if (await confirm(`Update fff-mcp ${label} -> ${mcp.latestVersion}?`)) {
+        const installedPath = await applyMcp(mcp);
+        writeStdout(`Updated fff-mcp to ${mcp.latestVersion} at ${installedPath}.
+`);
+        updatedSomething = true;
+      } else {
+        writeStdout("Skipped fff-mcp update.\n");
+      }
+      break;
+    }
+  }
+  const routerd = await checkRouterd();
+  switch (routerd.kind) {
+    case "current":
+      writeStdout(`fff-routerd is already up to date (${routerd.currentVersion}).
+`);
+      break;
+    case "unavailable":
+      writeStderr(`Could not check fff-routerd: ${routerd.message}
+`);
+      break;
+    case "outdated":
+      if (await confirm(
+        `Update fff-routerd ${routerd.currentVersion} -> ${routerd.latestVersion} with aube?`
+      )) {
+        await applyRouterd(routerd);
+        writeStdout(`Updated fff-routerd to ${routerd.latestVersion}.
+`);
+        updatedSomething = true;
+      } else {
+        writeStdout("Skipped fff-routerd update.\n");
+      }
+      break;
+  }
+  if (updatedSomething) {
+    const stopped = await stopDaemon2();
+    if (stopped) {
+      writeStdout("Stopped fff-routerd; it will restart on the next request.\n");
+    } else {
+      writeStdout("fff-routerd was not running; it will start on the next request.\n");
+    }
+  }
+  return 0;
+}
+
 // lib/fff-router/mcp-bridge.ts
+import { createConnection } from "node:net";
 function waitForSocketConnect(socket) {
   if (socket.readyState === "open") {
     return Promise.resolve();
@@ -6492,13 +6935,25 @@ function isProcessAlive2(pid) {
   }
 }
 function parseDaemonCliCommand(argv) {
-  const [command] = argv;
+  const [command, ...rest] = argv;
   switch (command) {
     case void 0:
     case "run":
       return { name: "run" };
     case "mcp":
-      return { name: "mcp" };
+      if (rest.length === 0) {
+        return { name: "mcp", profile: "agent" };
+      }
+      if (rest.length === 1 && rest[0] === "--structured") {
+        return { name: "mcp", profile: "structured" };
+      }
+      if (rest.length === 2 && rest[0] === "--profile") {
+        if (rest[1] === "agent" || rest[1] === "structured") {
+          return { name: "mcp", profile: rest[1] };
+        }
+        throw new Error(`unknown mcp profile: ${rest[1]}`);
+      }
+      throw new Error(`unknown mcp arguments: ${rest.join(" ")}`);
     case "status":
       return { name: "status" };
     case "reload":
@@ -6600,7 +7055,7 @@ async function executeDaemonCliCommand(command, deps) {
       await deps.runDaemon();
       return 0;
     case "mcp":
-      await (deps.runMcpServer ?? runMcpSocketBridge)();
+      await (deps.runMcpServer ?? runSelectedMcpServer)(command.profile);
       return 0;
     case "status": {
       const status = await deps.getStatus();
@@ -6642,6 +7097,13 @@ async function executeDaemonCliCommand(command, deps) {
       return await (deps.runUpdate ?? runInteractiveUpdate)();
   }
 }
+async function runSelectedMcpServer(profile) {
+  if (profile === "structured") {
+    await runMcpSocketBridge();
+    return;
+  }
+  await runAgentMcpServer();
+}
 async function main(argv, env = process.env) {
   const command = parseDaemonCliCommand(argv);
   return await executeDaemonCliCommand(command, {
@@ -6655,7 +7117,13 @@ async function main(argv, env = process.env) {
       stopDaemon: async () => await stopDaemon(env)
     }),
     runDaemon: async () => await runForegroundDaemon(env),
-    runMcpServer: async () => await runMcpSocketBridge({ env }),
+    runMcpServer: async (profile) => {
+      if (profile === "structured") {
+        await runMcpSocketBridge({ env });
+        return;
+      }
+      await runAgentMcpServer({ env });
+    },
     writeStdout: (text) => process.stdout.write(text),
     writeStderr: (text) => process.stderr.write(text)
   });
