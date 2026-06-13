@@ -1,4 +1,5 @@
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { createConnection, type Socket } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
@@ -102,6 +103,44 @@ async function waitFor<T>(
     lastValue = await getValue();
   }
   return lastValue;
+}
+
+async function connectSocket(socketPath: string): Promise<Socket> {
+  const socket = createConnection(socketPath);
+  await new Promise<void>((resolve, reject) => {
+    socket.once("connect", resolve);
+    socket.once("error", reject);
+  });
+  return socket;
+}
+
+function createSocketJsonRpc(socket: Socket) {
+  let buffer = "";
+  const messages: any[] = [];
+  socket.on("data", (chunk) => {
+    buffer += chunk.toString("utf8");
+    let lineEnd = buffer.indexOf("\n");
+    while (lineEnd >= 0) {
+      const line = buffer.slice(0, lineEnd).trim();
+      buffer = buffer.slice(lineEnd + 1);
+      if (line) {
+        messages.push(JSON.parse(line));
+      }
+      lineEnd = buffer.indexOf("\n");
+    }
+  });
+
+  return {
+    send(message: unknown) {
+      socket.write(`${JSON.stringify(message)}\n`);
+    },
+    async waitForId(id: number) {
+      return await waitFor(
+        async () => messages.find((message) => message.id === id),
+        (message) => message !== undefined,
+      );
+    },
+  };
 }
 
 afterEach(async () => {
@@ -212,5 +251,102 @@ describe("startHttpDaemon", () => {
 
     await expect(daemon.reload()).rejects.toThrow();
     expect(daemon.metadata.reloadFingerprint).toBe(beforeFingerprint);
+  });
+
+  test("serves MCP over the daemon Unix socket", async () => {
+    const home = await makeTempHome();
+    const port = 46205;
+    await writeConfigFile({ home, port, backend: "fff-node" });
+    const env = { HOME: home } as NodeJS.ProcessEnv;
+    const liveConfigRef = toCoordinatorRuntimeConfigRef(env);
+
+    const daemon = await startHttpDaemon({
+      env,
+      createCoordinator: ({ liveConfigRef }) => makeCoordinator(liveConfigRef),
+      liveConfigRef,
+      watchConfig: false,
+    });
+    startedDaemons.push(daemon);
+
+    const socket = await connectSocket(daemon.paths.mcpSocketPath);
+    const rpc = createSocketJsonRpc(socket);
+
+    rpc.send({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {
+        protocolVersion: "2024-11-05",
+        capabilities: {},
+        clientInfo: { name: "fff-router-test", version: "1.0.0" },
+      },
+    });
+    const initialized = await rpc.waitForId(1);
+    expect(initialized.result.serverInfo.name).toBe("fff-router-mcp");
+
+    rpc.send({ jsonrpc: "2.0", method: "notifications/initialized", params: {} });
+    rpc.send({
+      jsonrpc: "2.0",
+      id: 2,
+      method: "tools/call",
+      params: {
+        name: "fff_find_files",
+        arguments: { query: "router", within: "/repo", output_mode: "json" },
+      },
+    });
+    const toolResult = await rpc.waitForId(2);
+    const payload = JSON.parse(toolResult.result.content[0].text);
+
+    expect(payload.items).toEqual([
+      { path: "/repo/from-fff-node.ts", absolute_path: "/repo/from-fff-node.ts" },
+    ]);
+    socket.destroy();
+  });
+
+  test("cleans up the MCP socket listener when HTTP listen fails", async () => {
+    const home = await makeTempHome();
+    const conflictingHome = await makeTempHome();
+    const port = 46206;
+    await writeConfigFile({ home, port, backend: "fff-node" });
+    await writeConfigFile({ home: conflictingHome, port, backend: "fff-node" });
+
+    const daemon = await startHttpDaemon({
+      env: { HOME: home } as NodeJS.ProcessEnv,
+      watchConfig: false,
+    });
+    startedDaemons.push(daemon);
+
+    let failedSocketPath = "";
+    await expect(
+      startHttpDaemon({
+        env: { HOME: conflictingHome } as NodeJS.ProcessEnv,
+        watchConfig: false,
+      }),
+    ).rejects.toThrow(/EADDRINUSE/);
+
+    failedSocketPath = (await import("./daemon-config")).getDaemonPaths({
+      env: { HOME: conflictingHome } as NodeJS.ProcessEnv,
+    }).mcpSocketPath;
+    await expect(connectSocket(failedSocketPath)).rejects.toThrow();
+  });
+
+  test("close returns while MCP socket clients are still connected", async () => {
+    const home = await makeTempHome();
+    const port = 46207;
+    await writeConfigFile({ home, port, backend: "fff-node" });
+    const daemon = await startHttpDaemon({
+      env: { HOME: home } as NodeJS.ProcessEnv,
+      watchConfig: false,
+    });
+
+    const socket = await connectSocket(daemon.paths.mcpSocketPath);
+
+    await expect(
+      Promise.race([
+        daemon.close().then(() => "closed"),
+        new Promise((resolve) => setTimeout(() => resolve("timed-out"), 200)),
+      ]),
+    ).resolves.toBe("closed");
+    socket.destroy();
   });
 });

@@ -176,6 +176,7 @@ describe("daemon config file", () => {
       dir: path.join(home, ".local", "state", "fff-routerd"),
       metadataPath: path.join(home, ".local", "state", "fff-routerd", "daemon.json"),
       lockPath: path.join(home, ".local", "state", "fff-routerd", "startup.lock"),
+      mcpSocketPath: expect.stringMatching(/^\/tmp\/fff-routerd-[a-f0-9]{16}\.sock$/),
     });
   });
 });

@@ -10,9 +10,11 @@ import {
   getDaemonPaths,
   getDaemonPolicyConfigPaths,
 } from "./daemon-config";
+import { runMcpSocketBridge } from "./mcp-bridge";
 
 export type DaemonCliCommand =
   | { name: "run" }
+  | { name: "mcp" }
   | { name: "status" }
   | { name: "reload" }
   | { name: "stop" }
@@ -39,6 +41,7 @@ type ExecuteDaemonCliDeps = {
   getDoctorReport: () => Promise<DoctorReport>;
   installFffMcp: () => Promise<string>;
   runDaemon: () => Promise<void>;
+  runMcpServer?: () => Promise<void>;
   writeStdout: (text: string) => void;
   writeStderr: (text: string) => void;
 };
@@ -58,6 +61,8 @@ export function parseDaemonCliCommand(argv: string[]): DaemonCliCommand {
     case undefined:
     case "run":
       return { name: "run" };
+    case "mcp":
+      return { name: "mcp" };
     case "status":
       return { name: "status" };
     case "reload":
@@ -174,6 +179,9 @@ export async function executeDaemonCliCommand(
     case "run":
       await deps.runDaemon();
       return 0;
+    case "mcp":
+      await (deps.runMcpServer ?? runMcpSocketBridge)();
+      return 0;
     case "status": {
       const status = await deps.getStatus();
       deps.writeStdout(`${JSON.stringify(status, null, 2)}\n`);
@@ -219,6 +227,7 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
     getDoctorReport: async () => await getDoctorReport(env),
     installFffMcp: async () => await installFffMcpBinary({ env }),
     runDaemon: async () => await runForegroundDaemon(env),
+    runMcpServer: async () => await runMcpSocketBridge({ env }),
     writeStdout: (text) => process.stdout.write(text),
     writeStderr: (text) => process.stderr.write(text),
   });

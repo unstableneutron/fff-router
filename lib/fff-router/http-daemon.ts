@@ -1,5 +1,6 @@
 import { watch, type FSWatcher } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { createServer as createNetServer, type Server as NetServer, type Socket } from "node:net";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createFffMcpStdioAdapter } from "./adapters/fff-mcp-stdio";
 import { createFffNodeAdapter } from "./adapters/fff-node";
@@ -26,6 +27,7 @@ import {
   type CoordinatorRuntimeConfigRef,
 } from "./coordinator";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import type { SearchCoordinator } from "./types";
 
 export type DaemonMetadata = {
@@ -33,6 +35,7 @@ export type DaemonMetadata = {
   host: string;
   port: number;
   mcpPath: string;
+  mcpSocketPath?: string;
   protocolVersion: string;
   packageVersion: string;
   serverFingerprint: string;
@@ -119,6 +122,7 @@ function buildMetadata(args: {
     host: args.config.host,
     port: args.port,
     mcpPath: args.config.mcpPath,
+    mcpSocketPath: getDaemonPaths({ env: args.env }).mcpSocketPath,
     protocolVersion: DAEMON_PROTOCOL_VERSION,
     packageVersion: PACKAGE_VERSION,
     serverFingerprint: getDaemonServerFingerprint({
@@ -156,6 +160,8 @@ export async function startHttpDaemon(args: StartHttpDaemonArgs = {}) {
   const policyConfigPaths = getDaemonPolicyConfigPaths({ env });
   const startedAt = Date.now();
   let metadata: DaemonMetadata | null = null;
+  let mcpSocketServer: NetServer | null = null;
+  const mcpSockets = new Set<Socket>();
   let watcher: FSWatcher | null = null;
   let watcherReloadTimer: ReturnType<typeof setTimeout> | null = null;
   let reloadChain = Promise.resolve();
@@ -198,6 +204,53 @@ export async function startHttpDaemon(args: StartHttpDaemonArgs = {}) {
 
   await mkdir(paths.dir, { recursive: true });
   await mkdir(policyConfigPaths.dir, { recursive: true });
+
+  await rm(paths.mcpSocketPath, { force: true });
+  mcpSocketServer = createNetServer((socket) => {
+    mcpSockets.add(socket);
+    const transport = new StdioServerTransport(socket, socket);
+    const mcpServer = createMcpServer({ coordinator: currentCoordinator }).toSdkServer();
+    let cleanedUp = false;
+    const cleanup = () => {
+      if (cleanedUp) {
+        return;
+      }
+      cleanedUp = true;
+      mcpSockets.delete(socket);
+      void transport.close();
+      void mcpServer.close();
+      socket.destroy();
+    };
+
+    socket.once("close", cleanup);
+    socket.once("error", cleanup);
+    void mcpServer.connect(transport).catch(() => {
+      cleanup();
+    });
+  });
+
+  const closeMcpSocketServer = async () => {
+    for (const socket of mcpSockets) {
+      socket.destroy();
+    }
+    mcpSockets.clear();
+    await new Promise<void>((resolve) => {
+      if (!mcpSocketServer?.listening) {
+        resolve();
+        return;
+      }
+      mcpSocketServer.close(() => resolve());
+    });
+    await rm(paths.mcpSocketPath, { force: true }).catch(() => {});
+  };
+
+  await new Promise<void>((resolve, reject) => {
+    mcpSocketServer!.once("error", reject);
+    mcpSocketServer!.listen(paths.mcpSocketPath, () => {
+      mcpSocketServer!.off("error", reject);
+      resolve();
+    });
+  });
 
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     const url = new URL(
@@ -263,13 +316,23 @@ export async function startHttpDaemon(args: StartHttpDaemonArgs = {}) {
     }
   });
 
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(config.port, config.host, () => {
-      server.off("error", reject);
-      resolve();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const onError = (error: Error) => {
+        server.off("listening", onListening);
+        reject(error);
+      };
+      const onListening = () => {
+        server.off("error", onError);
+        resolve();
+      };
+      server.once("error", onError);
+      server.listen(config.port, config.host, onListening);
     });
-  });
+  } catch (error) {
+    await closeMcpSocketServer();
+    throw error;
+  }
 
   const address = server.address();
   const actualPort = typeof address === "object" && address ? address.port : config.port;
@@ -337,6 +400,7 @@ export async function startHttpDaemon(args: StartHttpDaemonArgs = {}) {
       watcher?.close();
       await reloadChain.catch(() => {});
       await new Promise<void>((resolve) => server.close(() => resolve()));
+      await closeMcpSocketServer();
       await runtimeManager.closeAll().catch(() => {});
       await rm(paths.metadataPath, { force: true }).catch(() => {});
     },

@@ -58,6 +58,7 @@ export type DaemonPaths = {
   dir: string;
   metadataPath: string;
   lockPath: string;
+  mcpSocketPath: string;
 };
 
 function packageVersion(): string {
@@ -91,6 +92,17 @@ function configHome(env: NodeJS.ProcessEnv): string {
 
 function stateHome(env: NodeJS.ProcessEnv): string {
   return env.XDG_STATE_HOME || path.join(configHome(env), ".local", "state");
+}
+
+function mcpSocketPathForStateDir(dir: string): string {
+  const id = hashFingerprint({ dir });
+  if (process.platform === "win32") {
+    return `\\\\.\\pipe\\fff-routerd-${id}`;
+  }
+
+  // Unix domain socket path limits are small on macOS, so keep the bind path
+  // short while deriving a stable per-user/per-env identity from the state dir.
+  return path.join("/tmp", `fff-routerd-${id}.sock`);
 }
 
 export function getDefaultDaemonConfig(): DaemonConfig {
@@ -558,11 +570,13 @@ export function getDaemonServerFingerprint(
   } = {},
 ): string {
   const daemon = getDaemonConfig({ env: args.env });
+  const paths = getDaemonPaths({ env: args.env });
   return hashFingerprint({
     daemon: {
       ...daemon,
       ...args.daemonConfig,
     },
+    mcpSocketPath: paths.mcpSocketPath,
     protocolVersion: DAEMON_PROTOCOL_VERSION,
   });
 }
@@ -594,5 +608,6 @@ export function getDaemonPaths(args: { env?: NodeJS.ProcessEnv } = {}): DaemonPa
     dir,
     metadataPath: path.join(dir, "daemon.json"),
     lockPath: path.join(dir, "startup.lock"),
+    mcpSocketPath: mcpSocketPathForStateDir(dir),
   };
 }

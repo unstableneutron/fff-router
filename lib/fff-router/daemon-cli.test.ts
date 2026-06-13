@@ -7,12 +7,13 @@ describe("parseDaemonCliCommand", () => {
     expect(parseDaemonCliCommand([])).toEqual({ name: "run" });
   });
 
-  test("parses status, reload, stop, doctor, and install-fff-mcp", () => {
+  test("parses status, reload, stop, doctor, install-fff-mcp, and mcp", () => {
     expect(parseDaemonCliCommand(["status"])).toEqual({ name: "status" });
     expect(parseDaemonCliCommand(["reload"])).toEqual({ name: "reload" });
     expect(parseDaemonCliCommand(["stop"])).toEqual({ name: "stop" });
     expect(parseDaemonCliCommand(["doctor"])).toEqual({ name: "doctor" });
     expect(parseDaemonCliCommand(["install-fff-mcp"])).toEqual({ name: "install-fff-mcp" });
+    expect(parseDaemonCliCommand(["mcp"])).toEqual({ name: "mcp" });
   });
 
   test("rejects unknown commands", () => {
@@ -117,6 +118,28 @@ describe("executeDaemonCliCommand", () => {
 
     expect(exitCode).toBe(0);
     expect(runDaemon).toHaveBeenCalledTimes(1);
+  });
+
+  test("mcp delegates to the stdio MCP proxy runner", async () => {
+    const runMcpServer = vi.fn(async () => {});
+
+    const exitCode = await executeDaemonCliCommand(
+      { name: "mcp" },
+      {
+        getStatus: async () => ({ running: false, metadata: null }),
+        reloadDaemon: async () => false,
+        stopDaemon: async () => false,
+        getDoctorReport: async () => ({ running: false, metadata: null, fffMcp: { found: false } }),
+        installFffMcp: async () => "/tmp/fff-mcp",
+        runDaemon: async () => {},
+        runMcpServer,
+        writeStdout: vi.fn(),
+        writeStderr: vi.fn(),
+      },
+    );
+
+    expect(exitCode).toBe(0);
+    expect(runMcpServer).toHaveBeenCalledTimes(1);
   });
 
   test("doctor prints JSON diagnostics", async () => {

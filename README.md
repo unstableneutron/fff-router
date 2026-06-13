@@ -232,7 +232,13 @@ fff-routerd reload
 fff-routerd stop
 fff-routerd doctor
 fff-routerd install-fff-mcp
+fff-routerd mcp
 ```
+
+`fff-routerd mcp` runs a stdio MCP proxy for clients that only launch MCP
+servers as child processes. The proxy starts or reloads the shared daemon when
+needed, then byte-bridges its stdin/stdout to the daemon's local MCP socket. It
+does not create a separate search runtime pool.
 
 ## CLI wrappers
 
@@ -271,7 +277,20 @@ The canonical MCP endpoint is:
 
 - `http://127.0.0.1:4319/mcp`
 
+The daemon also exposes a local stdio-framed MCP Unix socket for lightweight
+stdio bridges. Its path is derived from the daemon state directory and kept
+under `/tmp` to avoid Unix socket path-length limits.
+
 Other local agents and future extensions should talk to that same endpoint if they want shared warm reuse.
+
+Clients that need a stdio MCP command can use:
+
+```toml
+[mcp_servers.fff]
+command = "fff-routerd"
+args = ["mcp"]
+enabled_tools = ["fff_find_files", "fff_grep"]
+```
 
 ## Pi integration direction
 
