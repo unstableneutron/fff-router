@@ -1,0 +1,501 @@
+import { createHash } from "node:crypto";
+import { spawn } from "node:child_process";
+import { access, chmod, mkdir, rename, writeFile } from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { createInterface } from "node:readline/promises";
+import { stdin as processStdin, stdout as processStdout } from "node:process";
+import { promisify } from "node:util";
+import { execFile } from "node:child_process";
+import { PACKAGE_VERSION } from "./daemon-config";
+import { detectFffMcpTarget } from "./fff-mcp-installer";
+
+const execFileAsync = promisify(execFile);
+const FFF_MCP_REPO = "dmtrKovalenko/fff.nvim";
+const FFF_ROUTER_GITHUB_PACKAGE_JSON =
+  "https://raw.githubusercontent.com/unstableneutron/fff-router/main/package.json";
+const FFF_ROUTER_AUBE_SPEC = "github:unstableneutron/fff-router";
+
+type FffMcpRelease = {
+  tag: string;
+  version: string;
+  assetUrl: string;
+  checksumUrl: string;
+};
+
+export type FffMcpUpdatePlan = {
+  kind: "missing" | "outdated";
+  binaryPath: string;
+  target: string;
+  currentVersion: string | null;
+  latestVersion: string;
+  latestTag: string;
+  assetUrl: string;
+  checksumUrl: string;
+};
+
+export type FffMcpUpdateCheck =
+  | FffMcpUpdatePlan
+  | {
+      kind: "current";
+      binaryPath: string;
+      target: string;
+      currentVersion: string;
+      latestVersion: string;
+      latestTag: string;
+    }
+  | { kind: "unavailable"; binaryPath: string; message: string };
+
+export type FffRouterdUpdateCheck =
+  | {
+      kind: "outdated";
+      currentVersion: string;
+      latestVersion: string;
+      command: string[];
+    }
+  | { kind: "current"; currentVersion: string; latestVersion: string }
+  | { kind: "unavailable"; currentVersion: string; message: string };
+
+type Confirm = (question: string) => Promise<boolean>;
+
+export type RunInteractiveUpdateOptions = {
+  env?: NodeJS.ProcessEnv;
+  checkFffMcpUpdate?: () => Promise<FffMcpUpdateCheck>;
+  checkFffRouterdUpdate?: () => Promise<FffRouterdUpdateCheck>;
+  installFffMcpUpdate?: (plan: FffMcpUpdatePlan) => Promise<string>;
+  installFffRouterdUpdate?: (
+    plan: Extract<FffRouterdUpdateCheck, { kind: "outdated" }>,
+  ) => Promise<void>;
+  stopDaemon?: () => Promise<boolean>;
+  confirm?: Confirm;
+  writeStdout?: (text: string) => void;
+  writeStderr?: (text: string) => void;
+};
+
+function defaultInstallDir(env: NodeJS.ProcessEnv): string {
+  return env.FFF_MCP_INSTALL_DIR || path.join(env.HOME || os.homedir(), ".local", "bin");
+}
+
+function fffMcpBinaryPath(env: NodeJS.ProcessEnv, target: string): string {
+  return path.join(defaultInstallDir(env), target.includes("windows") ? "fff-mcp.exe" : "fff-mcp");
+}
+
+function releaseFilename(target: string): string {
+  const extension = target.includes("windows") ? ".exe" : "";
+  return `fff-mcp-${target}${extension}`;
+}
+
+function stripLeadingV(version: string): string {
+  return version.replace(/^v/i, "");
+}
+
+function compareVersions(left: string, right: string): number {
+  const leftParts = stripLeadingV(left)
+    .split(/[.-]/)
+    .map((part) => Number(part));
+  const rightParts = stripLeadingV(right)
+    .split(/[.-]/)
+    .map((part) => Number(part));
+  const length = Math.max(leftParts.length, rightParts.length);
+
+  for (let index = 0; index < length; index += 1) {
+    const leftValue = Number.isFinite(leftParts[index]) ? leftParts[index]! : 0;
+    const rightValue = Number.isFinite(rightParts[index]) ? rightParts[index]! : 0;
+    if (leftValue < rightValue) {
+      return -1;
+    }
+    if (leftValue > rightValue) {
+      return 1;
+    }
+  }
+
+  return 0;
+}
+
+function parseFffMcpVersion(text: string): string | null {
+  const match =
+    text.match(/fff-mcp\s+([0-9]+(?:\.[0-9]+){1,3})/i) ?? text.match(/([0-9]+(?:\.[0-9]+){1,3})/);
+  return match?.[1] ?? null;
+}
+
+async function readInstalledFffMcpVersion(binaryPath: string): Promise<string | null> {
+  try {
+    const { stdout, stderr } = await execFileAsync(binaryPath, ["--version"], { timeout: 5_000 });
+    return parseFffMcpVersion(`${stdout}\n${stderr}`);
+  } catch {
+    return null;
+  }
+}
+
+async function fetchJson(url: string): Promise<unknown> {
+  const response = await fetch(url, {
+    headers: {
+      accept: "application/vnd.github+json, application/json",
+      "user-agent": "fff-routerd-update",
+    },
+  });
+  if (!response.ok) {
+    throw new Error(`GET ${url} failed with status ${response.status}`);
+  }
+  return await response.json();
+}
+
+async function fetchText(url: string): Promise<string> {
+  const response = await fetch(url, {
+    headers: { "user-agent": "fff-routerd-update" },
+  });
+  if (!response.ok) {
+    throw new Error(`GET ${url} failed with status ${response.status}`);
+  }
+  return await response.text();
+}
+
+function isReleaseAsset(value: unknown): value is { name: string; browser_download_url: string } {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "name" in value &&
+    typeof value.name === "string" &&
+    "browser_download_url" in value &&
+    typeof value.browser_download_url === "string"
+  );
+}
+
+function isStableReleaseTag(tag: string): boolean {
+  return /^v?\d+\.\d+\.\d+$/.test(tag);
+}
+
+export function selectLatestFffMcpRelease(releases: unknown[], target: string): FffMcpRelease {
+  if (!Array.isArray(releases)) {
+    throw new Error("GitHub releases response was not an array");
+  }
+
+  const filename = releaseFilename(target);
+  for (const release of releases) {
+    if (typeof release !== "object" || release === null) {
+      continue;
+    }
+    const releaseRecord = release as { tag_name?: unknown; prerelease?: unknown; assets?: unknown };
+    const tag = typeof releaseRecord.tag_name === "string" ? releaseRecord.tag_name : null;
+    if (!tag || releaseRecord.prerelease === true || !isStableReleaseTag(tag)) {
+      continue;
+    }
+    const assets: unknown[] = Array.isArray(releaseRecord.assets) ? releaseRecord.assets : [];
+    const asset = assets.find(
+      (candidate) => isReleaseAsset(candidate) && candidate.name === filename,
+    );
+    if (!isReleaseAsset(asset)) {
+      continue;
+    }
+    const checksumAsset = assets.find(
+      (candidate) => isReleaseAsset(candidate) && candidate.name === `${filename}.sha256`,
+    );
+    return {
+      tag,
+      version: stripLeadingV(tag),
+      assetUrl: asset.browser_download_url,
+      checksumUrl: isReleaseAsset(checksumAsset)
+        ? checksumAsset.browser_download_url
+        : `${asset.browser_download_url}.sha256`,
+    };
+  }
+
+  throw new Error(`No fff-mcp release contains ${filename}`);
+}
+
+async function getLatestFffMcpRelease(target: string): Promise<FffMcpRelease> {
+  const releases = await fetchJson(`https://api.github.com/repos/${FFF_MCP_REPO}/releases`);
+  if (!Array.isArray(releases)) {
+    throw new Error("GitHub releases response was not an array");
+  }
+  return selectLatestFffMcpRelease(releases, target);
+}
+
+export async function checkFffMcpUpdate(
+  args: {
+    env?: NodeJS.ProcessEnv;
+    target?: string;
+    readInstalledVersion?: (binaryPath: string) => Promise<string | null>;
+    getLatestRelease?: (target: string) => Promise<FffMcpRelease>;
+  } = {},
+): Promise<FffMcpUpdateCheck> {
+  const env = args.env ?? process.env;
+  let target: string;
+  let binaryPath: string;
+  try {
+    target = args.target ?? detectFffMcpTarget();
+    binaryPath = fffMcpBinaryPath(env, target);
+    const [currentVersion, latest] = await Promise.all([
+      (args.readInstalledVersion ?? readInstalledFffMcpVersion)(binaryPath),
+      (args.getLatestRelease ?? getLatestFffMcpRelease)(target),
+    ]);
+    const common = {
+      binaryPath,
+      target,
+      latestVersion: latest.version,
+      latestTag: latest.tag,
+    };
+
+    if (!currentVersion) {
+      return {
+        kind: "missing",
+        ...common,
+        currentVersion: null,
+        assetUrl: latest.assetUrl,
+        checksumUrl: latest.checksumUrl,
+      };
+    }
+
+    if (compareVersions(currentVersion, latest.version) >= 0) {
+      return { kind: "current", ...common, currentVersion };
+    }
+
+    return {
+      kind: "outdated",
+      ...common,
+      currentVersion,
+      assetUrl: latest.assetUrl,
+      checksumUrl: latest.checksumUrl,
+    };
+  } catch (error) {
+    target = args.target ?? "unknown";
+    binaryPath = fffMcpBinaryPath(env, target);
+    return {
+      kind: "unavailable",
+      binaryPath,
+      message: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+async function downloadToFile(url: string, destinationPath: string): Promise<void> {
+  const response = await fetch(url, { headers: { "user-agent": "fff-routerd-update" } });
+  if (!response.ok) {
+    throw new Error(`GET ${url} failed with status ${response.status}`);
+  }
+  await writeFile(destinationPath, Buffer.from(await response.arrayBuffer()));
+}
+
+function extractSha256(text: string): string {
+  const match = text.match(/[a-f0-9]{64}/i);
+  if (!match) {
+    throw new Error("checksum response did not contain a SHA256 digest");
+  }
+  return match[0].toLowerCase();
+}
+
+async function sha256File(filePath: string): Promise<string> {
+  const { readFile } = await import("node:fs/promises");
+  return createHash("sha256")
+    .update(await readFile(filePath))
+    .digest("hex");
+}
+
+export async function installFffMcpUpdate(
+  plan: FffMcpUpdatePlan,
+  deps: {
+    downloadToFile?: (url: string, destinationPath: string) => Promise<void>;
+    fetchText?: (url: string) => Promise<string>;
+  } = {},
+): Promise<string> {
+  const directory = path.dirname(plan.binaryPath);
+  const tempPath = path.join(directory, `.fff-mcp.${process.pid}.${Date.now()}.download`);
+  await mkdir(directory, { recursive: true });
+  await (deps.downloadToFile ?? downloadToFile)(plan.assetUrl, tempPath);
+
+  const expectedDigest = extractSha256(await (deps.fetchText ?? fetchText)(plan.checksumUrl));
+  const actualDigest = await sha256File(tempPath);
+  if (actualDigest !== expectedDigest) {
+    throw new Error(`fff-mcp checksum mismatch: expected ${expectedDigest}, got ${actualDigest}`);
+  }
+
+  await chmod(tempPath, 0o755);
+  await rename(tempPath, plan.binaryPath);
+  await writeFile(
+    path.join(directory, ".fff-mcp-install.json"),
+    `${JSON.stringify(
+      {
+        tag: plan.latestTag,
+        target: plan.target,
+        version: plan.latestVersion,
+        installedAt: Date.now(),
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  return plan.binaryPath;
+}
+
+function commandExtensions(env: NodeJS.ProcessEnv): string[] {
+  if (process.platform !== "win32") {
+    return [""];
+  }
+  return env.PATHEXT?.split(";").filter(Boolean) ?? [".EXE", ".CMD", ".BAT", ".COM"];
+}
+
+async function commandExists(
+  command: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<boolean> {
+  const directories = (env.PATH || process.env.PATH || "").split(path.delimiter).filter(Boolean);
+  for (const directory of directories) {
+    for (const extension of commandExtensions(env)) {
+      const candidate = path.join(directory, extension ? `${command}${extension}` : command);
+      try {
+        await access(candidate, fsConstants.X_OK);
+        return true;
+      } catch {
+        // Keep scanning PATH.
+      }
+    }
+  }
+  return false;
+}
+
+async function getLatestFffRouterdVersion(): Promise<string> {
+  const parsed = await fetchJson(FFF_ROUTER_GITHUB_PACKAGE_JSON);
+  if (
+    typeof parsed !== "object" ||
+    parsed === null ||
+    !("version" in parsed) ||
+    typeof parsed.version !== "string"
+  ) {
+    throw new Error("fff-router package.json did not contain a version");
+  }
+  return parsed.version;
+}
+
+export async function checkFffRouterdUpdate(
+  args: {
+    currentVersion?: string;
+    getLatestVersion?: () => Promise<string>;
+    commandExists?: (command: string) => Promise<boolean>;
+  } = {},
+): Promise<FffRouterdUpdateCheck> {
+  const currentVersion = args.currentVersion ?? PACKAGE_VERSION;
+  try {
+    if (!(await (args.commandExists ?? commandExists)("aube"))) {
+      return {
+        kind: "unavailable",
+        currentVersion,
+        message:
+          "aube is not available on PATH; install with: aube add -g github:unstableneutron/fff-router",
+      };
+    }
+    const latestVersion = await (args.getLatestVersion ?? getLatestFffRouterdVersion)();
+    if (compareVersions(currentVersion, latestVersion) >= 0) {
+      return { kind: "current", currentVersion, latestVersion };
+    }
+    return {
+      kind: "outdated",
+      currentVersion,
+      latestVersion,
+      command: ["aube", "add", "-g", FFF_ROUTER_AUBE_SPEC],
+    };
+  } catch (error) {
+    return {
+      kind: "unavailable",
+      currentVersion,
+      message: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+export async function installFffRouterdUpdate(
+  plan: Extract<FffRouterdUpdateCheck, { kind: "outdated" }>,
+): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(plan.command[0]!, plan.command.slice(1), { stdio: "inherit" });
+    child.once("error", reject);
+    child.once("exit", (code) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      reject(new Error(`${plan.command.join(" ")} exited with code ${code ?? "null"}`));
+    });
+  });
+}
+
+async function defaultConfirm(question: string): Promise<boolean> {
+  const rl = createInterface({ input: processStdin, output: processStdout });
+  try {
+    const answer = await rl.question(`${question} [y/N] `);
+    return /^(y|yes)$/i.test(answer.trim());
+  } finally {
+    rl.close();
+  }
+}
+
+export async function runInteractiveUpdate(
+  options: RunInteractiveUpdateOptions = {},
+): Promise<number> {
+  const env = options.env ?? process.env;
+  const writeStdout = options.writeStdout ?? ((text: string) => process.stdout.write(text));
+  const writeStderr = options.writeStderr ?? ((text: string) => process.stderr.write(text));
+  const confirm = options.confirm ?? defaultConfirm;
+  const checkMcp = options.checkFffMcpUpdate ?? (() => checkFffMcpUpdate({ env }));
+  const checkRouterd = options.checkFffRouterdUpdate ?? (() => checkFffRouterdUpdate());
+  const applyMcp = options.installFffMcpUpdate ?? installFffMcpUpdate;
+  const applyRouterd = options.installFffRouterdUpdate ?? installFffRouterdUpdate;
+  const stopDaemon = options.stopDaemon ?? (async () => false);
+  let updatedSomething = false;
+
+  const mcp = await checkMcp();
+  switch (mcp.kind) {
+    case "current":
+      writeStdout(`fff-mcp is already up to date (${mcp.currentVersion}).\n`);
+      break;
+    case "unavailable":
+      writeStderr(`Could not check fff-mcp at ${mcp.binaryPath}: ${mcp.message}\n`);
+      break;
+    case "missing":
+    case "outdated": {
+      const label = mcp.currentVersion ?? "not installed";
+      if (await confirm(`Update fff-mcp ${label} -> ${mcp.latestVersion}?`)) {
+        const installedPath = await applyMcp(mcp);
+        writeStdout(`Updated fff-mcp to ${mcp.latestVersion} at ${installedPath}.\n`);
+        updatedSomething = true;
+      } else {
+        writeStdout("Skipped fff-mcp update.\n");
+      }
+      break;
+    }
+  }
+
+  const routerd = await checkRouterd();
+  switch (routerd.kind) {
+    case "current":
+      writeStdout(`fff-routerd is already up to date (${routerd.currentVersion}).\n`);
+      break;
+    case "unavailable":
+      writeStderr(`Could not check fff-routerd: ${routerd.message}\n`);
+      break;
+    case "outdated":
+      if (
+        await confirm(
+          `Update fff-routerd ${routerd.currentVersion} -> ${routerd.latestVersion} with aube?`,
+        )
+      ) {
+        await applyRouterd(routerd);
+        writeStdout(`Updated fff-routerd to ${routerd.latestVersion}.\n`);
+        updatedSomething = true;
+      } else {
+        writeStdout("Skipped fff-routerd update.\n");
+      }
+      break;
+  }
+
+  if (updatedSomething) {
+    const stopped = await stopDaemon();
+    if (stopped) {
+      writeStdout("Stopped fff-routerd; it will restart on the next request.\n");
+    } else {
+      writeStdout("fff-routerd was not running; it will start on the next request.\n");
+    }
+  }
+
+  return 0;
+}

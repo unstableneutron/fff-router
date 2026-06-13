@@ -232,8 +232,15 @@ fff-routerd reload
 fff-routerd stop
 fff-routerd doctor
 fff-routerd install-fff-mcp
+fff-routerd update
 fff-routerd mcp
 ```
+
+`fff-routerd update` checks the standard `fff-mcp` install path
+(`$FFF_MCP_INSTALL_DIR/fff-mcp`, or `~/.local/bin/fff-mcp`) and the current
+`fff-routerd` GitHub package version. It prompts before applying each update.
+Accepted updates stop the shared daemon afterward so the next request restarts
+with fresh binaries.
 
 `fff-routerd mcp` runs a stdio MCP proxy for clients that only launch MCP
 servers as child processes. The proxy starts or reloads the shared daemon when
@@ -302,6 +309,12 @@ If you want the optional upstream `fff-mcp` binary for the experimental `fff-mcp
 
 ```bash
 fff-routerd install-fff-mcp
+```
+
+To update `fff-mcp` and `fff-routerd` interactively:
+
+```bash
+fff-routerd update
 ```
 
 To inspect whether it is installed and where the daemon is reading config/state from:

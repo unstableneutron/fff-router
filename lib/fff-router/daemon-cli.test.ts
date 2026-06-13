@@ -7,12 +7,13 @@ describe("parseDaemonCliCommand", () => {
     expect(parseDaemonCliCommand([])).toEqual({ name: "run" });
   });
 
-  test("parses status, reload, stop, doctor, install-fff-mcp, and mcp", () => {
+  test("parses status, reload, stop, doctor, install-fff-mcp, update, and mcp", () => {
     expect(parseDaemonCliCommand(["status"])).toEqual({ name: "status" });
     expect(parseDaemonCliCommand(["reload"])).toEqual({ name: "reload" });
     expect(parseDaemonCliCommand(["stop"])).toEqual({ name: "stop" });
     expect(parseDaemonCliCommand(["doctor"])).toEqual({ name: "doctor" });
     expect(parseDaemonCliCommand(["install-fff-mcp"])).toEqual({ name: "install-fff-mcp" });
+    expect(parseDaemonCliCommand(["update"])).toEqual({ name: "update" });
     expect(parseDaemonCliCommand(["mcp"])).toEqual({ name: "mcp" });
   });
 
@@ -204,5 +205,27 @@ describe("executeDaemonCliCommand", () => {
     expect(writeStdout).toHaveBeenCalledWith(
       "Installed fff-mcp to /home/test/.local/bin/fff-mcp\n",
     );
+  });
+
+  test("update delegates to the interactive updater", async () => {
+    const runUpdate = vi.fn(async () => 0);
+
+    const exitCode = await executeDaemonCliCommand(
+      { name: "update" },
+      {
+        getStatus: async () => ({ running: false, metadata: null }),
+        reloadDaemon: async () => false,
+        stopDaemon: async () => false,
+        getDoctorReport: async () => ({ running: false, metadata: null, fffMcp: { found: false } }),
+        installFffMcp: async () => "/tmp/fff-mcp",
+        runDaemon: async () => {},
+        runUpdate,
+        writeStdout: vi.fn(),
+        writeStderr: vi.fn(),
+      },
+    );
+
+    expect(exitCode).toBe(0);
+    expect(runUpdate).toHaveBeenCalledTimes(1);
   });
 });

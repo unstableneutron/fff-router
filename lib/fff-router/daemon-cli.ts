@@ -3,6 +3,7 @@ import {
   installFffMcpBinary,
   type DoctorFffMcpStatus,
 } from "./fff-mcp-installer";
+import { runInteractiveUpdate } from "./daemon-update";
 import { readDaemonMetadata, startHttpDaemon, type DaemonMetadata } from "./http-daemon";
 import {
   getDaemonConfig,
@@ -19,7 +20,8 @@ export type DaemonCliCommand =
   | { name: "reload" }
   | { name: "stop" }
   | { name: "doctor" }
-  | { name: "install-fff-mcp" };
+  | { name: "install-fff-mcp" }
+  | { name: "update" };
 
 export type DaemonStatus = {
   running: boolean;
@@ -40,6 +42,7 @@ type ExecuteDaemonCliDeps = {
   stopDaemon: () => Promise<boolean>;
   getDoctorReport: () => Promise<DoctorReport>;
   installFffMcp: () => Promise<string>;
+  runUpdate?: () => Promise<number>;
   runDaemon: () => Promise<void>;
   runMcpServer?: () => Promise<void>;
   writeStdout: (text: string) => void;
@@ -73,6 +76,8 @@ export function parseDaemonCliCommand(argv: string[]): DaemonCliCommand {
       return { name: "doctor" };
     case "install-fff-mcp":
       return { name: "install-fff-mcp" };
+    case "update":
+      return { name: "update" };
     default:
       throw new Error(`unknown command: ${command}`);
   }
@@ -215,6 +220,8 @@ export async function executeDaemonCliCommand(
       deps.writeStdout(`Installed fff-mcp to ${installedPath}\n`);
       return 0;
     }
+    case "update":
+      return await (deps.runUpdate ?? runInteractiveUpdate)();
   }
 }
 
@@ -226,6 +233,11 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
     stopDaemon: async () => await stopDaemon(env),
     getDoctorReport: async () => await getDoctorReport(env),
     installFffMcp: async () => await installFffMcpBinary({ env }),
+    runUpdate: async () =>
+      await runInteractiveUpdate({
+        env,
+        stopDaemon: async () => await stopDaemon(env),
+      }),
     runDaemon: async () => await runForegroundDaemon(env),
     runMcpServer: async () => await runMcpSocketBridge({ env }),
     writeStdout: (text) => process.stdout.write(text),
