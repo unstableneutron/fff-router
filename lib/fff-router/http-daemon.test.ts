@@ -8,6 +8,7 @@ import { callPublicToolOverHttp } from "./http-client";
 import {
   PACKAGE_VERSION,
   getDaemonReloadFingerprint,
+  getDaemonSourceFingerprint,
   loadDaemonReloadConfig,
 } from "./daemon-config";
 import { startHttpDaemon } from "./http-daemon";
@@ -162,6 +163,7 @@ describe("startHttpDaemon", () => {
 
     expect(daemon.metadata.serverFingerprint).toBeDefined();
     expect(daemon.metadata.reloadFingerprint).toBeDefined();
+    expect(daemon.metadata.daemonSourceFingerprint).toBe(getDaemonSourceFingerprint({ env }));
     expect(daemon.metadata.packageVersion).toBe(PACKAGE_VERSION);
     expect(daemon.metadata.reloadFingerprint).toBe(getDaemonReloadFingerprint({ env }));
   });

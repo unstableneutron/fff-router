@@ -43,6 +43,11 @@ type CoordinatorDeps = {
   resolveRoutingPath?: typeof resolveSearchPath;
   planLifecycle?: typeof planRoutingLifecycle;
   now?: () => number;
+  writeDiagnostic?: (event: {
+    backendId: SearchBackendId;
+    queryKind: SearchQueryKind;
+    diagnostics: Record<string, unknown>;
+  }) => void;
 };
 
 export function createCoordinatorRuntimeConfigRef(
@@ -73,6 +78,14 @@ function queryKindForRequest(request: PublicToolRequest): SearchQueryKind {
     case "fff_grep":
       return "grep";
   }
+}
+
+function defaultWriteDiagnostic(event: {
+  backendId: SearchBackendId;
+  queryKind: SearchQueryKind;
+  diagnostics: Record<string, unknown>;
+}): void {
+  console.error(JSON.stringify({ event: "fff-router.backend_diagnostics", ...event }));
 }
 
 function translateExcludePaths(
@@ -274,12 +287,14 @@ export class SearchCoordinatorImpl implements SearchCoordinator {
   private readonly resolveRoutingPath;
   private readonly planLifecycle;
   private readonly now;
+  private readonly writeDiagnostic;
 
   constructor(private readonly deps: CoordinatorDeps) {
     this.validateWithin = deps.validateWithin ?? validateResolvedWithinPaths;
     this.resolveRoutingPath = deps.resolveRoutingPath ?? resolveSearchPath;
     this.planLifecycle = deps.planLifecycle ?? planRoutingLifecycle;
     this.now = deps.now ?? Date.now;
+    this.writeDiagnostic = deps.writeDiagnostic ?? defaultWriteDiagnostic;
   }
 
   private releasePlanningLock(): void {
@@ -449,6 +464,22 @@ export class SearchCoordinatorImpl implements SearchCoordinator {
     }
   }
 
+  private emitBackendDiagnostics(result: BackendSearchResult): void {
+    if (!result.ok || !result.value.diagnostics) {
+      return;
+    }
+
+    try {
+      this.writeDiagnostic({
+        backendId: result.value.backendId,
+        queryKind: result.value.queryKind,
+        diagnostics: result.value.diagnostics,
+      });
+    } catch {
+      // Diagnostics must never affect search results.
+    }
+  }
+
   async execute(request: PublicToolRequest): Promise<SearchCoordinatorResult> {
     if (!request.within || request.within.length === 0) {
       return invalid("within must be resolved client-side before reaching the coordinator");
@@ -575,6 +606,7 @@ export class SearchCoordinatorImpl implements SearchCoordinator {
       request: primaryRequest,
       lifecyclePlan: lifecyclePlan.value,
     });
+    this.emitBackendDiagnostics(primaryResult);
 
     if (primaryResult.ok) {
       const normalizedItems = normalizeBackendItems(
@@ -638,6 +670,7 @@ export class SearchCoordinatorImpl implements SearchCoordinator {
         action: { type: "run-ephemeral", key: lifecyclePlan.value.action.key },
       },
     });
+    this.emitBackendDiagnostics(fallbackResult);
     if (!fallbackResult.ok) {
       return {
         ok: false,

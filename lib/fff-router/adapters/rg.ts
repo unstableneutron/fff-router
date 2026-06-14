@@ -2,6 +2,11 @@ import { spawn } from "node:child_process";
 import path from "node:path";
 import type { Readable } from "node:stream";
 import type { Result } from "../types";
+import {
+  resolveToolCommand as defaultResolveToolCommand,
+  type ResolvableToolName,
+  type ToolResolution,
+} from "../tool-resolution";
 import { filterItems, toRelativePath } from "./common";
 import type {
   BackendResultItem,
@@ -17,6 +22,7 @@ type CommandResult =
   | { ok: false; kind: CommandFailureKind; code?: number; stderr?: string };
 
 type RunCommand = (command: string, args: string[], cwd: string) => Promise<CommandResult>;
+type ResolveToolCommand = (tool: ResolvableToolName) => ToolResolution;
 
 function readStream(stream: Readable | null): Promise<string> {
   if (!stream) {
@@ -254,8 +260,12 @@ function parseRgJsonMatches(
   return { ok: true, value: items };
 }
 
-export function createRgAdapter(deps?: { runCommand?: RunCommand }): SearchBackendAdapter {
+export function createRgAdapter(deps?: {
+  runCommand?: RunCommand;
+  resolveToolCommand?: ResolveToolCommand;
+}): SearchBackendAdapter {
   const runCommand = deps?.runCommand ?? defaultRunCommand;
+  const resolveToolCommand = deps?.resolveToolCommand ?? defaultResolveToolCommand;
 
   return {
     backendId: "rg",
@@ -264,8 +274,12 @@ export function createRgAdapter(deps?: { runCommand?: RunCommand }): SearchBacke
       switch (args.request.queryKind) {
         case "find_files": {
           const request = args.request;
+          const fd = resolveToolCommand("fd");
+          if (!fd.command || !fd.executable) {
+            return backendUnavailable(fd.remediation ?? "fd is not available");
+          }
           const command = await runCommand(
-            "fd",
+            fd.command,
             [
               "--type",
               "f",
@@ -278,7 +292,7 @@ export function createRgAdapter(deps?: { runCommand?: RunCommand }): SearchBacke
             request.persistenceRoot,
           );
           if (!command.ok) {
-            return mapCommandFailure("fd", command);
+            return mapCommandFailure(fd.command, command);
           }
 
           const items = filterItems(
@@ -305,8 +319,12 @@ export function createRgAdapter(deps?: { runCommand?: RunCommand }): SearchBacke
         }
         case "search_terms": {
           const request = args.request;
+          const rg = resolveToolCommand("rg");
+          if (!rg.command || !rg.executable) {
+            return backendUnavailable(rg.remediation ?? "rg is not available");
+          }
           const command = await runCommand(
-            "rg",
+            rg.command,
             [
               "--json",
               "--fixed-strings",
@@ -319,7 +337,7 @@ export function createRgAdapter(deps?: { runCommand?: RunCommand }): SearchBacke
             request.persistenceRoot,
           );
           if (!command.ok) {
-            return mapCommandFailure("rg", command);
+            return mapCommandFailure(rg.command, command);
           }
 
           const parsed = parseRgJsonMatches(command.stdout, request.persistenceRoot);
@@ -356,9 +374,13 @@ export function createRgAdapter(deps?: { runCommand?: RunCommand }): SearchBacke
           rgArgs.push(...request.patterns.flatMap((pattern) => ["-e", pattern] as const));
           rgArgs.push(...buildSearchTargets(request));
 
-          const command = await runCommand("rg", rgArgs, request.persistenceRoot);
+          const rg = resolveToolCommand("rg");
+          if (!rg.command || !rg.executable) {
+            return backendUnavailable(rg.remediation ?? "rg is not available");
+          }
+          const command = await runCommand(rg.command, rgArgs, request.persistenceRoot);
           if (!command.ok) {
-            return mapCommandFailure("rg", command);
+            return mapCommandFailure(rg.command, command);
           }
 
           const parsed = parseRgJsonMatches(command.stdout, request.persistenceRoot);

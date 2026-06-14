@@ -9,6 +9,7 @@ import {
   getDaemonPolicyConfigPaths,
   getDaemonReloadFingerprint,
   getDaemonServerFingerprint,
+  getDaemonSourceFingerprint,
   getDefaultDaemonFileConfig,
   loadDaemonReloadConfig,
   readPreferredDaemonPolicyFile,
@@ -176,6 +177,8 @@ describe("daemon config file", () => {
       dir: path.join(home, ".local", "state", "fff-routerd"),
       metadataPath: path.join(home, ".local", "state", "fff-routerd", "daemon.json"),
       lockPath: path.join(home, ".local", "state", "fff-routerd", "startup.lock"),
+      stdoutLogPath: path.join(home, ".local", "state", "fff-routerd", "daemon.stdout.log"),
+      stderrLogPath: path.join(home, ".local", "state", "fff-routerd", "daemon.stderr.log"),
       mcpSocketPath: expect.stringMatching(/^\/tmp\/fff-routerd-[a-f0-9]{16}\.sock$/),
     });
   });
@@ -237,5 +240,52 @@ describe("daemon fingerprints", () => {
         daemonConfig: { port: 4320 },
       }),
     );
+  });
+
+  test("server fingerprint changes when daemon source fingerprint changes", async () => {
+    const home = await makeTempHome();
+    const env = {
+      HOME: home,
+      FFF_ROUTER_DAEMON_SOURCE_FINGERPRINT: "build-a",
+    } as NodeJS.ProcessEnv;
+    await writeConfigFile({
+      home,
+      fileName: "config.json",
+      text: `{ "host": "127.0.0.1", "port": 4319, "mcpPath": "/mcp" }`,
+    });
+
+    const before = getDaemonServerFingerprint({ env });
+    const after = getDaemonServerFingerprint({
+      env: {
+        ...env,
+        FFF_ROUTER_DAEMON_SOURCE_FINGERPRINT: "build-b",
+      },
+    });
+
+    expect(getDaemonSourceFingerprint({ env })).toBe("build-a");
+    expect(after).not.toBe(before);
+  });
+
+  test("daemon source fingerprint follows an explicit daemon binary override", async () => {
+    const home = await makeTempHome();
+    const firstBin = path.join(home, "bin-a");
+    const secondBin = path.join(home, "bin-b");
+    await writeFile(firstBin, "first");
+    await writeFile(secondBin, "second");
+
+    const first = getDaemonSourceFingerprint({
+      env: {
+        HOME: home,
+        FFF_ROUTER_DAEMON_BIN: firstBin,
+      } as NodeJS.ProcessEnv,
+    });
+    const second = getDaemonSourceFingerprint({
+      env: {
+        HOME: home,
+        FFF_ROUTER_DAEMON_BIN: secondBin,
+      } as NodeJS.ProcessEnv,
+    });
+
+    expect(first).not.toBe(second);
   });
 });

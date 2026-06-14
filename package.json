@@ -1,6 +1,6 @@
 {
   "name": "fff-router",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "bin": {
     "fff-find-files": "./dist/bin/fff-find-files.js",
     "fff-grep": "./dist/bin/fff-grep.js",
@@ -22,6 +22,7 @@
     "build:standalone": "bun run scripts/build-standalone.ts",
     "prepack": "node scripts/build-package.mjs",
     "test": "vitest run",
+    "check:dist": "node scripts/build-package.mjs && git diff --exit-code -- dist",
     "check": "oxfmt . && oxlint --type-aware --type-check .",
     "fix": "oxfmt --write . && oxlint --type-aware --type-check --fix --fix-suggestions --fix-dangerously ."
   },

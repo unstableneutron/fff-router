@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import type {
   BackendResultItem,
   BackendSearchRequest,
@@ -140,6 +140,72 @@ describe("createSearchCoordinator", () => {
     expect(result.value.backend_used).toBe("rg");
     expect(fffNode.calls).toHaveLength(0);
     expect(rg.calls).toHaveLength(1);
+  });
+
+  test("logs backend diagnostics for observability without exposing them publicly", async () => {
+    const writeDiagnostic = vi.fn();
+    const fffMcp = makeAdapter({
+      backendId: "fff-mcp",
+      execute: async () => ({
+        ok: true,
+        value: {
+          backendId: "fff-mcp",
+          queryKind: "grep",
+          items: [],
+          nextCursor: null,
+          diagnostics: {
+            cursorDrain: {
+              pagesFetched: 2,
+              filteredOutCount: 2,
+              repeatedCursor: "9",
+              pageCapHit: false,
+            },
+          },
+        },
+      }),
+    });
+
+    const coordinator = createSearchCoordinator({
+      config,
+      adapters: { "fff-mcp": fffMcp.adapter },
+      primaryBackendId: "fff-mcp",
+      fallbackBackendId: null,
+      runtimeManager: new RuntimeManager(),
+      writeDiagnostic,
+      validateWithin: async ({ withinPaths: [within = "/missing"] }) => ({
+        ok: true,
+        value: { resolvedWithin: within, basePath: within },
+      }),
+      resolveRoutingPath: async (within) => ({
+        ok: true,
+        value: { realPath: within, statType: "directory", gitRoot: "/repo" },
+      }),
+    });
+
+    const result = await coordinator.execute(
+      makePublicRequest({
+        tool: "fff_grep",
+        patterns: ["UsageStatisticsEnabled"],
+        literal: true,
+        outputMode: "json",
+      }),
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected success");
+    expect(writeDiagnostic).toHaveBeenCalledWith({
+      backendId: "fff-mcp",
+      queryKind: "grep",
+      diagnostics: {
+        cursorDrain: {
+          pagesFetched: 2,
+          filteredOutCount: 2,
+          repeatedCursor: "9",
+          pageCapHit: false,
+        },
+      },
+    });
+    expect(JSON.stringify(result.value)).not.toContain("cursorDrain");
   });
 
   test("uses the configured primary backend from the adapter registry", async () => {

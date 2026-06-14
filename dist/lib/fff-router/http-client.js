@@ -478,6 +478,8 @@ function getDaemonPaths(args = {}) {
     dir,
     metadataPath: path2.join(dir, "daemon.json"),
     lockPath: path2.join(dir, "startup.lock"),
+    stdoutLogPath: path2.join(dir, "daemon.stdout.log"),
+    stderrLogPath: path2.join(dir, "daemon.stderr.log"),
     mcpSocketPath: mcpSocketPathForStateDir(dir)
   };
 }

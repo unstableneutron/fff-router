@@ -3,7 +3,9 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import type { ValidatedWithinEntry } from "../types";
 import { filterItems } from "./common";
+import { resolveToolCommand } from "../tool-resolution";
 import type {
+  BackendResultItem,
   BackendSearchResult,
   BackendSearchSummary,
   SearchBackendAdapter,
@@ -13,6 +15,15 @@ import type {
 type FffMcpRuntime = SearchBackendRuntime & {
   callTool: (name: string, args: Record<string, unknown>) => Promise<string>;
 };
+
+type TextMatchRequest = Extract<
+  Parameters<SearchBackendAdapter<FffMcpRuntime>["execute"]>[0]["request"],
+  { queryKind: "search_terms" | "grep" }
+>;
+type TextMatchItem = ReturnType<typeof parseTextMatchOutput>["items"][number];
+type EvaluatedTextMatchPage = ReturnType<typeof evaluateTextMatchPage>;
+
+const MAX_FILTERED_CURSOR_PAGES = 20;
 
 function backendUnavailable(message: string): BackendSearchResult {
   return {
@@ -37,7 +48,11 @@ function searchFailed(message: string): BackendSearchResult {
 }
 
 function discoverFffMcpCommand(): string {
-  return process.env.FFF_ROUTER_FFF_MCP_BIN || "fff-mcp";
+  const resolution = resolveToolCommand("fff-mcp");
+  if (!resolution.command || !resolution.executable) {
+    throw new Error(resolution.remediation ?? "fff-mcp is not available");
+  }
+  return resolution.command;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -54,6 +69,22 @@ function inheritedStringEnv(): Record<string, string> {
 
 function normalizeRelative(relativePath: string): string {
   return relativePath.replace(/\\/g, "/").replace(/^\.\//, "");
+}
+
+const GLOB_META_PATTERN = /[*?[\]{}!]/;
+
+function compileFffMcpGlobConstraint(glob: string): string {
+  const normalized = normalizeRelative(glob);
+  if (
+    !normalized.includes("/") ||
+    normalized.startsWith("**/") ||
+    normalized.endsWith("/") ||
+    GLOB_META_PATTERN.test(normalized)
+  ) {
+    return glob;
+  }
+
+  return `**/${normalized}`;
 }
 
 function formatExcludeConstraint(excludePath: string): string {
@@ -175,7 +206,7 @@ function buildConstraintTokens(request: {
   }
 
   if (request.glob) {
-    tokens.push(request.glob);
+    tokens.push(compileFffMcpGlobConstraint(request.glob));
   }
 
   for (const extension of request.extensions) {
@@ -314,7 +345,8 @@ function parseShownSummary(line: string): Pick<BackendSearchSummary, "shownCount
 /**
  * Walks an fff-mcp compact-text response and keeps only the path blocks whose
  * header relative-path satisfies `keep`. Preamble lines (`N/M matches shown`,
- * `0 matches`, `0 exact matches`, `cursor:…`, blanks) are always preserved;
+ * `0 matches`, `0 exact matches`, `cursor:…`, blanks) pass through this
+ * low-level filter so callers can decide which metadata to preserve or strip;
  * `→ Read <path>` recommendations are dropped when the recommended path has
  * been filtered out so the rendered preamble never points at a file we just
  * removed from the body. Indented numbered lines (`  N:`, `  N-`, `  N|`)
@@ -505,13 +537,190 @@ function rewriteRenderedCompactIfNeeded(
   text: string,
   originalItems: Array<{ relativePath: string }>,
   filteredItems: Array<{ relativePath: string }>,
-): string {
+): string | undefined {
   const survivingPaths = new Set(filteredItems.map((item) => item.relativePath));
   const somethingDropped = originalItems.some((item) => !survivingPaths.has(item.relativePath));
-  if (!somethingDropped) {
-    return text;
+  const filteredText = somethingDropped
+    ? filterRenderedCompactText(text, (relativePath) => survivingPaths.has(relativePath))
+    : text;
+  const withoutCursor = stripUnsupportedCursorLines(filteredText);
+
+  if (isMetadataOnlyCompactText(withoutCursor)) {
+    return undefined;
   }
-  return filterRenderedCompactText(text, (relativePath) => survivingPaths.has(relativePath));
+
+  return withoutCursor;
+}
+
+function stripUnsupportedCursorLines(text: string): string {
+  let removed = false;
+  const lines = text.split(/\r?\n/).filter((rawLine) => {
+    const line = rawLine.trimEnd();
+    if (line.startsWith("cursor:")) {
+      removed = true;
+      return false;
+    }
+    return true;
+  });
+
+  return removed ? lines.join("\n").trimEnd() : text;
+}
+
+function isMetadataOnlyCompactText(text: string): boolean {
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trimEnd();
+    if (!line || /^\d+\/\d+\s+matches\s+shown$/.test(line)) {
+      continue;
+    }
+    return false;
+  }
+
+  return true;
+}
+
+function extractUnsupportedCursor(text: string): string | null {
+  for (const rawLine of text.split(/\r?\n/)) {
+    const match = rawLine.trimEnd().match(/^cursor:\s*(\S+)\s*$/);
+    if (match?.[1]) {
+      return match[1];
+    }
+  }
+
+  return null;
+}
+
+function evaluateTextMatchPage(request: TextMatchRequest, text: string) {
+  const parsed = parseTextMatchOutput(text, request.persistenceRoot);
+  const filteredItems = filterItems(request, parsed.items).filter(isTextMatchItem);
+
+  return {
+    text,
+    parsed,
+    filteredItems,
+  };
+}
+
+function isTextMatchItem(item: BackendResultItem): item is TextMatchItem {
+  return (
+    typeof (item as { line?: unknown }).line === "number" &&
+    typeof (item as { text?: unknown }).text === "string"
+  );
+}
+
+function renderSyntheticTextMatchCompact(items: TextMatchItem[]): string | undefined {
+  if (items.length === 0) {
+    return undefined;
+  }
+
+  const label = items.length === 1 ? "filtered match" : "filtered matches";
+  const lines = [`${items.length} ${label} shown`];
+  for (const item of items) {
+    lines.push(`${item.relativePath}${item.isDefinition ? " [def]" : ""}`);
+    lines.push(` ${item.line}: ${item.text}`);
+  }
+
+  return lines.join("\n");
+}
+
+function renderDrainedTextMatchCompact(
+  pages: EvaluatedTextMatchPage[],
+  items: TextMatchItem[],
+): string | undefined {
+  if (pages.length <= 1) {
+    const page = pages[0];
+    if (!page) {
+      return undefined;
+    }
+    return rewriteRenderedCompactIfNeeded(page.text, page.parsed.items, page.filteredItems);
+  }
+
+  return renderSyntheticTextMatchCompact(items);
+}
+
+function summarizeDrainedTextMatchPages(
+  pages: EvaluatedTextMatchPage[],
+  collectedItems: TextMatchItem[],
+): BackendSearchSummary {
+  if (pages.length <= 1) {
+    const page = pages[0];
+    if (!page) {
+      return {};
+    }
+    return summarizeFilteredTextMatchPage(page.parsed.summary, page.filteredItems);
+  }
+
+  if (collectedItems.length === 0) {
+    return {};
+  }
+
+  return { shownCount: collectedItems.length };
+}
+
+function summarizeFilteredTextMatchPage(
+  summary: BackendSearchSummary,
+  filteredItems: Array<{ relativePath: string }>,
+): BackendSearchSummary {
+  if (filteredItems.length === 0) {
+    return {};
+  }
+
+  return narrowSummaryToSurvivingPaths(summary, filteredItems);
+}
+
+async function executeTextMatchWithFilteredCursorDrain(
+  runtime: FffMcpRuntime,
+  toolName: "multi_grep" | "grep",
+  baseArguments: Record<string, unknown>,
+  request: TextMatchRequest,
+) {
+  let text = await callToolText(runtime, toolName, baseArguments);
+  let page = evaluateTextMatchPage(request, text);
+  const pages = [page];
+  const collectedItems: TextMatchItem[] = [...page.filteredItems];
+  const seenCursors = new Set<string>();
+  let repeatedCursor: string | undefined;
+  let pageCapHit = false;
+
+  while (collectedItems.length < request.limit) {
+    const cursor = extractUnsupportedCursor(text);
+    if (cursor === null) {
+      break;
+    }
+    if (seenCursors.has(cursor)) {
+      repeatedCursor = cursor;
+      break;
+    }
+    if (pages.length >= MAX_FILTERED_CURSOR_PAGES) {
+      pageCapHit = true;
+      break;
+    }
+
+    seenCursors.add(cursor);
+    text = await callToolText(runtime, toolName, { ...baseArguments, cursor });
+    page = evaluateTextMatchPage(request, text);
+    pages.push(page);
+    collectedItems.push(...page.filteredItems);
+  }
+
+  const items = collectedItems.slice(0, request.limit);
+  const filteredOutCount = pages.reduce(
+    (count, drainedPage) =>
+      count + Math.max(0, drainedPage.parsed.items.length - drainedPage.filteredItems.length),
+    0,
+  );
+  return {
+    items,
+    renderedCompact: renderDrainedTextMatchCompact(pages, items),
+    summary: summarizeDrainedTextMatchPages(pages, items),
+    diagnostics: {
+      cursorDrain: {
+        pagesFetched: pages.length,
+        filteredOutCount,
+        ...(repeatedCursor ? { repeatedCursor } : {}),
+        pageCapHit,
+      },
+    },
+  };
 }
 
 /**
@@ -722,23 +931,24 @@ export function createFffMcpStdioAdapter(): SearchBackendAdapter<FffMcpRuntime> 
             };
           }
           case "search_terms": {
-            const text = await callToolText(args.runtime, "multi_grep", {
-              patterns: args.request.terms,
-              constraints: compileConstraints(args.request),
-              maxResults: args.request.limit,
-              context: args.request.contextLines,
-            });
-            const parsed = parseTextMatchOutput(text, args.request.persistenceRoot);
-            const filteredItems = filterItems(args.request, parsed.items);
+            const value = await executeTextMatchWithFilteredCursorDrain(
+              args.runtime,
+              "multi_grep",
+              {
+                patterns: args.request.terms,
+                constraints: compileConstraints(args.request),
+                maxResults: args.request.limit,
+                context: args.request.contextLines,
+              },
+              args.request,
+            );
             return {
               ok: true,
               value: {
                 backendId: "fff-mcp",
                 queryKind: "search_terms",
-                items: filteredItems,
+                ...value,
                 nextCursor: null,
-                renderedCompact: rewriteRenderedCompactIfNeeded(text, parsed.items, filteredItems),
-                summary: narrowSummaryToSurvivingPaths(parsed.summary, filteredItems),
               },
             };
           }
@@ -747,28 +957,31 @@ export function createFffMcpStdioAdapter(): SearchBackendAdapter<FffMcpRuntime> 
             // is fff-mcp's literal-only path (patterns stay intact, no DSL
             // shredding). `grep` is the regex path, with whitespace encoded
             // so the DSL parser doesn't split the pattern into tokens.
-            const text = args.request.literal
-              ? await callToolText(args.runtime, "multi_grep", {
+            const toolName = args.request.literal ? "multi_grep" : "grep";
+            const toolArguments = args.request.literal
+              ? {
                   patterns: args.request.patterns,
                   constraints: compileConstraints(args.request),
                   maxResults: args.request.limit,
                   context: args.request.contextLines,
-                })
-              : await callToolText(args.runtime, "grep", {
+                }
+              : {
                   query: compileGrepQuery(args.request),
                   maxResults: args.request.limit,
-                });
-            const parsed = parseTextMatchOutput(text, args.request.persistenceRoot);
-            const filteredItems = filterItems(args.request, parsed.items);
+                };
+            const value = await executeTextMatchWithFilteredCursorDrain(
+              args.runtime,
+              toolName,
+              toolArguments,
+              args.request,
+            );
             return {
               ok: true,
               value: {
                 backendId: "fff-mcp",
                 queryKind: "grep",
-                items: filteredItems,
+                ...value,
                 nextCursor: null,
-                renderedCompact: rewriteRenderedCompactIfNeeded(text, parsed.items, filteredItems),
-                summary: narrowSummaryToSurvivingPaths(parsed.summary, filteredItems),
               },
             };
           }

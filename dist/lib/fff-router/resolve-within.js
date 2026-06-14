@@ -88,9 +88,6 @@ function validateAbsolutePath(candidate, field) {
   return { ok: true, value: trimmed };
 }
 function resolveStatType(stats) {
-  if (!stats) {
-    return internalError("failed to inspect resolved within path");
-  }
   if (stats.isDirectory()) {
     return { ok: true, value: "directory" };
   }

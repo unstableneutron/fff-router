@@ -4,15 +4,18 @@ import {
   type DoctorFffMcpStatus,
 } from "./fff-mcp-installer";
 import { runAgentMcpServer } from "./agent-mcp";
+import { readDaemonLogs, resolveDaemonLaunchCommand } from "./daemon-autostart";
 import { runInteractiveUpdate } from "./daemon-update";
-import { readDaemonMetadata, startHttpDaemon, type DaemonMetadata } from "./http-daemon";
+import { startHttpDaemon, type DaemonMetadata } from "./http-daemon";
 import {
   getDaemonConfig,
   getDaemonEndpoint,
+  getDaemonOriginFromConfig,
   getDaemonPaths,
   getDaemonPolicyConfigPaths,
 } from "./daemon-config";
 import { runMcpSocketBridge } from "./mcp-bridge";
+import { getToolDiagnostic, type ToolDiagnostic } from "./tool-resolution";
 
 export type DaemonCliCommand =
   | { name: "run" }
@@ -20,6 +23,7 @@ export type DaemonCliCommand =
   | { name: "status" }
   | { name: "reload" }
   | { name: "stop" }
+  | { name: "logs" }
   | { name: "doctor" }
   | { name: "install-fff-mcp" }
   | { name: "update" };
@@ -29,18 +33,32 @@ export type DaemonStatus = {
   metadata: DaemonMetadata | null;
 };
 
+export type ToolReport = {
+  fffMcp: DoctorFffMcpStatus;
+  rg: ToolDiagnostic;
+  fd: ToolDiagnostic;
+  daemon: ReturnType<typeof resolveDaemonLaunchCommand>;
+};
+
+export type DaemonStatusReport = DaemonStatus & {
+  tools: ToolReport;
+};
+
 export type DoctorReport = DaemonStatus & {
   endpoint?: string;
   configPath?: string;
   stateDir?: string;
   daemonConfig?: ReturnType<typeof getDaemonConfig>;
   fffMcp: DoctorFffMcpStatus;
+  tools?: ToolReport;
 };
 
 type ExecuteDaemonCliDeps = {
   getStatus: () => Promise<DaemonStatus>;
+  getStatusReport?: () => Promise<DaemonStatusReport>;
   reloadDaemon: () => Promise<boolean>;
   stopDaemon: () => Promise<boolean>;
+  getLogs?: () => Promise<Awaited<ReturnType<typeof readDaemonLogs>>>;
   getDoctorReport: () => Promise<DoctorReport>;
   installFffMcp: () => Promise<string>;
   runUpdate?: () => Promise<number>;
@@ -56,6 +74,24 @@ function isProcessAlive(pid: number): boolean {
     return true;
   } catch {
     return false;
+  }
+}
+
+async function fetchHealthMetadata(env: NodeJS.ProcessEnv): Promise<DaemonMetadata | null> {
+  try {
+    const config = getDaemonConfig({ env });
+    const response = await fetch(new URL("/health", getDaemonOriginFromConfig(config)));
+    if (!response.ok) {
+      return null;
+    }
+
+    const payload = (await response.json()) as {
+      ok?: boolean;
+      metadata?: DaemonMetadata | null;
+    };
+    return payload.ok && payload.metadata ? payload.metadata : null;
+  } catch {
+    return null;
   }
 }
 
@@ -85,6 +121,8 @@ export function parseDaemonCliCommand(argv: string[]): DaemonCliCommand {
       return { name: "reload" };
     case "stop":
       return { name: "stop" };
+    case "logs":
+      return { name: "logs" };
     case "doctor":
       return { name: "doctor" };
     case "install-fff-mcp":
@@ -97,12 +135,31 @@ export function parseDaemonCliCommand(argv: string[]): DaemonCliCommand {
 }
 
 export async function getDaemonStatus(env: NodeJS.ProcessEnv = process.env): Promise<DaemonStatus> {
-  const metadata = await readDaemonMetadata(getDaemonPaths({ env }).metadataPath);
-  if (!metadata || !isProcessAlive(metadata.pid)) {
+  const metadata = await fetchHealthMetadata(env);
+  if (!metadata) {
     return { running: false, metadata: null };
   }
 
   return { running: true, metadata };
+}
+
+async function getToolReport(env: NodeJS.ProcessEnv): Promise<ToolReport> {
+  const fffMcp = await getDoctorFffMcpStatus(env);
+  return {
+    fffMcp,
+    rg: await getToolDiagnostic("rg", { env }),
+    fd: await getToolDiagnostic("fd", { env }),
+    daemon: resolveDaemonLaunchCommand(env),
+  };
+}
+
+export async function getDaemonStatusReport(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<DaemonStatusReport> {
+  return {
+    ...(await getDaemonStatus(env)),
+    tools: await getToolReport(env),
+  };
 }
 
 export async function reloadDaemon(env: NodeJS.ProcessEnv = process.env): Promise<boolean> {
@@ -111,7 +168,14 @@ export async function reloadDaemon(env: NodeJS.ProcessEnv = process.env): Promis
     return false;
   }
 
-  process.kill(status.metadata.pid, "SIGHUP");
+  try {
+    process.kill(status.metadata.pid, "SIGHUP");
+  } catch (error) {
+    if (typeof error === "object" && error && "code" in error && error.code === "ESRCH") {
+      return false;
+    }
+    throw error;
+  }
   return true;
 }
 
@@ -125,7 +189,14 @@ export async function stopDaemon(env: NodeJS.ProcessEnv = process.env): Promise<
     return false;
   }
 
-  process.kill(status.metadata.pid, "SIGTERM");
+  try {
+    process.kill(status.metadata.pid, "SIGTERM");
+  } catch (error) {
+    if (typeof error === "object" && error && "code" in error && error.code === "ESRCH") {
+      return false;
+    }
+    throw error;
+  }
   for (const delay of [25, 50, 100, 200, 400, 800]) {
     if (!isProcessAlive(status.metadata.pid)) {
       return true;
@@ -178,6 +249,7 @@ export async function getDoctorReport(env: NodeJS.ProcessEnv = process.env): Pro
   const status = await getDaemonStatus(env);
   const policyPaths = getDaemonPolicyConfigPaths({ env });
   const daemonPaths = getDaemonPaths({ env });
+  const tools = await getToolReport(env);
 
   return {
     ...status,
@@ -185,7 +257,8 @@ export async function getDoctorReport(env: NodeJS.ProcessEnv = process.env): Pro
     configPath: policyPaths.jsonPath,
     stateDir: daemonPaths.dir,
     daemonConfig: getDaemonConfig({ env }),
-    fffMcp: await getDoctorFffMcpStatus(env),
+    fffMcp: tools.fffMcp,
+    tools,
   };
 }
 
@@ -201,7 +274,7 @@ export async function executeDaemonCliCommand(
       await (deps.runMcpServer ?? runSelectedMcpServer)(command.profile);
       return 0;
     case "status": {
-      const status = await deps.getStatus();
+      const status = await (deps.getStatusReport ?? deps.getStatus)();
       deps.writeStdout(`${JSON.stringify(status, null, 2)}\n`);
       return 0;
     }
@@ -221,6 +294,11 @@ export async function executeDaemonCliCommand(
         return 1;
       }
       deps.writeStdout("Stopped fff-routerd\n");
+      return 0;
+    }
+    case "logs": {
+      const logs = await (deps.getLogs ?? readDaemonLogs)();
+      deps.writeStdout(`${JSON.stringify(logs, null, 2)}\n`);
       return 0;
     }
     case "doctor": {
@@ -250,8 +328,10 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
   const command = parseDaemonCliCommand(argv);
   return await executeDaemonCliCommand(command, {
     getStatus: async () => await getDaemonStatus(env),
+    getStatusReport: async () => await getDaemonStatusReport(env),
     reloadDaemon: async () => await reloadDaemon(env),
     stopDaemon: async () => await stopDaemon(env),
+    getLogs: async () => await readDaemonLogs(env),
     getDoctorReport: async () => await getDoctorReport(env),
     installFffMcp: async () => await installFffMcpBinary({ env }),
     runUpdate: async () =>

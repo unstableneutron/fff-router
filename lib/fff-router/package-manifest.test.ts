@@ -44,6 +44,7 @@ describe("package manifest", () => {
       build: "node scripts/build-package.mjs",
       "build:package": "node scripts/build-package.mjs",
       "build:standalone": "bun run scripts/build-standalone.ts",
+      "check:dist": "node scripts/build-package.mjs && git diff --exit-code -- dist",
       prepack: "node scripts/build-package.mjs",
     });
     expect(packageJson.scripts).not.toHaveProperty("prepare");

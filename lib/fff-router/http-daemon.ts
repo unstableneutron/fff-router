@@ -16,6 +16,7 @@ import {
   getDaemonPolicyConfigPaths,
   getDaemonReloadFingerprintForConfig,
   getDaemonServerFingerprint,
+  getDaemonSourceFingerprint,
   loadDaemonReloadConfig,
 } from "./daemon-config";
 import { createMcpServer } from "./mcp-server";
@@ -38,6 +39,7 @@ export type DaemonMetadata = {
   mcpSocketPath?: string;
   protocolVersion: string;
   packageVersion: string;
+  daemonSourceFingerprint?: string;
   serverFingerprint: string;
   reloadFingerprint: string;
   startedAt: number;
@@ -125,6 +127,7 @@ function buildMetadata(args: {
     mcpSocketPath: getDaemonPaths({ env: args.env }).mcpSocketPath,
     protocolVersion: DAEMON_PROTOCOL_VERSION,
     packageVersion: PACKAGE_VERSION,
+    daemonSourceFingerprint: getDaemonSourceFingerprint({ env: args.env }),
     serverFingerprint: getDaemonServerFingerprint({
       env: args.env,
       daemonConfig: {

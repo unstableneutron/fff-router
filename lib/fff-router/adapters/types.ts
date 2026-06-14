@@ -100,6 +100,7 @@ export type BackendSearchSuccess = {
   nextCursor: null;
   renderedCompact?: string;
   summary?: BackendSearchSummary;
+  diagnostics?: Record<string, unknown>;
 };
 
 export type BackendSearchResult = Result<BackendSearchSuccess, BackendSearchError>;

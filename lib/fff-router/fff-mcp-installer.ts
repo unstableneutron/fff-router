@@ -1,13 +1,24 @@
-import { existsSync } from "node:fs";
 import { chmod, mkdir, rename, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { getToolDiagnostic, resolveToolCommand } from "./tool-resolution";
 
 export type DoctorFffMcpStatus =
-  | { found: false }
+  | {
+      found: false;
+      source?: "missing";
+      executable?: false;
+      envVar?: string;
+      remediation?: string;
+    }
   | {
       found: true;
       path: string;
+      source: "env" | "path";
+      executable: boolean;
+      envVar: string;
+      version?: string;
+      remediation?: string;
     };
 
 function defaultInstallDir(env: NodeJS.ProcessEnv): string {
@@ -49,31 +60,32 @@ export function detectFffMcpTarget(platform = process.platform, arch = process.a
 }
 
 export function findFffMcpOnPath(env: NodeJS.ProcessEnv = process.env): string | null {
-  const pathValue = env.PATH || process.env.PATH || "";
-  const directories = pathValue.split(path.delimiter).filter(Boolean);
-  const names =
-    process.platform === "win32" ? ["fff-mcp.exe", "fff-mcp.cmd", "fff-mcp"] : ["fff-mcp"];
-
-  for (const directory of directories) {
-    for (const name of names) {
-      const candidate = path.join(directory, name);
-      if (existsSync(candidate)) {
-        return candidate;
-      }
-    }
-  }
-
-  return null;
+  const resolution = resolveToolCommand("fff-mcp", { env });
+  return resolution.command && resolution.executable ? resolution.command : null;
 }
 
 export async function getDoctorFffMcpStatus(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<DoctorFffMcpStatus> {
-  const foundPath = findFffMcpOnPath(env);
-  if (!foundPath) {
-    return { found: false };
+  const diagnostic = await getToolDiagnostic("fff-mcp", { env });
+  if (!diagnostic.command) {
+    return {
+      found: false,
+      source: "missing",
+      executable: false,
+      envVar: diagnostic.envVar,
+      ...(diagnostic.remediation ? { remediation: diagnostic.remediation } : {}),
+    };
   }
-  return { found: true, path: foundPath };
+  return {
+    found: true,
+    path: diagnostic.command,
+    source: diagnostic.source === "env" ? "env" : "path",
+    executable: diagnostic.executable,
+    envVar: diagnostic.envVar,
+    ...(diagnostic.version ? { version: diagnostic.version } : {}),
+    ...(diagnostic.remediation ? { remediation: diagnostic.remediation } : {}),
+  };
 }
 
 function releaseFilename(target: string): string {

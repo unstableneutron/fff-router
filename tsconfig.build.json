@@ -5,7 +5,7 @@
     "declaration": true,
     "emitDeclarationOnly": true,
     "declarationMap": false,
-    "outDir": "./dist",
+    "outDir": "./scratch/declarations",
     "rootDir": "."
   },
   "include": ["bin/**/*.ts", "lib/**/*.ts"],

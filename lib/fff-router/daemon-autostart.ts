@@ -1,5 +1,5 @@
 import { spawn as spawnChildProcess } from "node:child_process";
-import { constants as fsConstants, accessSync, existsSync } from "node:fs";
+import { createWriteStream, existsSync, mkdirSync } from "node:fs";
 import { mkdir, open, readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import {
@@ -12,6 +12,7 @@ import {
   getDaemonPaths,
 } from "./daemon-config";
 import { readDaemonMetadata, type DaemonMetadata } from "./http-daemon";
+import { resolveExecutableOnPath as defaultResolveExecutableOnPath } from "./tool-resolution";
 
 type DaemonHealthMismatchKind = "protocol" | "version" | "server" | "reload";
 type VersionCompatibility = "same" | "running-newer";
@@ -55,52 +56,22 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
-function isExecutable(pathValue: string): boolean {
-  try {
-    accessSync(pathValue, fsConstants.X_OK);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function commandExtensions(env: NodeJS.ProcessEnv): string[] {
-  if (process.platform !== "win32") {
-    return [""];
-  }
-
-  const pathExt = env.PATHEXT?.split(";").filter(Boolean);
-  return pathExt && pathExt.length > 0 ? pathExt : [".EXE", ".CMD", ".BAT", ".COM"];
-}
-
-function defaultResolveExecutableOnPath(command: string, env: NodeJS.ProcessEnv): string | null {
-  const pathValue = env.PATH || process.env.PATH || "";
-  const directories = pathValue.split(path.delimiter).filter(Boolean);
-  const extensions = commandExtensions(env);
-
-  for (const directory of directories) {
-    for (const extension of extensions) {
-      const candidatePath =
-        process.platform === "win32" && extension && !command.toUpperCase().endsWith(extension)
-          ? path.join(directory, `${command}${extension}`)
-          : path.join(directory, command);
-      if (existsSync(candidatePath) && isExecutable(candidatePath)) {
-        return candidatePath;
-      }
-    }
-  }
-
-  return null;
-}
-
 export function resolveDaemonLaunchCommand(
   env: NodeJS.ProcessEnv = process.env,
   deps: {
     preferPackaged?: boolean;
     resolveExecutableOnPath?: (command: string) => string | null;
   } = {},
-): { command: string; args: string[]; source: "path" | "packaged" } {
-  if (!deps.preferPackaged) {
+): { command: string; args: string[]; source: "env" | "path" | "packaged" } {
+  if (env.FFF_ROUTER_DAEMON_BIN) {
+    return { command: env.FFF_ROUTER_DAEMON_BIN, args: [], source: "env" };
+  }
+
+  if (env.FFF_ROUTER_DAEMON_ENTRYPOINT) {
+    return { command: process.execPath, args: [env.FFF_ROUTER_DAEMON_ENTRYPOINT], source: "env" };
+  }
+
+  if (!deps.preferPackaged && env.FFF_ROUTER_DAEMON_ALLOW_PATH === "1") {
     const resolvedCommand = (
       deps.resolveExecutableOnPath ?? ((command) => defaultResolveExecutableOnPath(command, env))
     )("fff-routerd");
@@ -389,18 +360,63 @@ function shouldPreserveNewerDaemonMismatch(error: unknown, env?: NodeJS.ProcessE
 function spawnDaemon(
   env?: NodeJS.ProcessEnv,
   options?: { preferPackaged?: boolean },
-): { unref: () => void; source: "path" | "packaged" } {
+): { unref: () => void; source: "env" | "path" | "packaged" } {
   const launchCommand = resolveDaemonLaunchCommand(env ?? process.env, options);
+  const paths = getDaemonPaths({ env });
+  mkdirSync(paths.dir, { recursive: true });
   const child = spawnChildProcess(launchCommand.command, launchCommand.args, {
     env: env ?? process.env,
     stdio: ["ignore", "pipe", "pipe"],
   });
-  child.stdout?.destroy();
-  child.stderr?.destroy();
+  const stdoutLog = createWriteStream(paths.stdoutLogPath, { flags: "a" });
+  const stderrLog = createWriteStream(paths.stderrLogPath, { flags: "a" });
+  child.stdout?.pipe(stdoutLog);
+  child.stderr?.pipe(stderrLog);
+  child.once("error", (error) => {
+    stderrLog.write(`fff-routerd spawn failed: ${error.message}\n`);
+    stdoutLog.end();
+    stderrLog.end();
+  });
+  child.once("close", () => {
+    stdoutLog.end();
+    stderrLog.end();
+  });
   return {
     unref: () => child.unref(),
     source: launchCommand.source,
   };
+}
+
+async function readLogTail(pathValue: string, maxBytes = 4096): Promise<string> {
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
+  try {
+    handle = await open(pathValue, "r");
+    const stat = await handle.stat();
+    const length = Math.min(stat.size, maxBytes);
+    const buffer = Buffer.alloc(length);
+    await handle.read(buffer, 0, length, Math.max(0, stat.size - length));
+    return buffer.toString("utf8").trimEnd();
+  } catch {
+    return "";
+  } finally {
+    await handle?.close().catch(() => {});
+  }
+}
+
+export async function formatDaemonStartupError(
+  error: unknown,
+  env?: NodeJS.ProcessEnv,
+): Promise<Error> {
+  const paths = getDaemonPaths({ env });
+  const message = error instanceof Error ? error.message : String(error);
+  const stderrTail = await readLogTail(paths.stderrLogPath);
+  const details = [
+    message,
+    `daemon stdout log: ${paths.stdoutLogPath}`,
+    `daemon stderr log: ${paths.stderrLogPath}`,
+    ...(stderrTail ? [`recent daemon stderr:\n${stderrTail}`] : []),
+  ];
+  return new Error(details.join("\n"));
 }
 
 async function waitForDaemonReady(env?: NodeJS.ProcessEnv): Promise<void> {
@@ -415,7 +431,22 @@ async function waitForDaemonReady(env?: NodeJS.ProcessEnv): Promise<void> {
     }
   }
 
-  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+  throw await formatDaemonStartupError(lastError, env);
+}
+
+export async function readDaemonLogs(env?: NodeJS.ProcessEnv): Promise<{
+  stdoutPath: string;
+  stderrPath: string;
+  stdout: string;
+  stderr: string;
+}> {
+  const paths = getDaemonPaths({ env });
+  return {
+    stdoutPath: paths.stdoutLogPath,
+    stderrPath: paths.stderrLogPath,
+    stdout: await readLogTail(paths.stdoutLogPath),
+    stderr: await readLogTail(paths.stderrLogPath),
+  };
 }
 
 async function signalProcess(pid: number, signal: NodeJS.Signals): Promise<void> {
@@ -467,7 +498,7 @@ export async function ensureDaemonRunningWithDeps(
     spawnDaemon: (
       env?: NodeJS.ProcessEnv,
       options?: { preferPackaged?: boolean },
-    ) => { unref: () => void; source: "path" | "packaged" };
+    ) => { unref: () => void; source: "env" | "path" | "packaged" };
     waitForDaemonReady: (env?: NodeJS.ProcessEnv) => Promise<void>;
     withStartupLock: (callback: () => Promise<void>, env?: NodeJS.ProcessEnv) => Promise<void>;
   },
@@ -492,7 +523,7 @@ export async function ensureDaemonRunningWithDeps(
       if (shouldPreserveNewerDaemonMismatch(error, env)) {
         return;
       }
-      const pid = mismatchPid(error) ?? (await deps.readRunningDaemonMetadata(env))?.pid ?? null;
+      const pid = mismatchPid(error);
 
       if (mismatchKind(error) === "reload") {
         if (pid) {
@@ -518,11 +549,6 @@ export async function ensureDaemonRunningWithDeps(
       } else if (!isRecoverableHealthError(error)) {
         throw error;
       }
-    }
-
-    const existingPid = (await deps.readRunningDaemonMetadata(env))?.pid ?? null;
-    if (existingPid) {
-      await deps.terminateProcess(existingPid);
     }
 
     let child = deps.spawnDaemon(env);

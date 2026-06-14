@@ -58,6 +58,8 @@ export type DaemonPaths = {
   dir: string;
   metadataPath: string;
   lockPath: string;
+  stdoutLogPath: string;
+  stderrLogPath: string;
   mcpSocketPath: string;
 };
 
@@ -84,6 +86,53 @@ export const PACKAGE_VERSION = packageVersion();
 
 function hashFingerprint(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex").slice(0, 16);
+}
+
+function packagedDaemonEntrypointPath(): string {
+  const primaryCandidatePath = path.resolve(import.meta.dirname, "../../dist/bin/fff-routerd.js");
+  const candidatePaths = [
+    primaryCandidatePath,
+    path.resolve(import.meta.dirname, "../../bin/fff-routerd.js"),
+  ];
+
+  for (const candidatePath of candidatePaths) {
+    if (existsSync(candidatePath)) {
+      return candidatePath;
+    }
+  }
+
+  return primaryCandidatePath;
+}
+
+function contentFingerprint(pathValue: string): string {
+  try {
+    return createHash("sha256").update(readFileSync(pathValue)).digest("hex");
+  } catch {
+    return "missing";
+  }
+}
+
+export function getDaemonSourceFingerprint(
+  args: {
+    env?: NodeJS.ProcessEnv;
+    daemonEntrypointPath?: string;
+  } = {},
+): string {
+  const env = args.env ?? process.env;
+  if (env.FFF_ROUTER_DAEMON_SOURCE_FINGERPRINT) {
+    return env.FFF_ROUTER_DAEMON_SOURCE_FINGERPRINT;
+  }
+
+  const daemonEntrypointPath =
+    args.daemonEntrypointPath ??
+    env.FFF_ROUTER_DAEMON_BIN ??
+    env.FFF_ROUTER_DAEMON_ENTRYPOINT ??
+    packagedDaemonEntrypointPath();
+  return hashFingerprint({
+    packageVersion: PACKAGE_VERSION,
+    daemonEntrypointPath,
+    content: contentFingerprint(daemonEntrypointPath),
+  });
 }
 
 function configHome(env: NodeJS.ProcessEnv): string {
@@ -578,6 +627,7 @@ export function getDaemonServerFingerprint(
     },
     mcpSocketPath: paths.mcpSocketPath,
     protocolVersion: DAEMON_PROTOCOL_VERSION,
+    daemonSourceFingerprint: getDaemonSourceFingerprint({ env: args.env }),
   });
 }
 
@@ -608,6 +658,8 @@ export function getDaemonPaths(args: { env?: NodeJS.ProcessEnv } = {}): DaemonPa
     dir,
     metadataPath: path.join(dir, "daemon.json"),
     lockPath: path.join(dir, "startup.lock"),
+    stdoutLogPath: path.join(dir, "daemon.stdout.log"),
+    stderrLogPath: path.join(dir, "daemon.stderr.log"),
     mcpSocketPath: mcpSocketPathForStateDir(dir),
   };
 }

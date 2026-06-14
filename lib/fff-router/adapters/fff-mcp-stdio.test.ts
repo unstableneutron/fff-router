@@ -1,3 +1,6 @@
+import { mkdtemp, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, test } from "vitest";
 import {
   createFffMcpStdioAdapter,
@@ -5,10 +8,23 @@ import {
   waitForFffMcpReady,
 } from "./fff-mcp-stdio";
 import type {
+  BackendResultItem,
+  BackendTextMatch,
   FindFilesBackendRequest,
   GrepBackendRequest,
   SearchTermsBackendRequest,
 } from "./types";
+
+function expectTextMatches(items: BackendResultItem[]): BackendTextMatch[] {
+  expect(
+    items.every(
+      (item) =>
+        typeof (item as { line?: unknown }).line === "number" &&
+        typeof (item as { text?: unknown }).text === "string",
+    ),
+  ).toBe(true);
+  return items as BackendTextMatch[];
+}
 
 const findFilesRequest: FindFilesBackendRequest = {
   backendId: "fff-mcp",
@@ -144,6 +160,27 @@ describe("waitForFffMcpReady", () => {
 });
 
 describe("createFffMcpStdioAdapter", () => {
+  test("reports non-executable fff-mcp override before spawning", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "fff-router-fff-mcp-nonexec-"));
+    const binaryPath = path.join(dir, "fff-mcp");
+    await writeFile(binaryPath, "#!/bin/sh\nexit 0\n", { mode: 0o644 });
+    const previous = process.env.FFF_ROUTER_FFF_MCP_BIN;
+    process.env.FFF_ROUTER_FFF_MCP_BIN = binaryPath;
+    try {
+      const adapter = createFffMcpStdioAdapter();
+
+      await expect(
+        adapter.startRuntime?.({ backendId: "fff-mcp", persistenceRoot: "/repo" }),
+      ).rejects.toThrow(/FFF_ROUTER_FFF_MCP_BIN/);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.FFF_ROUTER_FFF_MCP_BIN;
+      } else {
+        process.env.FFF_ROUTER_FFF_MCP_BIN = previous;
+      }
+    }
+  });
+
   test("maps find_files requests onto stock fff-mcp and parses file results", async () => {
     const calls: Array<{ name: string; arguments: Record<string, unknown> }> = [];
     const adapter = createFffMcpStdioAdapter();
@@ -466,6 +503,33 @@ describe("createFffMcpStdioAdapter grep literal routing", () => {
 
     expect(calls[0]?.arguments.query).toBe("lib/ **/*.ts *.ts !dist/ (?:foo\\sbar)|(?:baz\\squx)");
   });
+
+  test("anchors exact relative-file glob hints for fff-mcp", async () => {
+    const calls: Array<{ name: string; arguments: Record<string, unknown> }> = [];
+    const adapter = createFffMcpStdioAdapter();
+
+    await adapter.execute({
+      request: {
+        ...literalGrepRequest,
+        within: "/repo",
+        basePath: "/repo",
+        glob: "sdk/cliproxy/service.go",
+        extensions: [],
+        excludePaths: [],
+        patterns: ["UsageStatisticsEnabled"],
+      },
+      runtime: {
+        id: "fff-mcp::/repo",
+        close: async () => {},
+        callTool: async (name, args) => {
+          calls.push({ name, arguments: args });
+          return "0 matches.";
+        },
+      },
+    });
+
+    expect(calls[0]?.arguments.constraints).toBe("**/sdk/cliproxy/service.go");
+  });
 });
 
 describe("createFffMcpStdioAdapter fileRestriction + rendered compact", () => {
@@ -668,6 +732,245 @@ describe("createFffMcpStdioAdapter fileRestriction + rendered compact", () => {
     expect((result.value as { renderedCompact?: string }).renderedCompact).not.toContain(
       "internal/core/seeds_test.go",
     );
+  });
+
+  test("continues backend cursor pages when post-filtering drops the current page", async () => {
+    const adapter = createFffMcpStdioAdapter();
+    const calls: Array<{ name: string; arguments: Record<string, unknown> }> = [];
+
+    const result = await adapter.execute({
+      request: {
+        ...fileRestrictedSearchTerms,
+        within: "/repo",
+        basePath: "/repo",
+        fileRestriction: undefined,
+        glob: "sdk/cliproxy/service.go",
+        terms: ["UsageStatisticsEnabled"],
+      },
+      runtime: {
+        id: "fff-mcp::/repo",
+        close: async () => {},
+        callTool: async (name, args) => {
+          calls.push({ name, arguments: args });
+          if (args.cursor === "9") {
+            return [
+              "1/1 matches shown",
+              "sdk/cliproxy/service.go",
+              " 804: redisqueue.SetUsageStatisticsEnabled(false)",
+            ].join("\n");
+          }
+          return [
+            "1/1 matches shown",
+            "sdk/cliproxy/other.go",
+            " 12: UsageStatisticsEnabled",
+            "",
+            "cursor: 9",
+          ].join("\n");
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected success");
+    expect(calls).toEqual([
+      {
+        name: "multi_grep",
+        arguments: {
+          patterns: ["UsageStatisticsEnabled"],
+          constraints: "**/sdk/cliproxy/service.go",
+          maxResults: 50,
+          context: 1,
+        },
+      },
+      {
+        name: "multi_grep",
+        arguments: {
+          patterns: ["UsageStatisticsEnabled"],
+          constraints: "**/sdk/cliproxy/service.go",
+          maxResults: 50,
+          context: 1,
+          cursor: "9",
+        },
+      },
+    ]);
+    expect(result.value.items).toEqual([
+      {
+        path: "/repo/sdk/cliproxy/service.go",
+        relativePath: "sdk/cliproxy/service.go",
+        line: 804,
+        text: "redisqueue.SetUsageStatisticsEnabled(false)",
+      },
+    ]);
+    expect((result.value as { renderedCompact?: string }).renderedCompact).toBe(
+      "1 filtered match shown\nsdk/cliproxy/service.go\n 804: redisqueue.SetUsageStatisticsEnabled(false)",
+    );
+    expect((result.value as { renderedCompact?: string }).renderedCompact).not.toContain("cursor:");
+  });
+
+  test("does not report backend-only summary after cursor pages are fully filtered out", async () => {
+    const adapter = createFffMcpStdioAdapter();
+    const calls: Array<{ name: string; arguments: Record<string, unknown> }> = [];
+
+    const result = await adapter.execute({
+      request: {
+        ...fileRestrictedSearchTerms,
+        within: "/repo",
+        basePath: "/repo",
+        fileRestriction: undefined,
+        glob: "sdk/cliproxy/service.go",
+        terms: ["UsageStatisticsEnabled"],
+      },
+      runtime: {
+        id: "fff-mcp::/repo",
+        close: async () => {},
+        callTool: async (name, args) => {
+          calls.push({ name, arguments: args });
+          if (args.cursor === "9") {
+            return [
+              "1/1 matches shown",
+              "sdk/cliproxy/second-other.go",
+              " 44: UsageStatisticsEnabled",
+            ].join("\n");
+          }
+          return [
+            "1/1 matches shown",
+            "sdk/cliproxy/first-other.go",
+            " 12: UsageStatisticsEnabled",
+            "",
+            "cursor: 9",
+          ].join("\n");
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected success");
+    expect(calls).toHaveLength(2);
+    expect(result.value.items).toEqual([]);
+    expect((result.value as { renderedCompact?: string }).renderedCompact).toBeUndefined();
+    expect(result.value.summary).toEqual({});
+  });
+
+  test("continues partial cursor pages until enough filtered items are collected", async () => {
+    const adapter = createFffMcpStdioAdapter();
+    const calls: Array<{ name: string; arguments: Record<string, unknown> }> = [];
+
+    const result = await adapter.execute({
+      request: {
+        ...fileRestrictedSearchTerms,
+        within: "/repo",
+        basePath: "/repo",
+        fileRestriction: undefined,
+        glob: "sdk/cliproxy/service.go",
+        limit: 3,
+        terms: ["UsageStatisticsEnabled"],
+      },
+      runtime: {
+        id: "fff-mcp::/repo",
+        close: async () => {},
+        callTool: async (name, args) => {
+          calls.push({ name, arguments: args });
+          if (args.cursor === "9") {
+            return [
+              "1/1 matches shown",
+              "sdk/cliproxy/service.go",
+              " 804: redisqueue.SetUsageStatisticsEnabled(false)",
+            ].join("\n");
+          }
+          return [
+            "2/2 matches shown",
+            "sdk/cliproxy/service.go",
+            " 99: redisqueue.SetUsageStatisticsEnabled(true)",
+            "sdk/cliproxy/other.go",
+            " 12: UsageStatisticsEnabled",
+            "",
+            "cursor: 9",
+          ].join("\n");
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected success");
+    expect(calls).toEqual([
+      {
+        name: "multi_grep",
+        arguments: {
+          patterns: ["UsageStatisticsEnabled"],
+          constraints: "**/sdk/cliproxy/service.go",
+          maxResults: 3,
+          context: 1,
+        },
+      },
+      {
+        name: "multi_grep",
+        arguments: {
+          patterns: ["UsageStatisticsEnabled"],
+          constraints: "**/sdk/cliproxy/service.go",
+          maxResults: 3,
+          context: 1,
+          cursor: "9",
+        },
+      },
+    ]);
+    expect(
+      expectTextMatches(result.value.items).map((item) => `${item.relativePath}:${item.line}`),
+    ).toEqual(["sdk/cliproxy/service.go:99", "sdk/cliproxy/service.go:804"]);
+    expect((result.value as { renderedCompact?: string }).renderedCompact).toBe(
+      [
+        "2 filtered matches shown",
+        "sdk/cliproxy/service.go",
+        " 99: redisqueue.SetUsageStatisticsEnabled(true)",
+        "sdk/cliproxy/service.go",
+        " 804: redisqueue.SetUsageStatisticsEnabled(false)",
+      ].join("\n"),
+    );
+    expect(result.value.summary).toEqual({ shownCount: 2 });
+  });
+
+  test("stops cursor drain when the backend repeats a cursor", async () => {
+    const adapter = createFffMcpStdioAdapter();
+    const calls: Array<{ name: string; arguments: Record<string, unknown> }> = [];
+
+    const result = await adapter.execute({
+      request: {
+        ...fileRestrictedSearchTerms,
+        within: "/repo",
+        basePath: "/repo",
+        fileRestriction: undefined,
+        glob: "sdk/cliproxy/service.go",
+        terms: ["UsageStatisticsEnabled"],
+      },
+      runtime: {
+        id: "fff-mcp::/repo",
+        close: async () => {},
+        callTool: async (name, args) => {
+          calls.push({ name, arguments: args });
+          return [
+            "1/1 matches shown",
+            "sdk/cliproxy/other.go",
+            " 12: UsageStatisticsEnabled",
+            "",
+            "cursor: 9",
+          ].join("\n");
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected success");
+    expect(calls.map((call) => call.arguments.cursor)).toEqual([undefined, "9"]);
+    expect(result.value.items).toEqual([]);
+    expect((result.value as { renderedCompact?: string }).renderedCompact).toBeUndefined();
+    expect(result.value.summary).toEqual({});
+    expect(result.value.diagnostics).toEqual({
+      cursorDrain: {
+        pagesFetched: 2,
+        filteredOutCount: 2,
+        repeatedCursor: "9",
+        pageCapHit: false,
+      },
+    });
   });
 });
 

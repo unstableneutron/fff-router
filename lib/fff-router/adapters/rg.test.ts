@@ -12,6 +12,16 @@ type CommandCall = {
   cwd: string;
 };
 
+function testToolResolution(tool: "fd" | "rg" | "fff-mcp") {
+  return {
+    tool,
+    command: tool,
+    source: "path" as const,
+    envVar: tool === "fd" ? "FFF_ROUTER_FD_BIN" : "FFF_ROUTER_RG_BIN",
+    executable: true,
+  };
+}
+
 const findFilesRequest: FindFilesBackendRequest = {
   backendId: "rg",
   persistenceRoot: "/repo",
@@ -81,6 +91,7 @@ describe("createRgAdapter", () => {
   test("maps fallback find_files results into normalized file items", async () => {
     const calls: CommandCall[] = [];
     const adapter = createRgAdapter({
+      resolveToolCommand: testToolResolution,
       runCommand: async (command, args, cwd) => {
         calls.push({ command, args, cwd });
         return {
@@ -122,6 +133,7 @@ describe("createRgAdapter", () => {
   test("lowers search_terms requests into literal rg alternation with context", async () => {
     const calls: CommandCall[] = [];
     const adapter = createRgAdapter({
+      resolveToolCommand: testToolResolution,
       runCommand: async (command, args, cwd) => {
         calls.push({ command, args, cwd });
         return {
@@ -179,6 +191,7 @@ describe("createRgAdapter", () => {
 
   test("preserves context lines from rg json events", async () => {
     const adapter = createRgAdapter({
+      resolveToolCommand: testToolResolution,
       runCommand: async () => ({
         ok: true,
         stdout: [
@@ -233,6 +246,7 @@ describe("createRgAdapter", () => {
 
   test("maps malformed rg output to SEARCH_FAILED", async () => {
     const adapter = createRgAdapter({
+      resolveToolCommand: testToolResolution,
       runCommand: async () => ({ ok: true, stdout: "not-json\n" }),
     });
 
@@ -243,9 +257,56 @@ describe("createRgAdapter", () => {
     expect(result.error.code).toBe("SEARCH_FAILED");
   });
 
+  test("reports non-executable fd override as unavailable without spawning", async () => {
+    const adapter = createRgAdapter({
+      resolveToolCommand: (tool) => ({
+        tool,
+        command: "/not-executable/fd",
+        source: "env",
+        envVar: "FFF_ROUTER_FD_BIN",
+        executable: false,
+        remediation: "set FFF_ROUTER_FD_BIN to an executable path",
+      }),
+      runCommand: async () => {
+        throw new Error("should not spawn");
+      },
+    });
+
+    const result = await adapter.execute({ request: findFilesRequest });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected failure");
+    expect(result.error.code).toBe("BACKEND_UNAVAILABLE");
+    expect(result.error.message).toContain("FFF_ROUTER_FD_BIN");
+  });
+
+  test("reports non-executable rg override as unavailable without spawning", async () => {
+    const adapter = createRgAdapter({
+      resolveToolCommand: (tool) => ({
+        tool,
+        command: "/not-executable/rg",
+        source: "env",
+        envVar: "FFF_ROUTER_RG_BIN",
+        executable: false,
+        remediation: "set FFF_ROUTER_RG_BIN to an executable path",
+      }),
+      runCommand: async () => {
+        throw new Error("should not spawn");
+      },
+    });
+
+    const result = await adapter.execute({ request: searchTermsRequest });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected failure");
+    expect(result.error.code).toBe("BACKEND_UNAVAILABLE");
+    expect(result.error.message).toContain("FFF_ROUTER_RG_BIN");
+  });
+
   test("lowers grep requests into regex rg with case-sensitive matching", async () => {
     const calls: CommandCall[] = [];
     const adapter = createRgAdapter({
+      resolveToolCommand: testToolResolution,
       runCommand: async (command, args, cwd) => {
         calls.push({ command, args, cwd });
         return { ok: true, stdout: "" };
@@ -284,6 +345,7 @@ describe("createRgAdapter", () => {
   test("adds --fixed-strings when literal=true so regex metacharacters stay literal", async () => {
     const calls: CommandCall[] = [];
     const adapter = createRgAdapter({
+      resolveToolCommand: testToolResolution,
       runCommand: async (command, args, cwd) => {
         calls.push({ command, args, cwd });
         return { ok: true, stdout: "" };
@@ -314,6 +376,7 @@ describe("createRgAdapter", () => {
   test("passes glob through fd for find_files", async () => {
     const calls: CommandCall[] = [];
     const adapter = createRgAdapter({
+      resolveToolCommand: testToolResolution,
       runCommand: async (command, args, cwd) => {
         calls.push({ command, args, cwd });
         return { ok: true, stdout: "src/router.ts\n" };
@@ -354,6 +417,7 @@ describe("rg adapter multi-path within", () => {
   test("grep multi-path appends each within path as a separate positional arg", async () => {
     const calls: Array<{ command: string; args: string[] }> = [];
     const adapter = createRgAdapter({
+      resolveToolCommand: testToolResolution,
       runCommand: async (command, args) => {
         calls.push({ command, args });
         return { ok: true, stdout: "" };
@@ -401,6 +465,7 @@ describe("rg adapter multi-path within", () => {
   test("find_files multi-path passes each target as a fd positional (relative)", async () => {
     const calls: Array<{ args: string[] }> = [];
     const adapter = createRgAdapter({
+      resolveToolCommand: testToolResolution,
       runCommand: async (_command, args) => {
         calls.push({ args });
         return { ok: true, stdout: "" };

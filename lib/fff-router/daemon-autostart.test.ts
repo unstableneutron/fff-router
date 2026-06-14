@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
@@ -6,8 +6,10 @@ import {
   checkDaemonHealth,
   ensureDaemonRunning,
   ensureDaemonRunningWithDeps,
+  formatDaemonStartupError,
   resolveDaemonLaunchCommand,
 } from "./daemon-autostart";
+import { getDaemonPaths } from "./daemon-config";
 import { DAEMON_PROTOCOL_VERSION, PACKAGE_VERSION } from "./daemon-config";
 import { startHttpDaemon } from "./http-daemon";
 import type { SearchCoordinator } from "./types";
@@ -64,13 +66,31 @@ function makeCoordinator(): SearchCoordinator {
 }
 
 describe("resolveDaemonLaunchCommand", () => {
-  test("prefers the installed fff-routerd command when available", () => {
+  test("prefers the packaged built daemon entrypoint over an installed PATH command", () => {
+    const result = resolveDaemonLaunchCommand({ HOME: "/home/test" } as NodeJS.ProcessEnv, {
+      resolveExecutableOnPath: (command) =>
+        command === "fff-routerd" ? "/usr/local/bin/fff-routerd" : null,
+    });
+
+    expect(result.command).toBe(process.execPath);
+    expect(result.args).toHaveLength(1);
+    expect(result.args[0]).toMatch(/dist\/bin\/fff-routerd\.js$/);
+    expect(result.source).toBe("packaged");
+  });
+
+  test("honors an explicit daemon binary override before the packaged entrypoint", () => {
     expect(
-      resolveDaemonLaunchCommand({ HOME: "/home/test" } as NodeJS.ProcessEnv, {
-        resolveExecutableOnPath: (command) =>
-          command === "fff-routerd" ? "/usr/local/bin/fff-routerd" : null,
-      }),
-    ).toEqual({ command: "/usr/local/bin/fff-routerd", args: [], source: "path" });
+      resolveDaemonLaunchCommand(
+        {
+          HOME: "/home/test",
+          FFF_ROUTER_DAEMON_BIN: "/custom/fff-routerd",
+        } as NodeJS.ProcessEnv,
+        {
+          resolveExecutableOnPath: (command) =>
+            command === "/custom/fff-routerd" ? "/custom/fff-routerd" : null,
+        },
+      ),
+    ).toEqual({ command: "/custom/fff-routerd", args: [], source: "env" });
   });
 
   test("falls back to the packaged built daemon entrypoint when the command is unavailable", () => {
@@ -350,8 +370,8 @@ describe("ensureDaemonRunningWithDeps", () => {
     });
 
     expect(signalProcess).not.toHaveBeenCalled();
-    expect(terminateProcess).toHaveBeenCalledWith(123);
     expect(terminateProcess).toHaveBeenCalledWith(456);
+    expect(terminateProcess).not.toHaveBeenCalledWith(123);
     expect(spawnDaemon).toHaveBeenNthCalledWith(1, { HOME: home });
     expect(spawnDaemon).toHaveBeenNthCalledWith(2, { HOME: home }, { preferPackaged: true });
     expect(waitForDaemonReady).toHaveBeenCalledTimes(2);
@@ -407,6 +427,75 @@ describe("ensureDaemonRunningWithDeps", () => {
     expect(terminateProcess).not.toHaveBeenCalled();
     expect(spawnDaemon).not.toHaveBeenCalled();
     expect(waitForDaemonReady).not.toHaveBeenCalled();
+  });
+
+  test("does not terminate a stale daemon.json pid when health is unavailable", async () => {
+    const home = await makeTempHome();
+    await writeConfigFile({ home, port: 46311, backend: "fff-node" });
+    const terminateProcess = vi.fn(async () => {});
+    const spawnDaemon = vi.fn(() => ({ unref() {}, source: "packaged" as const }));
+
+    await ensureDaemonRunningWithDeps({ HOME: home } as NodeJS.ProcessEnv, {
+      checkDaemonHealth: vi
+        .fn<() => Promise<void>>()
+        .mockRejectedValueOnce(new Error("fetch failed"))
+        .mockRejectedValueOnce(new Error("fetch failed")),
+      readRunningDaemonMetadata: async () => ({
+        pid: 98765,
+        host: "127.0.0.1",
+        port: 46311,
+        mcpPath: "/mcp",
+        protocolVersion: DAEMON_PROTOCOL_VERSION,
+        packageVersion: PACKAGE_VERSION,
+        serverFingerprint: "server",
+        reloadFingerprint: "reload",
+        startedAt: Date.now(),
+      }),
+      signalProcess: vi.fn(async () => {}),
+      terminateProcess,
+      spawnDaemon,
+      waitForDaemonReady: vi.fn(async () => {}),
+      withStartupLock: async (callback) => await callback(),
+    });
+
+    expect(terminateProcess).not.toHaveBeenCalled();
+    expect(spawnDaemon).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("formatDaemonStartupError", () => {
+  test("includes daemon log paths and recent stderr", async () => {
+    const home = await makeTempHome();
+    const env = { HOME: home } as NodeJS.ProcessEnv;
+    const paths = getDaemonPaths({ env });
+    await mkdir(paths.dir, { recursive: true });
+    await writeFile(paths.stderrLogPath, "old line\nrecent failure\n");
+
+    await expect(formatDaemonStartupError(new Error("health failed"), env)).resolves.toMatchObject({
+      message: expect.stringContaining("health failed"),
+    });
+    const error = await formatDaemonStartupError(new Error("health failed"), env);
+
+    expect(error.message).toContain(paths.stdoutLogPath);
+    expect(error.message).toContain(paths.stderrLogPath);
+    expect(error.message).toContain("recent failure");
+  });
+});
+
+describe("ensureDaemonRunning startup diagnostics", () => {
+  test("logs explicit daemon spawn failures under the state dir", async () => {
+    const home = await makeTempHome();
+    const env = {
+      HOME: home,
+      FFF_ROUTER_DAEMON_BIN: path.join(home, "missing-fff-routerd"),
+    } as NodeJS.ProcessEnv;
+    await writeConfigFile({ home, port: 46312, backend: "fff-node" });
+    const paths = getDaemonPaths({ env });
+
+    await expect(ensureDaemonRunning(env)).rejects.toThrow(/daemon stderr log/);
+
+    const stderr = await readFile(paths.stderrLogPath, "utf8");
+    expect(stderr).toContain("fff-routerd spawn failed:");
   });
 });
 

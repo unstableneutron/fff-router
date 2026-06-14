@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
@@ -38,9 +38,15 @@ describe("getDoctorFffMcpStatus", () => {
     const dir = await makeTempDir();
     const binaryPath = path.join(dir, "fff-mcp");
     await writeFile(binaryPath, "#!/bin/sh\nexit 0\n");
+    await chmod(binaryPath, 0o755);
 
     const status = await getDoctorFffMcpStatus({ PATH: dir } as NodeJS.ProcessEnv);
-    expect(status).toEqual({ found: true, path: binaryPath });
+    expect(status).toMatchObject({
+      found: true,
+      path: binaryPath,
+      source: "path",
+      executable: true,
+    });
   });
 });
 

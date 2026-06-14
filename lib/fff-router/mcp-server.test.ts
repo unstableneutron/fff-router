@@ -1,5 +1,8 @@
 import { describe, expect, test } from "vitest";
+import { createFffMcpStdioAdapter } from "./adapters/fff-mcp-stdio";
+import { createSearchCoordinator } from "./coordinator";
 import { createMcpServer } from "./mcp-server";
+import { RuntimeManager } from "./runtime-manager";
 import type { PublicToolRequest, SearchCoordinator } from "./types";
 
 function makeCoordinator(result: Awaited<ReturnType<SearchCoordinator["execute"]>>) {
@@ -147,6 +150,79 @@ describe("createMcpServer", () => {
         },
       ],
     });
+  });
+
+  test("returns drained fff-mcp grep results without cursor-only compact output", async () => {
+    const calls: Array<{ name: string; arguments: Record<string, unknown> }> = [];
+    const fffMcp = createFffMcpStdioAdapter();
+    const coordinator = createSearchCoordinator({
+      config: {
+        allowlistedNonGitPrefixes: [],
+        promotion: { windowMs: 60_000, requiredHits: 2 },
+        ttl: { gitMs: 60_000, nonGitMs: 60_000 },
+        limits: { maxPersistentDaemons: 4, maxPersistentNonGitDaemons: 2 },
+      },
+      adapters: {
+        "fff-mcp": {
+          ...fffMcp,
+          startRuntime: async () => ({
+            id: "fff-mcp::/repo",
+            close: async () => {},
+            callTool: async (name: string, args: Record<string, unknown>) => {
+              calls.push({ name, arguments: args });
+              if (args.cursor === "9") {
+                return [
+                  "1/1 matches shown",
+                  "sdk/cliproxy/service.go",
+                  " 804: redisqueue.SetUsageStatisticsEnabled(false)",
+                ].join("\n");
+              }
+              return [
+                "1/1 matches shown",
+                "sdk/cliproxy/other.go",
+                " 12: UsageStatisticsEnabled",
+                "",
+                "cursor: 9",
+              ].join("\n");
+            },
+          }),
+        },
+      },
+      primaryBackendId: "fff-mcp",
+      fallbackBackendId: null,
+      runtimeManager: new RuntimeManager(),
+      validateWithin: async () => ({
+        ok: true,
+        value: {
+          resolvedWithin: "/repo",
+          basePath: "/repo",
+        },
+      }),
+      resolveRoutingPath: async () => ({
+        ok: true,
+        value: {
+          realPath: "/repo",
+          statType: "directory",
+          gitRoot: "/repo",
+        },
+      }),
+    });
+    const server = createMcpServer({ coordinator });
+
+    const result = await server.callTool("fff_grep", {
+      patterns: ["UsageStatisticsEnabled"],
+      literal: true,
+      within: "/repo",
+      glob: "sdk/cliproxy/service.go",
+    });
+
+    expect(result.isError).toBe(false);
+    const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+    const parsed = JSON.parse(text) as { text?: string; items?: unknown[] };
+    expect(calls.map((call) => call.arguments.cursor)).toEqual([undefined, "9"]);
+    expect(parsed.text).toContain("sdk/cliproxy/service.go");
+    expect(parsed.text).toContain("redisqueue.SetUsageStatisticsEnabled(false)");
+    expect(parsed.text).not.toContain("cursor:");
   });
 
   test("maps public errors through MCP tool failures", async () => {
