@@ -39,7 +39,10 @@ function makePublicRequest(overrides: Partial<PublicToolRequest> = {}): PublicTo
 function makeAdapter(args: {
   backendId: SearchBackendId;
   supportedQueryKinds?: SearchQueryKind[];
-  execute: (request: BackendSearchRequest) => Promise<BackendSearchResult>;
+  execute: (
+    request: BackendSearchRequest,
+    runtime?: SearchBackendRuntime,
+  ) => Promise<BackendSearchResult>;
 }) {
   const calls: BackendSearchRequest[] = [];
   let startCount = 0;
@@ -54,9 +57,9 @@ function makeAdapter(args: {
         close: async () => {},
       };
     },
-    async execute({ request }) {
+    async execute({ request, runtime }) {
       calls.push(request);
-      return await args.execute(request);
+      return await args.execute(request, runtime);
     },
   };
 
@@ -704,6 +707,130 @@ describe("createSearchCoordinator", () => {
 
     expect(planningCalls).toEqual(["search_terms", "grep"]);
     expect(primary.startCount).toBe(1);
+  });
+
+  test("restarts and retries a persistent runtime once when it reports Not connected", async () => {
+    let startCount = 0;
+    const closedRuntimeIds: string[] = [];
+    const primary = makeAdapter({
+      backendId: "fff-mcp",
+      execute: async (request, runtime) => {
+        if (runtime?.id.endsWith("runtime-1")) {
+          return {
+            ok: false as const,
+            error: {
+              code: "SEARCH_FAILED" as const,
+              backendId: "fff-mcp" as const,
+              message: "SEARCH_FAILED: Not connected",
+            },
+          };
+        }
+        return okResult(
+          request.queryKind,
+          [{ path: "/repo/src/router.ts", relativePath: "src/router.ts" }],
+          "fff-mcp",
+        );
+      },
+    });
+    primary.adapter.startRuntime = async (runtimeArgs) => {
+      startCount += 1;
+      const id = `${runtimeArgs.backendId}::${runtimeArgs.persistenceRoot}::runtime-${startCount}`;
+      return {
+        id,
+        close: async () => {
+          closedRuntimeIds.push(id);
+        },
+      };
+    };
+
+    const coordinator = createSearchCoordinator({
+      config,
+      adapters: { "fff-mcp": primary.adapter },
+      primaryBackendId: "fff-mcp",
+      fallbackBackendId: null,
+      runtimeManager: new RuntimeManager(),
+      validateWithin: async ({ withinPaths: [within = "/missing"] }) => ({
+        ok: true,
+        value: { resolvedWithin: within, basePath: within },
+      }),
+      resolveRoutingPath: async (within) => ({
+        ok: true,
+        value: { realPath: within, statType: "directory", gitRoot: "/repo" },
+      }),
+    });
+
+    const result = await coordinator.execute(makePublicRequest({ outputMode: "json" }));
+
+    expect(result.ok).toBe(true);
+    expect(startCount).toBe(2);
+    expect(primary.calls).toHaveLength(2);
+    expect(closedRuntimeIds).toEqual(["fff-mcp::/repo::runtime-1"]);
+    if (!result.ok) throw new Error("expected success");
+    expect(result.value).toMatchObject({
+      backend_used: "fff-mcp",
+      items: [{ path: "router.ts", absolute_path: "/repo/src/router.ts" }],
+    });
+  });
+
+  test("times out a persistent runtime call, closes it, and retries on a fresh runtime", async () => {
+    let startCount = 0;
+    const closedRuntimeIds: string[] = [];
+    const primary = makeAdapter({
+      backendId: "fff-mcp",
+      execute: async (request, runtime) => {
+        if (runtime?.id.endsWith("runtime-1")) {
+          await new Promise((resolve) => setTimeout(resolve, 20));
+          return okResult(
+            request.queryKind,
+            [{ path: "/repo/src/slow.ts", relativePath: "src/slow.ts" }],
+            "fff-mcp",
+          );
+        }
+        return okResult(
+          request.queryKind,
+          [{ path: "/repo/src/fast.ts", relativePath: "src/fast.ts" }],
+          "fff-mcp",
+        );
+      },
+    });
+    primary.adapter.startRuntime = async (runtimeArgs) => {
+      startCount += 1;
+      const id = `${runtimeArgs.backendId}::${runtimeArgs.persistenceRoot}::runtime-${startCount}`;
+      return {
+        id,
+        close: async () => {
+          closedRuntimeIds.push(id);
+        },
+      };
+    };
+
+    const coordinator = createSearchCoordinator({
+      config: { ...config, runtime: { toolTimeoutMs: 1 } } as RouterConfig,
+      adapters: { "fff-mcp": primary.adapter },
+      primaryBackendId: "fff-mcp",
+      fallbackBackendId: null,
+      runtimeManager: new RuntimeManager(),
+      validateWithin: async ({ withinPaths: [within = "/missing"] }) => ({
+        ok: true,
+        value: { resolvedWithin: within, basePath: within },
+      }),
+      resolveRoutingPath: async (within) => ({
+        ok: true,
+        value: { realPath: within, statType: "directory", gitRoot: "/repo" },
+      }),
+    });
+
+    const result = await coordinator.execute(makePublicRequest({ outputMode: "json" }));
+
+    expect(result.ok).toBe(true);
+    expect(startCount).toBe(2);
+    expect(primary.calls).toHaveLength(2);
+    expect(closedRuntimeIds).toEqual(["fff-mcp::/repo::runtime-1"]);
+    if (!result.ok) throw new Error("expected success");
+    expect(result.value).toMatchObject({
+      backend_used: "fff-mcp",
+      items: [{ path: "fast.ts", absolute_path: "/repo/src/fast.ts" }],
+    });
   });
 
   test("falls back only on backend failure", async () => {

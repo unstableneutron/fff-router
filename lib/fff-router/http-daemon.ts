@@ -57,6 +57,11 @@ export type StartHttpDaemonArgs = Partial<DaemonConfig> & {
   watchConfig?: boolean;
 };
 
+type DaemonReloadOptions = {
+  loadConfig?: () => DaemonReloadConfig;
+  clearRuntimes?: boolean;
+};
+
 async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
   for await (const chunk of req) {
@@ -170,7 +175,7 @@ export async function startHttpDaemon(args: StartHttpDaemonArgs = {}) {
   let reloadChain = Promise.resolve();
   let closing = false;
 
-  const reload = async (override?: { loadConfig?: () => DaemonReloadConfig }) => {
+  const reload = async (override?: DaemonReloadOptions) => {
     const nextReload = reloadChain.then(async () => {
       if (closing) {
         throw new Error("fff-routerd is closing");
@@ -186,17 +191,20 @@ export async function startHttpDaemon(args: StartHttpDaemonArgs = {}) {
       });
       const backendChanged =
         liveConfigRef.current.primaryBackendId !== nextRuntimeConfig.primaryBackendId;
+      const shouldClearRuntimes = override?.clearRuntimes === true;
 
       await writeDaemonMetadata(paths.metadataPath, nextMetadata);
       liveConfigRef.current = nextRuntimeConfig;
 
-      if (backendChanged && !args.coordinator) {
+      if ((backendChanged || shouldClearRuntimes) && !args.coordinator) {
         const previousRuntimeManager = runtimeManager;
         runtimeManager = new RuntimeManager();
         currentCoordinator =
           args.createCoordinator?.({ liveConfigRef, runtimeManager }) ??
           createDefaultCoordinator({ liveConfigRef, runtimeManager });
         await previousRuntimeManager.closeAll();
+      } else if (shouldClearRuntimes) {
+        await runtimeManager.closeAll();
       }
 
       metadata = nextMetadata;
@@ -269,7 +277,7 @@ export async function startHttpDaemon(args: StartHttpDaemonArgs = {}) {
 
     if (url.pathname === "/health") {
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ ok: true, metadata }));
+      res.end(JSON.stringify({ ok: true, metadata, runtimes: runtimeManager.getDiagnostics() }));
       return;
     }
 

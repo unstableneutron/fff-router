@@ -12,6 +12,7 @@ import {
   loadDaemonReloadConfig,
 } from "./daemon-config";
 import { startHttpDaemon } from "./http-daemon";
+import { getDoctorReport } from "./daemon-cli";
 import type { PublicToolRequest, SearchCoordinator, SearchCoordinatorResult } from "./types";
 
 const tempDirs: string[] = [];
@@ -168,6 +169,75 @@ describe("startHttpDaemon", () => {
     expect(daemon.metadata.reloadFingerprint).toBe(getDaemonReloadFingerprint({ env }));
   });
 
+  test("health includes runtime diagnostics after a backend runtime is used", async () => {
+    const home = await makeTempHome();
+    const port = 46208;
+    await writeConfigFile({ home, port, backend: "fff-mcp" });
+    const env = { HOME: home } as NodeJS.ProcessEnv;
+    const liveConfigRef = toCoordinatorRuntimeConfigRef(env);
+
+    const daemon = await startHttpDaemon({
+      env,
+      liveConfigRef,
+      createCoordinator: ({ liveConfigRef, runtimeManager }) => ({
+        async execute(request): Promise<SearchCoordinatorResult> {
+          await runtimeManager.withRuntime(
+            {
+              backendId: liveConfigRef.current.primaryBackendId,
+              persistenceRoot: "/repo",
+              start: async () => ({
+                id: "fff-mcp::/repo",
+                pid: 12345,
+                close: async () => {},
+              }),
+            },
+            async () => undefined,
+          );
+          return {
+            ok: true,
+            value: {
+              mode: "json",
+              base_path: request.within?.[0] ?? "/repo",
+              next_cursor: null,
+              items: [],
+              backend_used: liveConfigRef.current.primaryBackendId,
+              fallback_applied: false,
+              stats: { result_count: 0 },
+            },
+          };
+        },
+      }),
+      watchConfig: false,
+    });
+    startedDaemons.push(daemon);
+
+    await callPublicToolOverHttp(makeRequest("/repo"), env);
+    const health = (await (
+      await fetch(`http://127.0.0.1:${daemon.metadata.port}/health`)
+    ).json()) as {
+      runtimes?: Array<{ backendId: string; persistenceRoot: string; pid: number; state: string }>;
+    };
+
+    expect(health.runtimes).toEqual([
+      expect.objectContaining({
+        backendId: "fff-mcp",
+        persistenceRoot: "/repo",
+        pid: 12345,
+        state: "ready",
+      }),
+    ]);
+
+    const doctor = await getDoctorReport(env);
+    expect(doctor.runtimes).toEqual([
+      expect.objectContaining({
+        backendId: "fff-mcp",
+        persistenceRoot: "/repo",
+        pid: 12345,
+        state: "ready",
+      }),
+    ]);
+  });
+
   test("reload updates metadata and request behavior from config file changes", async () => {
     const home = await makeTempHome();
     const port = 46202;
@@ -198,6 +268,64 @@ describe("startHttpDaemon", () => {
     if (!("backend_used" in after.value)) throw new Error("expected json result");
     expect(after.value.backend_used).toBe("rg");
     expect(daemon.metadata.reloadFingerprint).toBe(getDaemonReloadFingerprint({ env }));
+  });
+
+  test("reload can clear runtimes even when the backend is unchanged", async () => {
+    const home = await makeTempHome();
+    const port = 46209;
+    await writeConfigFile({ home, port, backend: "fff-mcp" });
+    const env = { HOME: home } as NodeJS.ProcessEnv;
+    const liveConfigRef = toCoordinatorRuntimeConfigRef(env);
+    let startCount = 0;
+    let closeCount = 0;
+
+    const daemon = await startHttpDaemon({
+      env,
+      liveConfigRef,
+      createCoordinator: ({ liveConfigRef, runtimeManager }) => ({
+        async execute(request): Promise<SearchCoordinatorResult> {
+          await runtimeManager.withRuntime(
+            {
+              backendId: liveConfigRef.current.primaryBackendId,
+              persistenceRoot: "/repo",
+              start: async () => {
+                startCount += 1;
+                return {
+                  id: `runtime-${startCount}`,
+                  close: async () => {
+                    closeCount += 1;
+                  },
+                };
+              },
+            },
+            async () => undefined,
+          );
+          return {
+            ok: true,
+            value: {
+              mode: "json",
+              base_path: request.within?.[0] ?? "/repo",
+              next_cursor: null,
+              items: [],
+              backend_used: liveConfigRef.current.primaryBackendId,
+              fallback_applied: false,
+              stats: { result_count: 0 },
+            },
+          };
+        },
+      }),
+      watchConfig: false,
+    });
+    startedDaemons.push(daemon);
+
+    await callPublicToolOverHttp(makeRequest("/repo"), env);
+    expect(startCount).toBe(1);
+
+    await daemon.reload({ clearRuntimes: true } as any);
+    await callPublicToolOverHttp(makeRequest("/repo"), env);
+
+    expect(startCount).toBe(2);
+    expect(closeCount).toBe(1);
   });
 
   test("watcher reloads when config files change", async () => {

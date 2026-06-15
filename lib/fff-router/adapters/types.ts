@@ -8,7 +8,9 @@ import type {
 
 export type SearchBackendRuntime = {
   id: string;
+  pid?: number | null;
   close: () => Promise<void> | void;
+  onClose?: (handler: () => void) => () => void;
 };
 
 export type RuntimeStartSpec<TRuntime extends SearchBackendRuntime = SearchBackendRuntime> =

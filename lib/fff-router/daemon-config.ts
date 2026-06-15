@@ -16,6 +16,7 @@ export const DAEMON_PROTOCOL_VERSION = "fff-router-http-daemon-v1";
 export const DEFAULT_DAEMON_PORT = 4319;
 export const DEFAULT_DAEMON_MCP_PATH = "/mcp";
 const DEFAULT_BACKEND: SupportedBackendId = "fff-node";
+const DEFAULT_BACKEND_TOOL_TIMEOUT_MS = 30_000;
 
 export type DaemonConfig = {
   host: string;
@@ -45,6 +46,9 @@ export type DaemonFileConfig = {
   limits?: {
     maxPersistentDaemons?: number;
     maxPersistentNonGitDaemons?: number;
+  };
+  runtime?: {
+    toolTimeoutMs?: number;
   };
 };
 
@@ -177,6 +181,9 @@ export function getDefaultRouterConfig(): RouterConfig {
       maxPersistentDaemons: 12,
       maxPersistentNonGitDaemons: 4,
     },
+    runtime: {
+      toolTimeoutMs: DEFAULT_BACKEND_TOOL_TIMEOUT_MS,
+    },
   };
 }
 
@@ -208,6 +215,9 @@ export type DefaultDaemonFileConfig = {
     maxPersistentDaemons: number;
     maxPersistentNonGitDaemons: number;
   };
+  runtime: {
+    toolTimeoutMs: number;
+  };
 };
 
 export function getDefaultDaemonFileConfig(): DefaultDaemonFileConfig {
@@ -222,6 +232,9 @@ export function getDefaultDaemonFileConfig(): DefaultDaemonFileConfig {
     promotion: { ...reload.router.promotion },
     ttl: { ...reload.router.ttl },
     limits: { ...reload.router.limits },
+    runtime: {
+      toolTimeoutMs: reload.router.runtime?.toolTimeoutMs ?? DEFAULT_BACKEND_TOOL_TIMEOUT_MS,
+    },
   };
 }
 
@@ -491,6 +504,7 @@ function normalizeDaemonFileConfig(
     fileConfig.promotion == null ? null : expectObject(fileConfig.promotion, "promotion");
   const ttl = fileConfig.ttl == null ? null : expectObject(fileConfig.ttl, "ttl");
   const limits = fileConfig.limits == null ? null : expectObject(fileConfig.limits, "limits");
+  const runtime = fileConfig.runtime == null ? null : expectObject(fileConfig.runtime, "runtime");
 
   const normalizedEnv = { ...env, HOME: configHome(env) } as NodeJS.ProcessEnv;
   const backendId = readOptionalBackend(fileConfig.backend) ?? defaults.backend;
@@ -517,6 +531,9 @@ function normalizeDaemonFileConfig(
       limits?.maxPersistentNonGitDaemons,
       "limits.maxPersistentNonGitDaemons",
     ) ?? defaults.limits.maxPersistentNonGitDaemons;
+  const toolTimeoutMs =
+    readOptionalNonNegativeInteger(runtime?.toolTimeoutMs, "runtime.toolTimeoutMs") ??
+    defaults.runtime.toolTimeoutMs;
 
   return {
     daemon: {
@@ -542,6 +559,9 @@ function normalizeDaemonFileConfig(
         limits: {
           maxPersistentDaemons,
           maxPersistentNonGitDaemons,
+        },
+        runtime: {
+          toolTimeoutMs,
         },
       },
     },

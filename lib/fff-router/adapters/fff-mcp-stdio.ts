@@ -25,6 +25,29 @@ type EvaluatedTextMatchPage = ReturnType<typeof evaluateTextMatchPage>;
 
 const MAX_FILTERED_CURSOR_PAGES = 20;
 
+type FffMcpClient = {
+  connect: (transport: FffMcpTransport) => Promise<void>;
+  close: () => Promise<void> | void;
+  callTool: (args: { name: string; arguments: Record<string, unknown> }) => Promise<unknown>;
+};
+
+type FffMcpTransport = {
+  pid?: number | null;
+  onclose?: () => void;
+  close: () => Promise<void> | void;
+};
+
+type FffMcpTransportParams = ConstructorParameters<typeof StdioClientTransport>[0];
+
+type CreateFffMcpStdioAdapterOptions = {
+  createClient?: () => FffMcpClient;
+  createTransport?: (params: FffMcpTransportParams) => FffMcpTransport;
+  waitForReady?: (
+    callTool: (name: string, args: Record<string, unknown>) => Promise<string>,
+  ) => Promise<string>;
+  closeTimeoutMs?: number;
+};
+
 function backendUnavailable(message: string): BackendSearchResult {
   return {
     ok: false,
@@ -57,6 +80,28 @@ function discoverFffMcpCommand(): string {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function closeBestEffort(
+  close: () => Promise<void> | void,
+  timeoutMs: number,
+): Promise<void> {
+  let timeout: ReturnType<typeof setTimeout> | null = null;
+  try {
+    await Promise.race([
+      Promise.resolve()
+        .then(close)
+        .catch(() => {}),
+      new Promise<void>((resolve) => {
+        timeout = setTimeout(resolve, timeoutMs);
+        timeout.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
 }
 
 function inheritedStringEnv(): Record<string, string> {
@@ -945,29 +990,64 @@ export async function waitForFffMcpReady(
   );
 }
 
-export function createFffMcpStdioAdapter(): SearchBackendAdapter<FffMcpRuntime> {
+export function createFffMcpStdioAdapter(
+  options: CreateFffMcpStdioAdapterOptions = {},
+): SearchBackendAdapter<FffMcpRuntime> {
   return {
     backendId: "fff-mcp",
     supportedQueryKinds: ["find_files", "search_terms", "grep"],
     async startRuntime(args) {
-      const transport = new StdioClientTransport({
+      const transportParams = {
         command: discoverFffMcpCommand(),
         args: [args.persistenceRoot],
         cwd: args.persistenceRoot,
         env: inheritedStringEnv(),
         stderr: "pipe",
-      });
-      const client = new Client(
-        { name: "fff-router-fff-mcp", version: "1.0.0" },
-        { capabilities: {} },
-      );
+      } satisfies FffMcpTransportParams;
+      const transport: FffMcpTransport =
+        options.createTransport?.(transportParams) ??
+        (new StdioClientTransport(transportParams) as FffMcpTransport);
+      const client: FffMcpClient =
+        options.createClient?.() ??
+        (new Client(
+          { name: "fff-router-fff-mcp", version: "1.0.0" },
+          { capabilities: {} },
+        ) as unknown as FffMcpClient);
       await client.connect(transport);
+
+      let closed = false;
+      const closeHandlers = new Set<() => void>();
+      const markClosed = () => {
+        if (closed) {
+          return;
+        }
+        closed = true;
+        for (const handler of closeHandlers) {
+          handler();
+        }
+      };
+      const previousOnClose = transport.onclose;
+      transport.onclose = () => {
+        markClosed();
+        previousOnClose?.();
+      };
 
       const runtime: FffMcpRuntime = {
         id: `fff-mcp::${args.persistenceRoot}`,
+        get pid() {
+          return transport.pid ?? null;
+        },
+        onClose(handler) {
+          closeHandlers.add(handler);
+          return () => {
+            closeHandlers.delete(handler);
+          };
+        },
         async close() {
-          await client.close().catch(() => {});
-          await transport.close().catch(() => {});
+          markClosed();
+          const closeTimeoutMs = options.closeTimeoutMs ?? 500;
+          await closeBestEffort(() => client.close(), closeTimeoutMs);
+          await closeBestEffort(() => transport.close(), closeTimeoutMs);
         },
         async callTool(name, args) {
           const response = (await client.callTool({ name, arguments: args })) as {
@@ -989,7 +1069,7 @@ export function createFffMcpStdioAdapter(): SearchBackendAdapter<FffMcpRuntime> 
       // entry but has no runtime handle to close, so the cleanup has to
       // happen here before we rethrow.
       try {
-        await waitForFffMcpReady(runtime.callTool.bind(runtime));
+        await (options.waitForReady ?? waitForFffMcpReady)(runtime.callTool.bind(runtime));
       } catch (error) {
         await Promise.resolve(runtime.close()).catch(() => {});
         throw error;

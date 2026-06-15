@@ -50,6 +50,17 @@ type CoordinatorDeps = {
   }) => void;
 };
 
+const DEFAULT_BACKEND_TOOL_TIMEOUT_MS = 30_000;
+
+class BackendCallTimeoutError extends Error {
+  constructor(
+    readonly backendId: SearchBackendId,
+    readonly timeoutMs: number,
+  ) {
+    super(`${backendId} backend call timed out after ${timeoutMs}ms`);
+  }
+}
+
 export function createCoordinatorRuntimeConfigRef(
   config: CoordinatorRuntimeConfig,
 ): CoordinatorRuntimeConfigRef {
@@ -149,6 +160,41 @@ function buildBackendRequest(args: {
         caseSensitive: args.request.caseSensitive,
         contextLines: args.request.contextLines,
       };
+  }
+}
+
+function isStaleRuntimeErrorMessage(message: string): boolean {
+  return (
+    /\b(Not connected|EPIPE|ECONNRESET|EOF)\b/i.test(message) ||
+    /\b(transport|stdio|stream)\b.*\b(closed|ended|destroyed|disconnected)\b/i.test(message)
+  );
+}
+
+async function withBackendCallTimeout<T>(
+  promise: Promise<T>,
+  args: {
+    backendId: SearchBackendId;
+    timeoutMs: number;
+  },
+): Promise<T> {
+  if (!Number.isFinite(args.timeoutMs) || args.timeoutMs <= 0) {
+    return await promise;
+  }
+
+  let timeout: ReturnType<typeof setTimeout> | null = null;
+  const timeoutPromise = new Promise<never>((_resolve, reject) => {
+    timeout = setTimeout(() => {
+      reject(new BackendCallTimeoutError(args.backendId, args.timeoutMs));
+    }, args.timeoutMs);
+    timeout.unref?.();
+  });
+
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
   }
 }
 
@@ -391,6 +437,7 @@ export class SearchCoordinatorImpl implements SearchCoordinator {
     adapter: SearchBackendAdapter;
     request: BackendSearchRequest;
     lifecyclePlan: RoutingLifecyclePlan;
+    toolTimeoutMs: number;
   }): Promise<BackendSearchResult> {
     const shouldUsePersistentRuntime = args.lifecyclePlan.action.type !== "run-ephemeral";
 
@@ -406,25 +453,11 @@ export class SearchCoordinatorImpl implements SearchCoordinator {
     }
 
     if (!args.adapter.startRuntime) {
-      return args.adapter.execute({ request: args.request });
-    }
-
-    if (!shouldUsePersistentRuntime) {
       try {
-        const runtime = await args.adapter.startRuntime({
+        return await withBackendCallTimeout(args.adapter.execute({ request: args.request }), {
           backendId: args.adapter.backendId,
-          persistenceRoot: args.request.persistenceRoot,
+          timeoutMs: args.toolTimeoutMs,
         });
-        const result = await args.adapter.execute({
-          request: args.request,
-          runtime,
-        });
-        try {
-          await runtime.close();
-        } catch {
-          // Best-effort cleanup for ephemeral runtimes. Preserve the search result.
-        }
-        return result;
       } catch (error) {
         return {
           ok: false,
@@ -437,22 +470,107 @@ export class SearchCoordinatorImpl implements SearchCoordinator {
       }
     }
 
-    try {
-      return await this.deps.runtimeManager.withRuntime(
-        {
+    if (!shouldUsePersistentRuntime) {
+      let runtime: Awaited<ReturnType<NonNullable<typeof args.adapter.startRuntime>>> | null = null;
+      try {
+        runtime = await args.adapter.startRuntime({
           backendId: args.adapter.backendId,
           persistenceRoot: args.request.persistenceRoot,
-          start: async () => {
-            return await args.adapter.startRuntime?.({
-              backendId: args.adapter.backendId,
-              persistenceRoot: args.request.persistenceRoot,
-            });
+        });
+        const result = await withBackendCallTimeout(
+          args.adapter.execute({
+            request: args.request,
+            runtime,
+          }),
+          { backendId: args.adapter.backendId, timeoutMs: args.toolTimeoutMs },
+        );
+        return result;
+      } catch (error) {
+        return {
+          ok: false,
+          error: {
+            code: "BACKEND_UNAVAILABLE",
+            backendId: args.adapter.backendId,
+            message: error instanceof Error ? error.message : String(error),
           },
+        };
+      } finally {
+        try {
+          await runtime?.close();
+        } catch {
+          // Best-effort cleanup for ephemeral runtimes. Preserve the search result.
+        }
+      }
+    }
+
+    try {
+      const runtimeSpec = {
+        backendId: args.adapter.backendId,
+        persistenceRoot: args.request.persistenceRoot,
+        start: async () => {
+          return await args.adapter.startRuntime?.({
+            backendId: args.adapter.backendId,
+            persistenceRoot: args.request.persistenceRoot,
+          });
         },
-        async (runtime) => {
-          return await args.adapter.execute({ request: args.request, runtime });
-        },
-      );
+      };
+      const execute = async () =>
+        await this.deps.runtimeManager.withRuntime(runtimeSpec, async (runtime) => {
+          runtimeUsed = runtime;
+          return await executeWithRuntime(runtime);
+        });
+      const runtimeKey = {
+        backendId: args.adapter.backendId,
+        persistenceRoot: args.request.persistenceRoot,
+      };
+      const executeWithRuntime = async (runtime: Awaited<ReturnType<typeof runtimeSpec.start>>) => {
+        this.deps.runtimeManager.recordRuntimeCallStart(runtimeKey);
+        try {
+          const result = await withBackendCallTimeout(
+            args.adapter.execute({ request: args.request, runtime }),
+            { backendId: args.adapter.backendId, timeoutMs: args.toolTimeoutMs },
+          );
+          if (result.ok) {
+            this.deps.runtimeManager.recordRuntimeCallSuccess(runtimeKey);
+          } else {
+            this.deps.runtimeManager.recordRuntimeCallError({
+              ...runtimeKey,
+              error: result.error.message,
+            });
+          }
+          return result;
+        } catch (error) {
+          this.deps.runtimeManager.recordRuntimeCallError({
+            ...runtimeKey,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          throw error;
+        }
+      };
+      let runtimeUsed: Awaited<ReturnType<typeof runtimeSpec.start>> | undefined;
+
+      let firstResult: BackendSearchResult;
+      try {
+        firstResult = await execute();
+      } catch (error) {
+        if (!(error instanceof BackendCallTimeoutError)) {
+          throw error;
+        }
+        const freshRuntime = await this.deps.runtimeManager.restartRuntime(
+          runtimeSpec,
+          runtimeUsed,
+        );
+        return await executeWithRuntime(freshRuntime);
+      }
+      if (!firstResult.ok && isStaleRuntimeErrorMessage(firstResult.error.message)) {
+        const freshRuntime = await this.deps.runtimeManager.restartRuntime(
+          runtimeSpec,
+          runtimeUsed,
+        );
+        return await executeWithRuntime(freshRuntime);
+      }
+
+      return firstResult;
     } catch (error) {
       return {
         ok: false,
@@ -610,6 +728,7 @@ export class SearchCoordinatorImpl implements SearchCoordinator {
       adapter: primaryAdapter,
       request: primaryRequest,
       lifecyclePlan: lifecyclePlan.value,
+      toolTimeoutMs: runtimeConfig.config.runtime?.toolTimeoutMs ?? DEFAULT_BACKEND_TOOL_TIMEOUT_MS,
     });
     this.emitBackendDiagnostics(primaryResult);
 
@@ -685,6 +804,7 @@ export class SearchCoordinatorImpl implements SearchCoordinator {
         ...lifecyclePlan.value,
         action: { type: "run-ephemeral", key: lifecyclePlan.value.action.key },
       },
+      toolTimeoutMs: runtimeConfig.config.runtime?.toolTimeoutMs ?? DEFAULT_BACKEND_TOOL_TIMEOUT_MS,
     });
     this.emitBackendDiagnostics(fallbackResult);
     if (!fallbackResult.ok) {

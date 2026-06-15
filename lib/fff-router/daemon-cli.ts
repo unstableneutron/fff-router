@@ -15,13 +15,14 @@ import {
   getDaemonPolicyConfigPaths,
 } from "./daemon-config";
 import { runMcpSocketBridge } from "./mcp-bridge";
+import type { RuntimeDiagnostic } from "./runtime-manager";
 import { getToolDiagnostic, type ToolDiagnostic } from "./tool-resolution";
 
 export type DaemonCliCommand =
   | { name: "run" }
   | { name: "mcp"; profile: "agent" | "structured" }
   | { name: "status" }
-  | { name: "reload" }
+  | { name: "reload"; clearRuntimes?: boolean }
   | { name: "stop" }
   | { name: "logs" }
   | { name: "doctor" }
@@ -51,12 +52,13 @@ export type DoctorReport = DaemonStatus & {
   daemonConfig?: ReturnType<typeof getDaemonConfig>;
   fffMcp: DoctorFffMcpStatus;
   tools?: ToolReport;
+  runtimes?: RuntimeDiagnostic[];
 };
 
 type ExecuteDaemonCliDeps = {
   getStatus: () => Promise<DaemonStatus>;
   getStatusReport?: () => Promise<DaemonStatusReport>;
-  reloadDaemon: () => Promise<boolean>;
+  reloadDaemon: (options?: { clearRuntimes?: boolean }) => Promise<boolean>;
   stopDaemon: () => Promise<boolean>;
   getLogs?: () => Promise<Awaited<ReturnType<typeof readDaemonLogs>>>;
   getDoctorReport: () => Promise<DoctorReport>;
@@ -118,7 +120,13 @@ export function parseDaemonCliCommand(argv: string[]): DaemonCliCommand {
     case "status":
       return { name: "status" };
     case "reload":
-      return { name: "reload" };
+      if (rest.length === 0) {
+        return { name: "reload" };
+      }
+      if (rest.length === 1 && rest[0] === "--clear-runtimes") {
+        return { name: "reload", clearRuntimes: true };
+      }
+      throw new Error(`unknown reload arguments: ${rest.join(" ")}`);
     case "stop":
       return { name: "stop" };
     case "logs":
@@ -162,14 +170,17 @@ export async function getDaemonStatusReport(
   };
 }
 
-export async function reloadDaemon(env: NodeJS.ProcessEnv = process.env): Promise<boolean> {
+export async function reloadDaemon(
+  env: NodeJS.ProcessEnv = process.env,
+  options: { clearRuntimes?: boolean } = {},
+): Promise<boolean> {
   const status = await getDaemonStatus(env);
   if (!status.metadata) {
     return false;
   }
 
   try {
-    process.kill(status.metadata.pid, "SIGHUP");
+    process.kill(status.metadata.pid, options.clearRuntimes ? "SIGUSR2" : "SIGHUP");
   } catch (error) {
     if (typeof error === "object" && error && "code" in error && error.code === "ESRCH") {
       return false;
@@ -241,6 +252,11 @@ export async function runForegroundDaemon(env: NodeJS.ProcessEnv = process.env):
       console.error("fff-routerd reload failed:", error);
     });
   });
+  process.on("SIGUSR2", () => {
+    void daemon.reload({ clearRuntimes: true }).catch((error) => {
+      console.error("fff-routerd clear-runtimes reload failed:", error);
+    });
+  });
 
   await new Promise(() => {});
 }
@@ -250,6 +266,9 @@ export async function getDoctorReport(env: NodeJS.ProcessEnv = process.env): Pro
   const policyPaths = getDaemonPolicyConfigPaths({ env });
   const daemonPaths = getDaemonPaths({ env });
   const tools = await getToolReport(env);
+  const runtimes = status.metadata
+    ? await getRuntimeDiagnosticsFromHealth(status.metadata)
+    : undefined;
 
   return {
     ...status,
@@ -259,7 +278,39 @@ export async function getDoctorReport(env: NodeJS.ProcessEnv = process.env): Pro
     daemonConfig: getDaemonConfig({ env }),
     fffMcp: tools.fffMcp,
     tools,
+    ...(runtimes ? { runtimes } : {}),
   };
+}
+
+async function getRuntimeDiagnosticsFromHealth(
+  metadata: DaemonMetadata,
+): Promise<RuntimeDiagnostic[] | undefined> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 500);
+  timeout.unref?.();
+
+  try {
+    const response = await fetch(
+      `${getDaemonOriginFromConfig({
+        host: metadata.host,
+        port: metadata.port,
+        mcpPath: metadata.mcpPath,
+      })}/health`,
+      { signal: controller.signal },
+    );
+    if (!response.ok) {
+      return undefined;
+    }
+    const body = (await response.json()) as { runtimes?: unknown };
+    if (!Array.isArray(body.runtimes)) {
+      return undefined;
+    }
+    return body.runtimes as RuntimeDiagnostic[];
+  } catch {
+    return undefined;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 export async function executeDaemonCliCommand(
@@ -279,7 +330,9 @@ export async function executeDaemonCliCommand(
       return 0;
     }
     case "reload": {
-      const reloaded = await deps.reloadDaemon();
+      const reloaded = await deps.reloadDaemon(
+        command.clearRuntimes ? { clearRuntimes: true } : undefined,
+      );
       if (!reloaded) {
         deps.writeStderr("fff-routerd is not running\n");
         return 1;
@@ -329,7 +382,7 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
   return await executeDaemonCliCommand(command, {
     getStatus: async () => await getDaemonStatus(env),
     getStatusReport: async () => await getDaemonStatusReport(env),
-    reloadDaemon: async () => await reloadDaemon(env),
+    reloadDaemon: async (options) => await reloadDaemon(env, options),
     stopDaemon: async () => await stopDaemon(env),
     getLogs: async () => await readDaemonLogs(env),
     getDoctorReport: async () => await getDoctorReport(env),

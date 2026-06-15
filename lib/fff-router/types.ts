@@ -199,6 +199,7 @@ export type RouterConfig = {
   promotion: { windowMs: number; requiredHits: number };
   ttl: { gitMs: number; nonGitMs: number };
   limits: { maxPersistentDaemons: number; maxPersistentNonGitDaemons: number };
+  runtime?: { toolTimeoutMs?: number };
 };
 
 export type RoutingTarget = {

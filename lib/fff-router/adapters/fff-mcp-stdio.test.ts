@@ -1,7 +1,7 @@
 import { mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import {
   createFffMcpStdioAdapter,
   filterRenderedCompactText,
@@ -182,6 +182,47 @@ describe("createFffMcpStdioAdapter", () => {
         process.env.FFF_ROUTER_FFF_MCP_BIN = previous;
       }
     }
+  });
+
+  test("started runtimes expose the child pid and notify close handlers", async () => {
+    const client = {
+      connect: vi.fn(async () => {}),
+      close: vi.fn(async () => {}),
+      callTool: vi.fn(async () => ({
+        content: [{ type: "text", text: "lib/fff-router/coordinator.ts git:clean" }],
+      })),
+    };
+    const transport = {
+      pid: 12345,
+      onclose: undefined as (() => void) | undefined,
+      close: vi.fn(async () => {}),
+    };
+    const adapter = createFffMcpStdioAdapter({
+      createClient: () => client,
+      createTransport: () => transport,
+      waitForReady: async () => "ready",
+    });
+
+    const runtime = await adapter.startRuntime?.({
+      backendId: "fff-mcp",
+      persistenceRoot: "/repo",
+    });
+    if (!runtime) throw new Error("expected runtime");
+
+    const closeHandler = vi.fn();
+    const detachClose = runtime.onClose?.(closeHandler);
+    expect(runtime.pid).toBe(12345);
+
+    transport.onclose?.();
+    expect(closeHandler).toHaveBeenCalledTimes(1);
+
+    detachClose?.();
+    transport.onclose?.();
+    expect(closeHandler).toHaveBeenCalledTimes(1);
+
+    await runtime.close();
+    expect(client.close).toHaveBeenCalledTimes(1);
+    expect(transport.close).toHaveBeenCalledTimes(1);
   });
 
   test("maps find_files requests onto stock fff-mcp and parses file results", async () => {

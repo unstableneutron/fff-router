@@ -79,6 +79,20 @@ describe("daemon config file", () => {
     expect(loadDaemonReloadConfig({ env }).router.promotion.windowMs).toBe(1234);
   });
 
+  test("reads runtime tool timeout from config", async () => {
+    const home = await makeTempHome();
+    await writeConfigFile({
+      home,
+      fileName: "config.json",
+      text: `{
+        "runtime": { "toolTimeoutMs": 2500 }
+      }`,
+    });
+
+    const config = loadDaemonReloadConfig({ env: { HOME: home } as NodeJS.ProcessEnv });
+    expect(config.router.runtime?.toolTimeoutMs).toBe(2500);
+  });
+
   test("falls back to config.jsonc when config.json is absent", async () => {
     const home = await makeTempHome();
     await writeConfigFile({

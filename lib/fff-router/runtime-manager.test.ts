@@ -90,6 +90,153 @@ describe("RuntimeManager", () => {
     expect(startCount).toBe(1);
   });
 
+  test("evicts a cached runtime when the runtime reports it closed", async () => {
+    let closeHandler: (() => void) | undefined;
+    let startCount = 0;
+    const manager = new RuntimeManager();
+
+    const first = await manager.withRuntime(
+      {
+        backendId: "fff-node",
+        persistenceRoot: "/repo/project",
+        start: async () => {
+          startCount += 1;
+          return {
+            id: `runtime-${startCount}`,
+            close: async () => {},
+            onClose: (handler: () => void) => {
+              closeHandler = handler;
+              return () => {
+                closeHandler = undefined;
+              };
+            },
+          } as SearchBackendRuntime;
+        },
+      },
+      async (runtime) => runtime.id,
+    );
+    closeHandler?.();
+
+    const second = await manager.withRuntime(
+      {
+        backendId: "fff-node",
+        persistenceRoot: "/repo/project",
+        start: async () => {
+          startCount += 1;
+          return {
+            id: `runtime-${startCount}`,
+            close: async () => {},
+          } satisfies SearchBackendRuntime;
+        },
+      },
+      async (runtime) => runtime.id,
+    );
+
+    expect(first).toBe("runtime-1");
+    expect(second).toBe("runtime-2");
+    expect(startCount).toBe(2);
+  });
+
+  test("coalesces concurrent restarts for the same stale runtime", async () => {
+    const secondStart = deferred<SearchBackendRuntime>();
+    let startCount = 0;
+    let closeCount = 0;
+    let staleRuntime!: SearchBackendRuntime;
+    const manager = new RuntimeManager();
+
+    await manager.withRuntime(
+      {
+        backendId: "fff-node",
+        persistenceRoot: "/repo/project",
+        start: async () => {
+          startCount += 1;
+          return {
+            id: "runtime-1",
+            close: async () => {
+              closeCount += 1;
+            },
+          };
+        },
+      },
+      async (runtime) => {
+        staleRuntime = runtime;
+      },
+    );
+
+    const spec = {
+      backendId: "fff-node" as const,
+      persistenceRoot: "/repo/project",
+      start: async () => {
+        startCount += 1;
+        return await secondStart.promise;
+      },
+    };
+    const firstRestart = manager.restartRuntime(spec, staleRuntime);
+    const secondRestart = manager.restartRuntime(spec, staleRuntime);
+
+    secondStart.resolve({
+      id: "runtime-2",
+      close: async () => {
+        closeCount += 1;
+      },
+    });
+
+    await expect(firstRestart).resolves.toMatchObject({ id: "runtime-2" });
+    await expect(secondRestart).resolves.toMatchObject({ id: "runtime-2" });
+    expect(startCount).toBe(2);
+    expect(closeCount).toBe(1);
+  });
+
+  test("reports runtime diagnostics for health surfaces", async () => {
+    const manager = new RuntimeManager();
+
+    await manager.withRuntime(
+      {
+        backendId: "fff-mcp",
+        persistenceRoot: "/repo/project",
+        start: async () => ({
+          id: "runtime-1",
+          pid: 12345,
+          close: async () => {},
+        }),
+      },
+      async () => undefined,
+    );
+    manager.recordRuntimeCallStart({
+      backendId: "fff-mcp",
+      persistenceRoot: "/repo/project",
+      at: 1_100,
+    });
+    manager.recordRuntimeCallSuccess({
+      backendId: "fff-mcp",
+      persistenceRoot: "/repo/project",
+      at: 1_200,
+    });
+    manager.recordRuntimeCallError({
+      backendId: "fff-mcp",
+      persistenceRoot: "/repo/project",
+      at: 1_300,
+      error: "SEARCH_FAILED: Not connected",
+    });
+
+    expect(manager.getDiagnostics(() => 1_500)).toEqual([
+      {
+        backendId: "fff-mcp",
+        key: "fff-mcp::/repo/project",
+        lastCallAt: 1_100,
+        lastError: "SEARCH_FAILED: Not connected",
+        lastErrorAt: 1_300,
+        lastSuccessAt: 1_200,
+        persistenceRoot: "/repo/project",
+        pid: 12345,
+        restartCount: 0,
+        runtimeId: "runtime-1",
+        state: "ready",
+        uptimeMs: expect.any(Number),
+      },
+    ]);
+  });
+
   test("evicted runtimes close exactly once", async () => {
     let closeCount = 0;
     const manager = new RuntimeManager();

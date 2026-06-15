@@ -79,6 +79,10 @@ describe("parseDaemonCliCommand", () => {
   test("parses status, reload, stop, doctor, install-fff-mcp, update, and mcp", () => {
     expect(parseDaemonCliCommand(["status"])).toEqual({ name: "status" });
     expect(parseDaemonCliCommand(["reload"])).toEqual({ name: "reload" });
+    expect(parseDaemonCliCommand(["reload", "--clear-runtimes"])).toEqual({
+      name: "reload",
+      clearRuntimes: true,
+    });
     expect(parseDaemonCliCommand(["stop"])).toEqual({ name: "stop" });
     expect(parseDaemonCliCommand(["logs"])).toEqual({ name: "logs" });
     expect(parseDaemonCliCommand(["doctor"])).toEqual({ name: "doctor" });
@@ -107,6 +111,10 @@ describe("parseDaemonCliCommand", () => {
 
   test("rejects unknown commands", () => {
     expect(() => parseDaemonCliCommand(["wat"])).toThrow(/unknown command/i);
+  });
+
+  test("rejects unknown reload arguments", () => {
+    expect(() => parseDaemonCliCommand(["reload", "--wat"])).toThrow(/unknown reload arguments/i);
   });
 });
 
@@ -295,12 +303,13 @@ describe("executeDaemonCliCommand", () => {
 
   test("reload reports success", async () => {
     const writeStdout = vi.fn();
+    const reloadDaemon = vi.fn(async () => true);
 
     const exitCode = await executeDaemonCliCommand(
-      { name: "reload" },
+      { name: "reload", clearRuntimes: true },
       {
         getStatus: async () => ({ running: true, metadata }),
-        reloadDaemon: async () => true,
+        reloadDaemon,
         stopDaemon: async () => false,
         getDoctorReport: async () => ({ running: true, metadata, fffMcp: { found: false } }),
         installFffMcp: async () => "/tmp/fff-mcp",
@@ -312,6 +321,7 @@ describe("executeDaemonCliCommand", () => {
 
     expect(exitCode).toBe(0);
     expect(writeStdout).toHaveBeenCalledWith("Reloaded fff-routerd\n");
+    expect(reloadDaemon).toHaveBeenCalledWith({ clearRuntimes: true });
   });
 
   test("stop reports failure when no daemon is running", async () => {
