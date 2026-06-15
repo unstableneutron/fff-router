@@ -4,29 +4,43 @@ var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
 var __getOwnPropNames = Object.getOwnPropertyNames;
 var __getProtoOf = Object.getPrototypeOf;
 var __hasOwnProp = Object.prototype.hasOwnProperty;
-var __commonJS = (cb, mod) => function __require() {
-  return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
-};
+var __commonJS = (cb, mod) =>
+  function __require() {
+    return (
+      mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports
+    );
+  };
 var __copyProps = (to, from, except, desc) => {
-  if (from && typeof from === "object" || typeof from === "function") {
+  if ((from && typeof from === "object") || typeof from === "function") {
     for (let key of __getOwnPropNames(from))
       if (!__hasOwnProp.call(to, key) && key !== except)
-        __defProp(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable });
+        __defProp(to, key, {
+          get: () => from[key],
+          enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable,
+        });
   }
   return to;
 };
-var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__getProtoOf(mod)) : {}, __copyProps(
-  // If the importer is in node compatibility mode or this is not an ESM
-  // file that has been converted to a CommonJS file using a Babel-
-  // compatible transform (i.e. "__esModule" has not been set), then set
-  // "default" to the CommonJS "module.exports" for node compatibility.
-  isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target,
-  mod
-));
+var __toESM = (mod, isNodeMode, target) => (
+  (target = mod != null ? __create(__getProtoOf(mod)) : {}),
+  __copyProps(
+    // If the importer is in node compatibility mode or this is not an ESM
+    // file that has been converted to a CommonJS file using a Babel-
+    // compatible transform (i.e. "__esModule" has not been set), then set
+    // "default" to the CommonJS "module.exports" for node compatibility.
+    isNodeMode || !mod || !mod.__esModule
+      ? __defProp(target, "default", { value: mod, enumerable: true })
+      : target,
+    mod,
+  )
+);
 
-// ../../.cache/aube/virtual-store/picomatch@4.0.4-57db1111b1e656b2/node_modules/picomatch/lib/constants.js
+// ../../../.cache/aube/virtual-store/picomatch@4.0.4-57db1111b1e656b2/node_modules/picomatch/lib/constants.js
 var require_constants = __commonJS({
-  "../../.cache/aube/virtual-store/picomatch@4.0.4-57db1111b1e656b2/node_modules/picomatch/lib/constants.js"(exports, module) {
+  "../../../.cache/aube/virtual-store/picomatch@4.0.4-57db1111b1e656b2/node_modules/picomatch/lib/constants.js"(
+    exports,
+    module,
+  ) {
     "use strict";
     var WIN_SLASH = "\\\\/";
     var WIN_NO_SLASH = `[^${WIN_SLASH}]`;
@@ -63,7 +77,7 @@ var require_constants = __commonJS({
       QMARK_NO_DOT,
       STAR,
       START_ANCHOR,
-      SEP
+      SEP,
     };
     var WINDOWS_CHARS = {
       ...POSIX_CHARS,
@@ -78,7 +92,7 @@ var require_constants = __commonJS({
       QMARK_NO_DOT: `[^.${WIN_SLASH}]`,
       START_ANCHOR: `(?:^|[${WIN_SLASH}])`,
       END_ANCHOR: `(?:[${WIN_SLASH}]|$)`,
-      SEP: "\\"
+      SEP: "\\",
     };
     var POSIX_REGEX_SOURCE = {
       __proto__: null,
@@ -95,7 +109,7 @@ var require_constants = __commonJS({
       space: " \\t\\r\\n\\v\\f",
       upper: "A-Z",
       word: "A-Za-z0-9_",
-      xdigit: "A-Fa-f0-9"
+      xdigit: "A-Fa-f0-9",
     };
     module.exports = {
       DEFAULT_MAX_EXTGLOB_RECURSION,
@@ -113,7 +127,7 @@ var require_constants = __commonJS({
         __proto__: null,
         "***": "*",
         "**/**": "**",
-        "**/**/**": "**"
+        "**/**/**": "**",
       },
       // Digits
       CHAR_0: 48,
@@ -213,7 +227,7 @@ var require_constants = __commonJS({
           "?": { type: "qmark", open: "(?:", close: ")?" },
           "+": { type: "plus", open: "(?:", close: ")+" },
           "*": { type: "star", open: "(?:", close: ")*" },
-          "@": { type: "at", open: "(?:", close: ")" }
+          "@": { type: "at", open: "(?:", close: ")" },
         };
       },
       /**
@@ -221,20 +235,22 @@ var require_constants = __commonJS({
        */
       globChars(win32) {
         return win32 === true ? WINDOWS_CHARS : POSIX_CHARS;
-      }
+      },
     };
-  }
+  },
 });
 
-// ../../.cache/aube/virtual-store/picomatch@4.0.4-57db1111b1e656b2/node_modules/picomatch/lib/utils.js
+// ../../../.cache/aube/virtual-store/picomatch@4.0.4-57db1111b1e656b2/node_modules/picomatch/lib/utils.js
 var require_utils = __commonJS({
-  "../../.cache/aube/virtual-store/picomatch@4.0.4-57db1111b1e656b2/node_modules/picomatch/lib/utils.js"(exports) {
+  "../../../.cache/aube/virtual-store/picomatch@4.0.4-57db1111b1e656b2/node_modules/picomatch/lib/utils.js"(
+    exports,
+  ) {
     "use strict";
     var {
       REGEX_BACKSLASH,
       REGEX_REMOVE_BACKSLASH,
       REGEX_SPECIAL_CHARS,
-      REGEX_SPECIAL_CHARS_GLOBAL
+      REGEX_SPECIAL_CHARS_GLOBAL,
     } = require_constants();
     exports.isObject = (val) => val !== null && typeof val === "object" && !Array.isArray(val);
     exports.hasRegexChars = (str) => REGEX_SPECIAL_CHARS.test(str);
@@ -287,12 +303,15 @@ var require_utils = __commonJS({
       }
       return last;
     };
-  }
+  },
 });
 
-// ../../.cache/aube/virtual-store/picomatch@4.0.4-57db1111b1e656b2/node_modules/picomatch/lib/scan.js
+// ../../../.cache/aube/virtual-store/picomatch@4.0.4-57db1111b1e656b2/node_modules/picomatch/lib/scan.js
 var require_scan = __commonJS({
-  "../../.cache/aube/virtual-store/picomatch@4.0.4-57db1111b1e656b2/node_modules/picomatch/lib/scan.js"(exports, module) {
+  "../../../.cache/aube/virtual-store/picomatch@4.0.4-57db1111b1e656b2/node_modules/picomatch/lib/scan.js"(
+    exports,
+    module,
+  ) {
     "use strict";
     var utils = require_utils();
     var {
@@ -324,7 +343,7 @@ var require_scan = __commonJS({
       /* } */
       CHAR_RIGHT_PARENTHESES,
       /* ) */
-      CHAR_RIGHT_SQUARE_BRACKET
+      CHAR_RIGHT_SQUARE_BRACKET,
       /* ] */
     } = require_constants();
     var isPathSeparator = (code) => {
@@ -435,7 +454,12 @@ var require_scan = __commonJS({
           continue;
         }
         if (opts.noext !== true) {
-          const isExtglobChar = code === CHAR_PLUS || code === CHAR_AT || code === CHAR_ASTERISK || code === CHAR_QUESTION_MARK || code === CHAR_EXCLAMATION_MARK;
+          const isExtglobChar =
+            code === CHAR_PLUS ||
+            code === CHAR_AT ||
+            code === CHAR_ASTERISK ||
+            code === CHAR_QUESTION_MARK ||
+            code === CHAR_EXCLAMATION_MARK;
           if (isExtglobChar === true && peek() === CHAR_LEFT_PARENTHESES) {
             isGlob = token.isGlob = true;
             isExtglob = token.isExtglob = true;
@@ -572,7 +596,7 @@ var require_scan = __commonJS({
         isExtglob,
         isGlobstar,
         negated,
-        negatedExtglob
+        negatedExtglob,
       };
       if (opts.tokens === true) {
         state.maxDepth = 0;
@@ -617,12 +641,15 @@ var require_scan = __commonJS({
       return state;
     };
     module.exports = scan;
-  }
+  },
 });
 
-// ../../.cache/aube/virtual-store/picomatch@4.0.4-57db1111b1e656b2/node_modules/picomatch/lib/parse.js
+// ../../../.cache/aube/virtual-store/picomatch@4.0.4-57db1111b1e656b2/node_modules/picomatch/lib/parse.js
 var require_parse = __commonJS({
-  "../../.cache/aube/virtual-store/picomatch@4.0.4-57db1111b1e656b2/node_modules/picomatch/lib/parse.js"(exports, module) {
+  "../../../.cache/aube/virtual-store/picomatch@4.0.4-57db1111b1e656b2/node_modules/picomatch/lib/parse.js"(
+    exports,
+    module,
+  ) {
     "use strict";
     var constants = require_constants();
     var utils = require_utils();
@@ -631,7 +658,7 @@ var require_parse = __commonJS({
       POSIX_REGEX_SOURCE,
       REGEX_NON_SPECIAL_CHARS,
       REGEX_SPECIAL_CHARS_BACKREF,
-      REPLACEMENTS
+      REPLACEMENTS,
     } = constants;
     var expandRange = (args, options) => {
       if (typeof options.expandRange === "function") {
@@ -744,7 +771,7 @@ var require_parse = __commonJS({
       return false;
     };
     var parseRepeatedExtglob = (pattern, requireEnd = true) => {
-      if (pattern[0] !== "+" && pattern[0] !== "*" || pattern[1] !== "(") {
+      if ((pattern[0] !== "+" && pattern[0] !== "*") || pattern[1] !== "(") {
         return;
       }
       let bracket = 0;
@@ -792,7 +819,7 @@ var require_parse = __commonJS({
             return {
               type: pattern[0],
               body: pattern.slice(2, i),
-              end: i
+              end: i,
             };
           }
         }
@@ -820,7 +847,10 @@ var require_parse = __commonJS({
       if (chars.length < 1) {
         return;
       }
-      const source = chars.length === 1 ? utils.escapeRegex(chars[0]) : `[${chars.map((ch) => utils.escapeRegex(ch)).join("")}]`;
+      const source =
+        chars.length === 1
+          ? utils.escapeRegex(chars[0])
+          : `[${chars.map((ch) => utils.escapeRegex(ch)).join("")}]`;
       return `${source}*`;
     };
     var repeatedExtglobRecursion = (pattern) => {
@@ -838,10 +868,17 @@ var require_parse = __commonJS({
       if (options.maxExtglobRecursion === false) {
         return { risky: false };
       }
-      const max = typeof options.maxExtglobRecursion === "number" ? options.maxExtglobRecursion : constants.DEFAULT_MAX_EXTGLOB_RECURSION;
+      const max =
+        typeof options.maxExtglobRecursion === "number"
+          ? options.maxExtglobRecursion
+          : constants.DEFAULT_MAX_EXTGLOB_RECURSION;
       const branches = splitTopLevel(body).map((branch) => branch.trim());
       if (branches.length > 1) {
-        if (branches.some((branch) => branch === "") || branches.some((branch) => /^[*?]+$/.test(branch)) || hasRepeatedCharPrefixOverlap(branches)) {
+        if (
+          branches.some((branch) => branch === "") ||
+          branches.some((branch) => /^[*?]+$/.test(branch)) ||
+          hasRepeatedCharPrefixOverlap(branches)
+        ) {
           return { risky: true };
         }
       }
@@ -862,7 +899,8 @@ var require_parse = __commonJS({
       }
       input = REPLACEMENTS[input] || input;
       const opts = { ...options };
-      const max = typeof opts.maxLength === "number" ? Math.min(MAX_LENGTH, opts.maxLength) : MAX_LENGTH;
+      const max =
+        typeof opts.maxLength === "number" ? Math.min(MAX_LENGTH, opts.maxLength) : MAX_LENGTH;
       let len = input.length;
       if (len > max) {
         throw new SyntaxError(`Input length: ${len}, exceeds maximum allowed length: ${max}`);
@@ -884,7 +922,7 @@ var require_parse = __commonJS({
         QMARK,
         QMARK_NO_DOT,
         STAR,
-        START_ANCHOR
+        START_ANCHOR,
       } = PLATFORM_CHARS;
       const globstar = (opts2) => {
         return `(${capture}(?:(?!${START_ANCHOR}${opts2.dot ? DOTS_SLASH : DOT_LITERAL}).)*?)`;
@@ -913,7 +951,7 @@ var require_parse = __commonJS({
         parens: 0,
         quotes: 0,
         globstar: false,
-        tokens
+        tokens,
       };
       input = utils.removePrefix(input, state);
       len = input.length;
@@ -923,8 +961,8 @@ var require_parse = __commonJS({
       let prev = bos;
       let value;
       const eos = () => state.index === len - 1;
-      const peek = state.peek = (n = 1) => input[state.index + n];
-      const advance = state.advance = () => input[++state.index] || "";
+      const peek = (state.peek = (n = 1) => input[state.index + n]);
+      const advance = (state.advance = () => input[++state.index] || "");
       const remaining = () => input.slice(state.index + 1);
       const consume = (value2 = "", num = 0) => {
         state.consumed += value2;
@@ -959,7 +997,9 @@ var require_parse = __commonJS({
       const push = (tok) => {
         if (prev.type === "globstar") {
           const isBrace = state.braces > 0 && (tok.type === "comma" || tok.type === "brace");
-          const isExtglob = tok.extglob === true || extglobs.length && (tok.type === "pipe" || tok.type === "paren");
+          const isExtglob =
+            tok.extglob === true ||
+            (extglobs.length && (tok.type === "pipe" || tok.type === "paren"));
           if (tok.type !== "slash" && tok.type !== "paren" && !isBrace && !isExtglob) {
             state.output = state.output.slice(0, -prev.output.length);
             prev.type = "star";
@@ -999,7 +1039,10 @@ var require_parse = __commonJS({
         const body = input.slice(token.startIndex + 2, state.index);
         const analysis = analyzeRepeatedExtglob(body, opts);
         if ((token.type === "plus" || token.type === "star") && analysis.risky) {
-          const safeOutput = analysis.safeOutput ? (token.output ? "" : ONE_CHAR) + (opts.capture ? `(${analysis.safeOutput})` : analysis.safeOutput) : void 0;
+          const safeOutput = analysis.safeOutput
+            ? (token.output ? "" : ONE_CHAR) +
+              (opts.capture ? `(${analysis.safeOutput})` : analysis.safeOutput)
+            : void 0;
           const open = tokens[token.tokensIndex];
           open.type = "text";
           open.value = literal;
@@ -1038,31 +1081,34 @@ var require_parse = __commonJS({
       };
       if (opts.fastpaths !== false && !/(^[*!]|[/()[\]{}"])/.test(input)) {
         let backslashes = false;
-        let output = input.replace(REGEX_SPECIAL_CHARS_BACKREF, (m, esc, chars, first, rest, index) => {
-          if (first === "\\") {
-            backslashes = true;
-            return m;
-          }
-          if (first === "?") {
-            if (esc) {
-              return esc + first + (rest ? QMARK.repeat(rest.length) : "");
+        let output = input.replace(
+          REGEX_SPECIAL_CHARS_BACKREF,
+          (m, esc, chars, first, rest, index) => {
+            if (first === "\\") {
+              backslashes = true;
+              return m;
             }
-            if (index === 0) {
-              return qmarkNoDot + (rest ? QMARK.repeat(rest.length) : "");
+            if (first === "?") {
+              if (esc) {
+                return esc + first + (rest ? QMARK.repeat(rest.length) : "");
+              }
+              if (index === 0) {
+                return qmarkNoDot + (rest ? QMARK.repeat(rest.length) : "");
+              }
+              return QMARK.repeat(chars.length);
             }
-            return QMARK.repeat(chars.length);
-          }
-          if (first === ".") {
-            return DOT_LITERAL.repeat(chars.length);
-          }
-          if (first === "*") {
-            if (esc) {
-              return esc + first + (rest ? star : "");
+            if (first === ".") {
+              return DOT_LITERAL.repeat(chars.length);
             }
-            return star;
-          }
-          return esc ? m : `\\${m}`;
-        });
+            if (first === "*") {
+              if (esc) {
+                return esc + first + (rest ? star : "");
+              }
+              return star;
+            }
+            return esc ? m : `\\${m}`;
+          },
+        );
         if (backslashes === true) {
           if (opts.unescape === true) {
             output = output.replace(/\\/g, "");
@@ -1138,7 +1184,7 @@ var require_parse = __commonJS({
               }
             }
           }
-          if (value === "[" && peek() !== ":" || value === "-" && peek() === "]") {
+          if ((value === "[" && peek() !== ":") || (value === "-" && peek() === "]")) {
             value = `\\${value}`;
           }
           if (value === "]" && (prev.value === "[" || prev.value === "[^")) {
@@ -1195,7 +1241,10 @@ var require_parse = __commonJS({
           continue;
         }
         if (value === "]") {
-          if (opts.nobracket === true || prev && prev.type === "bracket" && prev.value.length === 1) {
+          if (
+            opts.nobracket === true ||
+            (prev && prev.type === "bracket" && prev.value.length === 1)
+          ) {
             push({ type: "text", value, output: `\\${value}` });
             continue;
           }
@@ -1234,7 +1283,7 @@ var require_parse = __commonJS({
             value,
             output: "(",
             outputIndex: state.output.length,
-            tokensIndex: state.tokens.length
+            tokensIndex: state.tokens.length,
           };
           braces.push(open);
           push(open);
@@ -1332,7 +1381,10 @@ var require_parse = __commonJS({
           if (prev && prev.type === "paren") {
             const next = peek();
             let output = value;
-            if (prev.value === "(" && !/[!=<:]/.test(next) || next === "<" && !/<([!=]|\w+>)/.test(remaining())) {
+            if (
+              (prev.value === "(" && !/[!=<:]/.test(next)) ||
+              (next === "<" && !/<([!=]|\w+>)/.test(remaining()))
+            ) {
               output = `\\${value}`;
             }
             push({ type: "text", value, output });
@@ -1362,11 +1414,14 @@ var require_parse = __commonJS({
             extglobOpen("plus", value);
             continue;
           }
-          if (prev && prev.value === "(" || opts.regex === false) {
+          if ((prev && prev.value === "(") || opts.regex === false) {
             push({ type: "plus", value, output: PLUS_LITERAL });
             continue;
           }
-          if (prev && (prev.type === "bracket" || prev.type === "paren" || prev.type === "brace") || state.parens > 0) {
+          if (
+            (prev && (prev.type === "bracket" || prev.type === "paren" || prev.type === "brace")) ||
+            state.parens > 0
+          ) {
             push({ type: "plus", value });
             continue;
           }
@@ -1417,7 +1472,7 @@ var require_parse = __commonJS({
           const before = prior.prev;
           const isStart = prior.type === "slash" || prior.type === "bos";
           const afterStar = before && (before.type === "star" || before.type === "globstar");
-          if (opts.bash === true && (!isStart || rest[0] && rest[0] !== "/")) {
+          if (opts.bash === true && (!isStart || (rest[0] && rest[0] !== "/"))) {
             push({ type: "star", value, output: "" });
             continue;
           }
@@ -1550,7 +1605,8 @@ var require_parse = __commonJS({
     };
     parse.fastpaths = (input, options) => {
       const opts = { ...options };
-      const max = typeof opts.maxLength === "number" ? Math.min(MAX_LENGTH, opts.maxLength) : MAX_LENGTH;
+      const max =
+        typeof opts.maxLength === "number" ? Math.min(MAX_LENGTH, opts.maxLength) : MAX_LENGTH;
       const len = input.length;
       if (len > max) {
         throw new SyntaxError(`Input length: ${len}, exceeds maximum allowed length: ${max}`);
@@ -1565,7 +1621,7 @@ var require_parse = __commonJS({
         NO_DOTS,
         NO_DOTS_SLASH,
         STAR,
-        START_ANCHOR
+        START_ANCHOR,
       } = constants.globChars(opts.windows);
       const nodot = opts.dot ? NO_DOTS : NO_DOT;
       const slashDot = opts.dot ? NO_DOTS_SLASH : NO_DOT;
@@ -1614,12 +1670,15 @@ var require_parse = __commonJS({
       return source;
     };
     module.exports = parse;
-  }
+  },
 });
 
-// ../../.cache/aube/virtual-store/picomatch@4.0.4-57db1111b1e656b2/node_modules/picomatch/lib/picomatch.js
+// ../../../.cache/aube/virtual-store/picomatch@4.0.4-57db1111b1e656b2/node_modules/picomatch/lib/picomatch.js
 var require_picomatch = __commonJS({
-  "../../.cache/aube/virtual-store/picomatch@4.0.4-57db1111b1e656b2/node_modules/picomatch/lib/picomatch.js"(exports, module) {
+  "../../../.cache/aube/virtual-store/picomatch@4.0.4-57db1111b1e656b2/node_modules/picomatch/lib/picomatch.js"(
+    exports,
+    module,
+  ) {
     "use strict";
     var scan = require_scan();
     var parse = require_parse();
@@ -1639,12 +1698,14 @@ var require_picomatch = __commonJS({
         return arrayMatcher;
       }
       const isState = isObject(glob) && glob.tokens && glob.input;
-      if (glob === "" || typeof glob !== "string" && !isState) {
+      if (glob === "" || (typeof glob !== "string" && !isState)) {
         throw new TypeError("Expected pattern to be a non-empty string");
       }
       const opts = options || {};
       const posix = opts.windows;
-      const regex = isState ? picomatch2.compileRe(glob, options) : picomatch2.makeRe(glob, options, false, true);
+      const regex = isState
+        ? picomatch2.compileRe(glob, options)
+        : picomatch2.makeRe(glob, options, false, true);
       const state = regex.state;
       delete regex.state;
       let isIgnored = () => false;
@@ -1754,12 +1815,15 @@ var require_picomatch = __commonJS({
     };
     picomatch2.constants = constants;
     module.exports = picomatch2;
-  }
+  },
 });
 
-// ../../.cache/aube/virtual-store/picomatch@4.0.4-57db1111b1e656b2/node_modules/picomatch/index.js
+// ../../../.cache/aube/virtual-store/picomatch@4.0.4-57db1111b1e656b2/node_modules/picomatch/index.js
 var require_picomatch2 = __commonJS({
-  "../../.cache/aube/virtual-store/picomatch@4.0.4-57db1111b1e656b2/node_modules/picomatch/index.js"(exports, module) {
+  "../../../.cache/aube/virtual-store/picomatch@4.0.4-57db1111b1e656b2/node_modules/picomatch/index.js"(
+    exports,
+    module,
+  ) {
     "use strict";
     var pico = require_picomatch();
     var utils = require_utils();
@@ -1771,7 +1835,7 @@ var require_picomatch2 = __commonJS({
     }
     Object.assign(picomatch2, pico);
     module.exports = picomatch2;
-  }
+  },
 });
 
 // lib/fff-router/public-api.ts
@@ -1787,8 +1851,8 @@ function invalid(message) {
     ok: false,
     error: {
       code: "INVALID_REQUEST",
-      message
-    }
+      message,
+    },
   };
 }
 function joinHome(home, suffix) {
@@ -1834,7 +1898,7 @@ var EXCLUDE_GLOB_META_PATTERN = /[*?[\]{}]/;
 var DEFAULT_LIMIT = 20;
 var DEFAULT_CONTEXT_LINES = 0;
 var outputModeSchema = Type.Union([Type.Literal("compact"), Type.Literal("json")]);
-var cursorSchema = Type.Null();
+var cursorSchema = Type.Union([Type.String({ minLength: 1 }), Type.Null()]);
 var ENABLE_SEARCH_TERMS = false;
 function defineTool(name, description, snippet, inputSchema) {
   return { name, description, snippet, inputSchema };
@@ -1842,7 +1906,7 @@ function defineTool(name, description, snippet, inputSchema) {
 function invalid2(message, code = "INVALID_REQUEST") {
   return {
     ok: false,
-    error: { code, message }
+    error: { code, message },
   };
 }
 function containsPathMeta(value) {
@@ -1924,7 +1988,12 @@ function normalizeExtensions(input) {
     if (!clean) {
       return invalid2("extensions must not contain empty values");
     }
-    if (clean.includes("/") || clean.includes("\\") || containsPathMeta(clean) || !EXTENSION_PATTERN.test(clean)) {
+    if (
+      clean.includes("/") ||
+      clean.includes("\\") ||
+      containsPathMeta(clean) ||
+      !EXTENSION_PATTERN.test(clean)
+    ) {
       return invalid2("extensions must be literal suffixes without path syntax");
     }
     normalized.push(clean);
@@ -2030,16 +2099,19 @@ function expandExcludeGlobPath(basePath, pattern) {
       return [];
     }
     const matches = (0, import_picomatch.default)(segment, { dot: true });
-    return entries.filter((entry) => matches(entry.name)).sort((left, right) => left.name.localeCompare(right.name)).flatMap((entry) => {
-      const nextPrefix = [...prefix, entry.name];
-      if (rest.length === 0) {
-        return [nextPrefix.join("/")];
-      }
-      if (!entry.isDirectory()) {
-        return [];
-      }
-      return expand(path2.join(absDir, entry.name), nextPrefix, rest);
-    });
+    return entries
+      .filter((entry) => matches(entry.name))
+      .sort((left, right) => left.name.localeCompare(right.name))
+      .flatMap((entry) => {
+        const nextPrefix = [...prefix, entry.name];
+        if (rest.length === 0) {
+          return [nextPrefix.join("/")];
+        }
+        if (!entry.isDirectory()) {
+          return [];
+        }
+        return expand(path2.join(absDir, entry.name), nextPrefix, rest);
+      });
   }
   return expand(basePath, [], segments);
 }
@@ -2057,11 +2129,16 @@ function normalizeExcludePaths(input, within) {
     if (typeof entry !== "string") {
       return invalid2("exclude_paths must contain only strings");
     }
-    const excludePath = expansionBase ? validateExcludePathSyntax(entry) : normalizeExcludePath(entry);
+    const excludePath = expansionBase
+      ? validateExcludePathSyntax(entry)
+      : normalizeExcludePath(entry);
     if (!excludePath.ok) {
       return excludePath;
     }
-    const paths = containsExcludeGlobMeta(excludePath.value) && expansionBase !== void 0 ? expandExcludeGlobPath(expansionBase, excludePath.value) : [excludePath.value];
+    const paths =
+      containsExcludeGlobMeta(excludePath.value) && expansionBase !== void 0
+        ? expandExcludeGlobPath(expansionBase, excludePath.value)
+        : [excludePath.value];
     for (const pathValue of paths) {
       if (!seen.has(pathValue)) {
         seen.add(pathValue);
@@ -2075,7 +2152,10 @@ function normalizeCursor(value) {
   if (value === void 0 || value === null) {
     return { ok: true, value: null };
   }
-  return invalid2("cursor must be omitted or null in the initial V2 slice");
+  if (typeof value === "string" && value.trim() !== "") {
+    return { ok: true, value };
+  }
+  return invalid2("cursor must be a non-empty string when provided");
 }
 function normalizeTerms(value) {
   if (!Array.isArray(value) || value.length === 0) {
@@ -2118,7 +2198,7 @@ function rejectUnknownFields(input, schema) {
 }
 var withinSchema = Type.Union([
   Type.String({ minLength: 1 }),
-  Type.Array(Type.String({ minLength: 1 }), { minItems: 1 })
+  Type.Array(Type.String({ minLength: 1 }), { minItems: 1 }),
 ]);
 var findFilesInputSchema = Type.Object(
   {
@@ -2129,9 +2209,9 @@ var findFilesInputSchema = Type.Object(
     exclude_paths: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
     limit: Type.Optional(Type.Integer({ minimum: 0 })),
     cursor: Type.Optional(cursorSchema),
-    output_mode: Type.Optional(outputModeSchema)
+    output_mode: Type.Optional(outputModeSchema),
   },
-  { additionalProperties: false }
+  { additionalProperties: false },
 );
 var searchTermsInputSchema = Type.Object(
   {
@@ -2143,15 +2223,16 @@ var searchTermsInputSchema = Type.Object(
     context_lines: Type.Optional(Type.Integer({ minimum: 0 })),
     limit: Type.Optional(Type.Integer({ minimum: 0 })),
     cursor: Type.Optional(cursorSchema),
-    output_mode: Type.Optional(outputModeSchema)
+    output_mode: Type.Optional(outputModeSchema),
   },
-  { additionalProperties: false }
+  { additionalProperties: false },
 );
 var grepInputSchema = Type.Object(
   {
     patterns: Type.Array(Type.String({ minLength: 1 }), { minItems: 1 }),
     literal: Type.Boolean({
-      description: "Required. If true, patterns are matched as literal text (safe for code, quotes, whitespace, and regex metacharacters). If false, patterns are regex. This tool does not guess; set it explicitly."
+      description:
+        "Required. If true, patterns are matched as literal text (safe for code, quotes, whitespace, and regex metacharacters). If false, patterns are regex. This tool does not guess; set it explicitly.",
     }),
     within: Type.Optional(withinSchema),
     glob: Type.Optional(Type.String({ minLength: 1 })),
@@ -2161,31 +2242,33 @@ var grepInputSchema = Type.Object(
     context_lines: Type.Optional(Type.Integer({ minimum: 0 })),
     limit: Type.Optional(Type.Integer({ minimum: 0 })),
     cursor: Type.Optional(cursorSchema),
-    output_mode: Type.Optional(outputModeSchema)
+    output_mode: Type.Optional(outputModeSchema),
   },
-  { additionalProperties: false }
+  { additionalProperties: false },
 );
 var PUBLIC_TOOL_DEFINITIONS = [
   defineTool(
     "fff_find_files",
     "Fuzzy file search by name/path under an already-resolved within scope. Use it when you are exploring a topic or looking for files, not when you already have a specific code identifier. `within` accepts a single absolute path or an array of absolute paths (multi-path unions the results \u2014 same semantics as passing multiple roots to `fd`). Keep queries short and let glob, extensions, and exclude_paths do the path narrowing.",
     '{"query":"openssl header","within":"/opt/homebrew/lib","glob":"**/*.h","exclude_paths":["pkgconfig"]}',
-    findFilesInputSchema
+    findFilesInputSchema,
   ),
-  ...ENABLE_SEARCH_TERMS ? [
-    defineTool(
-      "fff_search_terms",
-      "Search for one or more literal terms under an already-resolved within scope (absolute or HOME-based).",
-      '{"terms":["router","coordinator"],"within":"$HOME/.config"}',
-      searchTermsInputSchema
-    )
-  ] : [],
+  ...(ENABLE_SEARCH_TERMS
+    ? [
+        defineTool(
+          "fff_search_terms",
+          "Search for one or more literal terms under an already-resolved within scope (absolute or HOME-based).",
+          '{"terms":["router","coordinator"],"within":"$HOME/.config"}',
+          searchTermsInputSchema,
+        ),
+      ]
+    : []),
   defineTool(
     "fff_grep",
     "Search file contents under an already-resolved within scope. `literal` is REQUIRED: set literal=true for identifier searches, code fragments, or any string containing whitespace, quotes, or punctuation where regex interpretation is unwanted; set literal=false only when you need regex features (anchors, character classes, quantifiers, alternation). This tool does not guess. Use `patterns` for one or more terms; multiple entries use OR semantics. `within` accepts a single absolute path or an array of absolute paths \u2014 use the array form to replace shell patterns like `grep PAT file1 file2 dirA dirB` in one call (all entries must share a routing target). Use `glob` / `extensions` / `exclude_paths` to prefilter files aggressively.",
     '{"patterns":["ActorAuth","actor_auth","PopulatedActorAuth"],"literal":true,"within":["crates/portl-cli/Cargo.toml","Cargo.toml"]}',
-    grepInputSchema
-  )
+    grepInputSchema,
+  ),
 ];
 function createPublicError(code, message) {
   return { code, message };
@@ -2193,7 +2276,7 @@ function createPublicError(code, message) {
 function publicErrorResult(code, message) {
   return {
     ok: false,
-    error: createPublicError(code, message)
+    error: createPublicError(code, message),
   };
 }
 function parsePublicOutputMode(value) {
@@ -2251,17 +2334,17 @@ function normalizeFindFilesInput(input) {
   const value = {
     tool: "fff_find_files",
     query: query.value,
-    ...within.value !== void 0 ? { within: within.value } : {},
-    ...glob.value !== void 0 ? { glob: glob.value } : {},
+    ...(within.value !== void 0 ? { within: within.value } : {}),
+    ...(glob.value !== void 0 ? { glob: glob.value } : {}),
     extensions: extensions.value,
     excludePaths: excludePaths.value,
     limit: limit.value,
     cursor: cursor.value,
-    outputMode: outputMode.value
+    outputMode: outputMode.value,
   };
   return {
     ok: true,
-    value
+    value,
   };
 }
 function normalizeSearchTermsInput(input) {
@@ -2292,7 +2375,7 @@ function normalizeSearchTermsInput(input) {
   const contextLines = parseOptionalNonNegativeInt(
     input.context_lines,
     "context_lines",
-    DEFAULT_CONTEXT_LINES
+    DEFAULT_CONTEXT_LINES,
   );
   if (!contextLines.ok) {
     return contextLines;
@@ -2312,18 +2395,18 @@ function normalizeSearchTermsInput(input) {
   const value = {
     tool: "fff_search_terms",
     terms: terms.value,
-    ...within.value !== void 0 ? { within: within.value } : {},
-    ...glob.value !== void 0 ? { glob: glob.value } : {},
+    ...(within.value !== void 0 ? { within: within.value } : {}),
+    ...(glob.value !== void 0 ? { glob: glob.value } : {}),
     extensions: extensions.value,
     excludePaths: excludePaths.value,
     contextLines: contextLines.value,
     limit: limit.value,
     cursor: cursor.value,
-    outputMode: outputMode.value
+    outputMode: outputMode.value,
   };
   return {
     ok: true,
-    value
+    value,
   };
 }
 function normalizeGrepInput(input) {
@@ -2337,7 +2420,7 @@ function normalizeGrepInput(input) {
   }
   if (typeof input.literal !== "boolean") {
     return invalid2(
-      "literal must be explicitly set to true or false; fff_grep does not guess between regex and literal interpretation"
+      "literal must be explicitly set to true or false; fff_grep does not guess between regex and literal interpretation",
     );
   }
   const within = normalizeWithin(input.within);
@@ -2362,7 +2445,7 @@ function normalizeGrepInput(input) {
   const contextLines = parseOptionalNonNegativeInt(
     input.context_lines,
     "context_lines",
-    DEFAULT_CONTEXT_LINES
+    DEFAULT_CONTEXT_LINES,
   );
   if (!contextLines.ok) {
     return contextLines;
@@ -2383,19 +2466,19 @@ function normalizeGrepInput(input) {
     tool: "fff_grep",
     patterns: patterns.value,
     literal: input.literal,
-    ...within.value !== void 0 ? { within: within.value } : {},
-    ...glob.value !== void 0 ? { glob: glob.value } : {},
+    ...(within.value !== void 0 ? { within: within.value } : {}),
+    ...(glob.value !== void 0 ? { glob: glob.value } : {}),
     caseSensitive: input.case_sensitive ?? false,
     extensions: extensions.value,
     excludePaths: excludePaths.value,
     contextLines: contextLines.value,
     limit: limit.value,
     cursor: cursor.value,
-    outputMode: outputMode.value
+    outputMode: outputMode.value,
   };
   return {
     ok: true,
-    value
+    value,
   };
 }
 function normalizePublicToolInput(tool, input) {
@@ -2433,5 +2516,5 @@ export {
   normalizeWithin,
   parsePublicOutputMode,
   publicErrorResult,
-  searchTermsInputSchema
+  searchTermsInputSchema,
 };

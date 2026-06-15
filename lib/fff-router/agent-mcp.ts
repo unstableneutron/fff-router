@@ -60,7 +60,7 @@ const agentMcpInputShapes = {
     cursor: z
       .union([z.string(), z.null()])
       .optional()
-      .describe("Pagination is not supported; omit or pass null."),
+      .describe("Opaque pagination cursor returned by a previous result; omit for first page."),
   },
   grep: {
     query: z
@@ -87,7 +87,7 @@ const agentMcpInputShapes = {
     cursor: z
       .union([z.string(), z.null()])
       .optional()
-      .describe("Pagination is not supported; omit or pass null."),
+      .describe("Opaque pagination cursor returned by a previous result; omit for first page."),
   },
   multi_grep: {
     patterns: z
@@ -118,7 +118,7 @@ const agentMcpInputShapes = {
     cursor: z
       .union([z.string(), z.null()])
       .optional()
-      .describe("Pagination is not supported; omit or pass null."),
+      .describe("Opaque pagination cursor returned by a previous result; omit for first page."),
   },
 } as const satisfies Record<AgentMcpToolName, z.ZodRawShape>;
 
@@ -185,11 +185,14 @@ function normalizeStringArray(value: unknown, field: string): string[] {
   return value;
 }
 
-function normalizeCursor(value: unknown): null {
+function normalizeCursor(value: unknown): string | null {
   if (value === undefined || value === null) {
     return null;
   }
-  throw new Error("cursor pagination is not supported by fff-routerd's agent MCP profile");
+  if (typeof value === "string" && value.trim() !== "") {
+    return value;
+  }
+  throw new Error("cursor must be a non-empty string when provided");
 }
 
 function resolveAgentWithin(value: unknown, cwd: string, env: NodeJS.ProcessEnv): string {

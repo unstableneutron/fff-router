@@ -33,6 +33,7 @@ export type BackendRequestBase = RuntimeRequestKey & {
   extensions: string[];
   excludePaths: string[];
   limit: number;
+  cursor?: string | null;
 };
 
 export type FindFilesBackendRequest = BackendRequestBase & {
@@ -97,7 +98,7 @@ export type BackendSearchSuccess = {
   backendId: SearchBackendId;
   queryKind: SearchQueryKind;
   items: BackendResultItem[];
-  nextCursor: null;
+  nextCursor: string | null;
   renderedCompact?: string;
   summary?: BackendSearchSummary;
   diagnostics?: Record<string, unknown>;

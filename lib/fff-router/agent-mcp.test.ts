@@ -57,6 +57,44 @@ describe("executeAgentMcpTool", () => {
     });
   });
 
+  test("forwards cursor strings for native fff-mcp pagination", async () => {
+    const callPublicToolOverHttp = vi.fn(async (request: PublicToolRequest) => {
+      expect(request).toMatchObject({
+        tool: "fff_find_files",
+        query: "router",
+        within: ["/repo"],
+        cursor: "7",
+      });
+      return {
+        ok: true,
+        value: {
+          mode: "compact",
+          base_path: "/repo",
+          next_cursor: "8",
+          text: "8/40 matches\nlib/fff-router/mcp-server.ts\ncursor: 8",
+        },
+      } satisfies SearchCoordinatorResult;
+    });
+
+    const response = await executeAgentMcpTool({
+      name: "find_files",
+      input: { query: "router", within: "/repo", cursor: "7" },
+      cwd: "/repo",
+      ensureDaemonRunning: async () => {},
+      callPublicToolOverHttp,
+    });
+
+    expect(response).toEqual({
+      isError: false,
+      content: [
+        {
+          type: "text",
+          text: "8/40 matches\nlib/fff-router/mcp-server.ts\ncursor: 8",
+        },
+      ],
+    });
+  });
+
   test("maps grep query constraints to fff_grep regex requests", async () => {
     const callPublicToolOverHttp = vi.fn(async (request: PublicToolRequest) => {
       expect(request).toMatchObject({

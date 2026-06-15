@@ -73,6 +73,7 @@ function okResult(
   queryKind: SearchQueryKind,
   items: BackendResultItem[],
   backendId: SearchBackendId = "fff-node",
+  nextCursor: string | null = null,
 ): BackendSearchResult {
   return {
     ok: true,
@@ -80,7 +81,7 @@ function okResult(
       backendId,
       queryKind,
       items,
-      nextCursor: null,
+      nextCursor,
     },
   };
 }
@@ -413,6 +414,89 @@ describe("createSearchCoordinator", () => {
         " 540| return new SearchCoordinatorImpl(deps);",
       ].join("\n"),
     });
+  });
+
+  test("preserves compact passthrough text and cursor from fff-mcp find_files", async () => {
+    const renderedCompact = [
+      "→ Read lib/fff-router/coordinator.ts (best match)",
+      "5/13 matches",
+      "lib/fff-router/coordinator.ts git:clean",
+      "cursor: 8",
+    ].join("\n");
+    const primary = makeAdapter({
+      backendId: "fff-mcp",
+      execute: async () => ({
+        ok: true as const,
+        value: {
+          backendId: "fff-mcp" as const,
+          queryKind: "find_files" as const,
+          items: [{ path: "/repo/src/coordinator.ts", relativePath: "src/coordinator.ts" }],
+          nextCursor: "8",
+          renderedCompact,
+        },
+      }),
+    });
+
+    const coordinator = createSearchCoordinator({
+      config,
+      adapters: { "fff-mcp": primary.adapter },
+      primaryBackendId: "fff-mcp",
+      fallbackBackendId: null,
+      runtimeManager: new RuntimeManager(),
+      validateWithin: async ({ withinPaths: [within = "/missing"] }) => ({
+        ok: true,
+        value: { resolvedWithin: within, basePath: within },
+      }),
+      resolveRoutingPath: async (within) => ({
+        ok: true,
+        value: { realPath: within, statType: "directory", gitRoot: "/repo" },
+      }),
+    });
+
+    const result = await coordinator.execute(makePublicRequest({ cursor: "7" }));
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected success");
+    expect(primary.calls[0]).toMatchObject({ cursor: "7" });
+    expect(result.value).toEqual({
+      mode: "compact",
+      base_path: "/repo/src",
+      next_cursor: "8",
+      text: renderedCompact,
+    });
+  });
+
+  test("rejects cursor requests for backends that cannot honor them", async () => {
+    const primary = makeAdapter({
+      backendId: "rg",
+      execute: async () => okResult("find_files", [], "rg"),
+    });
+
+    const coordinator = createSearchCoordinator({
+      config,
+      adapters: { rg: primary.adapter },
+      primaryBackendId: "rg",
+      fallbackBackendId: null,
+      runtimeManager: new RuntimeManager(),
+      validateWithin: async ({ withinPaths: [within = "/missing"] }) => ({
+        ok: true,
+        value: { resolvedWithin: within, basePath: within },
+      }),
+      resolveRoutingPath: async (within) => ({
+        ok: true,
+        value: { realPath: within, statType: "directory", gitRoot: "/repo" },
+      }),
+    });
+
+    const result = await coordinator.execute(makePublicRequest({ cursor: "7" }));
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected failure");
+    expect(result.error).toEqual({
+      code: "INVALID_REQUEST",
+      message: "cursor pagination is only supported by the fff-mcp backend",
+    });
+    expect(primary.calls).toHaveLength(0);
   });
 
   test("preserves compact passthrough text from fff-mcp search_terms", async () => {

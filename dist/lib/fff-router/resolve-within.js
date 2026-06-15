@@ -9,8 +9,8 @@ function invalid(message) {
     ok: false,
     error: {
       code: "INVALID_REQUEST",
-      message
-    }
+      message,
+    },
   };
 }
 function joinHome(home, suffix) {
@@ -55,8 +55,8 @@ function invalid2(message) {
     ok: false,
     error: {
       code: "INVALID_REQUEST",
-      message
-    }
+      message,
+    },
   };
 }
 function withinNotFound(within) {
@@ -64,8 +64,8 @@ function withinNotFound(within) {
     ok: false,
     error: {
       code: "WITHIN_NOT_FOUND",
-      message: `within '${within}' does not exist`
-    }
+      message: `within '${within}' does not exist`,
+    },
   };
 }
 function internalError(message) {
@@ -73,8 +73,8 @@ function internalError(message) {
     ok: false,
     error: {
       code: "INTERNAL_ERROR",
-      message
-    }
+      message,
+    },
   };
 }
 function validateAbsolutePath(candidate, field) {
@@ -116,8 +116,8 @@ async function resolveWithinFromCaller(args) {
   return {
     ok: true,
     value: {
-      resolvedWithin: path2.isAbsolute(within) ? within : path2.resolve(callerCwd.value, within)
-    }
+      resolvedWithin: path2.isAbsolute(within) ? within : path2.resolve(callerCwd.value, within),
+    },
   };
 }
 async function validateResolvedWithinEntry(candidate) {
@@ -150,8 +150,8 @@ async function validateResolvedWithinEntry(candidate) {
       ok: true,
       value: {
         resolvedWithin,
-        basePath: resolvedWithin
-      }
+        basePath: resolvedWithin,
+      },
     };
   }
   return {
@@ -159,8 +159,8 @@ async function validateResolvedWithinEntry(candidate) {
     value: {
       resolvedWithin,
       basePath: path2.dirname(resolvedWithin),
-      fileRestriction: resolvedWithin
-    }
+      fileRestriction: resolvedWithin,
+    },
   };
 }
 async function validateResolvedWithinPaths(args) {
@@ -181,16 +181,12 @@ async function validateResolvedWithinPaths(args) {
     value: {
       resolvedWithin: primary.resolvedWithin,
       basePath: primary.basePath,
-      ...primary.fileRestriction !== void 0 ? { fileRestriction: primary.fileRestriction } : {},
-      ...rest.length > 0 ? { additionalEntries: rest } : {}
-    }
+      ...(primary.fileRestriction !== void 0 ? { fileRestriction: primary.fileRestriction } : {}),
+      ...(rest.length > 0 ? { additionalEntries: rest } : {}),
+    },
   };
 }
 async function validateResolvedWithin(args) {
   return validateResolvedWithinPaths({ withinPaths: [args.within] });
 }
-export {
-  resolveWithinFromCaller,
-  validateResolvedWithin,
-  validateResolvedWithinPaths
-};
+export { resolveWithinFromCaller, validateResolvedWithin, validateResolvedWithinPaths };

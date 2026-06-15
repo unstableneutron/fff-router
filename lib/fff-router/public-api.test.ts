@@ -188,7 +188,7 @@ describe("public-api", () => {
     expect(result.error.message).toMatch(/literal/i);
   });
 
-  test("rejects invalid output_mode and non-null cursor in the initial slice", () => {
+  test("rejects invalid output_mode and blank cursors", () => {
     const invalidMode = normalizePublicToolInput("fff_find_files", {
       query: "router",
       within: "/tmp/project",
@@ -200,16 +200,30 @@ describe("public-api", () => {
     }
     expect(invalidMode.error.code).toBe("INVALID_REQUEST");
 
-    const nonNullCursor = normalizePublicToolInput("fff_find_files", {
+    const blankCursor = normalizePublicToolInput("fff_find_files", {
       query: "router",
       within: "/tmp/project",
-      cursor: "cursor-1",
+      cursor: "",
     });
-    expect(nonNullCursor.ok).toBe(false);
-    if (nonNullCursor.ok) {
+    expect(blankCursor.ok).toBe(false);
+    if (blankCursor.ok) {
       throw new Error("expected failure");
     }
-    expect(nonNullCursor.error.code).toBe("INVALID_REQUEST");
+    expect(blankCursor.error.code).toBe("INVALID_REQUEST");
+  });
+
+  test("normalizes opaque cursor strings for backend pagination", () => {
+    const result = normalizePublicToolInput("fff_find_files", {
+      query: "router",
+      within: "/tmp/project",
+      cursor: "fff_c1",
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error("expected success");
+    }
+    expect(result.value.cursor).toBe("fff_c1");
   });
 
   test("rejects absolute and traversing exclude_paths", () => {
@@ -400,7 +414,7 @@ describe("public-api", () => {
     expect(typeof normalizePatterns).toBe("function");
   });
 
-  test("cursor schema matches the initial null-only pagination contract", () => {
+  test("cursor schema accepts null or opaque strings", () => {
     expect(
       Value.Check(findFilesInputSchema, {
         query: "router",
@@ -414,6 +428,14 @@ describe("public-api", () => {
         query: "router",
         within: "/tmp/project",
         cursor: "cursor-1",
+      }),
+    ).toBe(true);
+
+    expect(
+      Value.Check(findFilesInputSchema, {
+        query: "router",
+        within: "/tmp/project",
+        cursor: "",
       }),
     ).toBe(false);
   });

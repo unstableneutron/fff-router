@@ -83,31 +83,40 @@ export function unwrapToolResponse(response: {
     };
   }
 
-  const parsed = JSON.parse(first.text) as
+  let parsed:
     | PublicCompactFindFilesResult
     | PublicCompactSearchTermsResult
     | PublicCompactGrepResult
     | PublicCompactRenderedTextResult
     | PublicJsonResult
-    | { code?: PublicErrorCode; message?: string };
+    | { code?: PublicErrorCode; message?: string }
+    | null = null;
+  try {
+    parsed = JSON.parse(first.text) as NonNullable<typeof parsed>;
+  } catch {
+    if (response.isError) {
+      return {
+        ok: false,
+        error: {
+          code: "INTERNAL_ERROR",
+          message: first.text,
+        },
+      };
+    }
+    throw new Error(`daemon returned invalid JSON: ${first.text}`);
+  }
   if (response.isError) {
+    const errorPayload =
+      typeof parsed === "object" && parsed !== null ? (parsed as Record<string, unknown>) : {};
     return {
       ok: false,
       error: {
         code:
-          typeof parsed === "object" &&
-          parsed &&
-          "code" in parsed &&
-          typeof parsed.code === "string"
-            ? parsed.code
+          typeof errorPayload.code === "string"
+            ? (errorPayload.code as PublicErrorCode)
             : "INTERNAL_ERROR",
         message:
-          typeof parsed === "object" &&
-          parsed &&
-          "message" in parsed &&
-          typeof parsed.message === "string"
-            ? parsed.message
-            : "daemon call failed",
+          typeof errorPayload.message === "string" ? errorPayload.message : "daemon call failed",
       },
     };
   }

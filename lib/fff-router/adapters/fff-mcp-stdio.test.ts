@@ -36,6 +36,7 @@ const findFilesRequest: FindFilesBackendRequest = {
   extensions: ["ts"],
   excludePaths: ["dist"],
   limit: 5,
+  cursor: null,
   query: "router",
 };
 
@@ -49,6 +50,7 @@ const searchTermsRequest: SearchTermsBackendRequest = {
   extensions: ["ts"],
   excludePaths: ["dist"],
   limit: 5,
+  cursor: null,
   terms: ["createSearchCoordinator"],
   contextLines: 1,
 };
@@ -63,6 +65,7 @@ const grepRequest: GrepBackendRequest = {
   extensions: ["ts"],
   excludePaths: ["dist"],
   limit: 5,
+  cursor: null,
   patterns: ["createSearchCoordinator", "buildSearchCoordinator"],
   literal: false,
   caseSensitive: true,
@@ -220,6 +223,54 @@ describe("createFffMcpStdioAdapter", () => {
     ]);
   });
 
+  test("forwards find_files cursors and preserves native compact output", async () => {
+    const calls: Array<{ name: string; arguments: Record<string, unknown> }> = [];
+    const adapter = createFffMcpStdioAdapter();
+
+    const text = [
+      "→ Read lib/fff-router/coordinator.ts (best match)",
+      "5/13 matches",
+      "lib/fff-router/coordinator.test.ts git:clean",
+      "lib/fff-router/coordinator.ts git:clean",
+      "cursor: 8",
+    ].join("\n");
+
+    const result = await adapter.execute({
+      request: { ...findFilesRequest, cursor: "7" },
+      runtime: {
+        id: "fff-mcp::/repo",
+        close: async () => {},
+        callTool: async (name, args) => {
+          calls.push({ name, arguments: args });
+          return text;
+        },
+      },
+    });
+
+    expect(calls).toEqual([
+      {
+        name: "find_files",
+        arguments: {
+          query: "router lib/ **/*.ts *.ts !dist/",
+          maxResults: 5,
+          cursor: "7",
+        },
+      },
+    ]);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected success");
+    expect(result.value.nextCursor).toBe("8");
+    expect((result.value as { renderedCompact?: string }).renderedCompact).toBe(text);
+    expect((result.value as { summary?: unknown }).summary).toEqual({
+      shownCount: 5,
+      totalCount: 13,
+      readRecommendation: {
+        relativePath: "lib/fff-router/coordinator.ts",
+        reason: "best match",
+      },
+    });
+  });
+
   test("applies router-side filtering to parsed stock fff-mcp results", async () => {
     const adapter = createFffMcpStdioAdapter();
 
@@ -248,6 +299,34 @@ describe("createFffMcpStdioAdapter", () => {
     ]);
   });
 
+  test("narrows find_files renderedCompact when fff-mcp leaks paths outside scope", async () => {
+    const adapter = createFffMcpStdioAdapter();
+    const text = [
+      "→ Read outside/escape.ts (best match)",
+      "2/2 matches",
+      "lib/fff-router/coordinator.test.ts git:clean",
+      "outside/escape.ts git:clean",
+      "cursor: 2",
+    ].join("\n");
+
+    const result = await adapter.execute({
+      request: findFilesRequest,
+      runtime: {
+        id: "fff-mcp::/repo",
+        close: async () => {},
+        callTool: async () => text,
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected success");
+    const rendered = (result.value as { renderedCompact?: string }).renderedCompact ?? "";
+    expect(rendered).toContain("lib/fff-router/coordinator.test.ts git:clean");
+    expect(rendered).toContain("cursor: 2");
+    expect(rendered).not.toContain("outside/escape.ts");
+    expect(rendered).not.toMatch(/^→\s+Read\s+outside\//m);
+  });
+
   test("maps multi_grep requests, preserves compact passthrough, and parses content output with context", async () => {
     const calls: Array<{ name: string; arguments: Record<string, unknown> }> = [];
     const adapter = createFffMcpStdioAdapter();
@@ -259,11 +338,12 @@ describe("createFffMcpStdioAdapter", () => {
       ' 9: import { createSearchCoordinator } from "./coordinator";',
       ' 10| import { RuntimeManager } from "./runtime-manager";',
       ' 11| import type { PublicToolRequest } from "./types";',
+      "cursor: fff_c2",
       "--",
     ].join("\n");
 
     const result = await adapter.execute({
-      request: searchTermsRequest,
+      request: { ...searchTermsRequest, cursor: "fff_c1" },
       runtime: {
         id: "fff-mcp::/repo",
         close: async () => {},
@@ -282,11 +362,13 @@ describe("createFffMcpStdioAdapter", () => {
           constraints: "lib/ **/*.ts *.ts !dist/",
           maxResults: 5,
           context: 1,
+          cursor: "fff_c1",
         },
       },
     ]);
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error("expected success");
+    expect(result.value.nextCursor).toBe("fff_c2");
     expect((result.value as any).renderedCompact).toBe(text);
     expect((result.value as any).summary).toEqual({
       shownCount: 1,
@@ -324,10 +406,11 @@ describe("createFffMcpStdioAdapter", () => {
       " 86| };",
       "lib/fff-router/coordinator.test.ts",
       " 96: const coordinator = createSearchCoordinator({",
+      "cursor: fff_c4",
     ].join("\n");
 
     const result = await adapter.execute({
-      request: grepRequest,
+      request: { ...grepRequest, cursor: "fff_c3" },
       runtime: {
         id: "fff-mcp::/repo",
         close: async () => {},
@@ -344,11 +427,13 @@ describe("createFffMcpStdioAdapter", () => {
         arguments: {
           query: "lib/ **/*.ts *.ts !dist/ (?:createSearchCoordinator)|(?:buildSearchCoordinator)",
           maxResults: 5,
+          cursor: "fff_c3",
         },
       },
     ]);
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error("expected success");
+    expect(result.value.nextCursor).toBe("fff_c4");
     expect((result.value as any).renderedCompact).toBe(text);
     expect((result.value as any).summary).toEqual({
       shownCount: 5,

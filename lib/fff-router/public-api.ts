@@ -24,7 +24,7 @@ const DEFAULT_CONTEXT_LINES = 0;
 
 const outputModeSchema = Type.Union([Type.Literal("compact"), Type.Literal("json")]);
 
-const cursorSchema = Type.Null();
+const cursorSchema = Type.Union([Type.String({ minLength: 1 }), Type.Null()]);
 
 export const ENABLE_SEARCH_TERMS = false;
 
@@ -362,12 +362,16 @@ export function normalizeExcludePaths(
   return { ok: true, value: normalized };
 }
 
-export function normalizeCursor(value: unknown): Result<null, PublicError> {
+export function normalizeCursor(value: unknown): Result<string | null, PublicError> {
   if (value === undefined || value === null) {
     return { ok: true, value: null };
   }
 
-  return invalid("cursor must be omitted or null in the initial V2 slice");
+  if (typeof value === "string" && value.trim() !== "") {
+    return { ok: true, value };
+  }
+
+  return invalid("cursor must be a non-empty string when provided");
 }
 
 export function normalizeTerms(value: unknown): Result<string[], PublicError> {

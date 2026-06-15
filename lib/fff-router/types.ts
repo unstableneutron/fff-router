@@ -19,6 +19,7 @@ export type Result<T, TError extends { code: string; message: string } = RouterE
 export type PublicToolName = "fff_find_files" | "fff_search_terms" | "fff_grep";
 
 export type PublicOutputMode = "compact" | "json";
+export type PublicCursor = string | null;
 
 export type PublicErrorCode =
   | "INVALID_REQUEST"
@@ -47,7 +48,7 @@ export type PublicRequestBase = {
   extensions: string[];
   excludePaths: string[];
   limit: number;
-  cursor: null;
+  cursor: PublicCursor;
   outputMode: PublicOutputMode;
 };
 
@@ -78,7 +79,7 @@ export type PublicToolRequest =
 export type PublicCompactFindFilesResult = {
   mode: "compact";
   base_path: string;
-  next_cursor: null;
+  next_cursor: PublicCursor;
   items: Array<{ path: string }>;
 };
 
@@ -91,21 +92,21 @@ export type PublicCompactTextMatch = {
 export type PublicCompactSearchTermsResult = {
   mode: "compact";
   base_path: string;
-  next_cursor: null;
+  next_cursor: PublicCursor;
   items: PublicCompactTextMatch[];
 };
 
 export type PublicCompactGrepResult = {
   mode: "compact";
   base_path: string;
-  next_cursor: null;
+  next_cursor: PublicCursor;
   items: PublicCompactTextMatch[];
 };
 
 export type PublicCompactRenderedTextResult = {
   mode: "compact";
   base_path: string;
-  next_cursor: null;
+  next_cursor: PublicCursor;
   text: string;
 };
 
@@ -120,7 +121,7 @@ export type PublicJsonItem = Record<string, unknown>;
 export type PublicJsonResult<TItem extends PublicJsonItem = PublicJsonItem> = {
   mode: "json";
   base_path: string;
-  next_cursor: null;
+  next_cursor: PublicCursor;
   backend_used: string;
   fallback_applied: boolean;
   fallback_reason?: "backend_error";

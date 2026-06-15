@@ -37,8 +37,8 @@ function invalid(message) {
     ok: false,
     error: {
       code: "INVALID_REQUEST",
-      message
-    }
+      message,
+    },
   };
 }
 function joinHome(home, suffix) {
@@ -85,7 +85,7 @@ var DEFAULT_BACKEND = "fff-node";
 function packageVersion() {
   const candidatePaths = [
     path2.resolve(import.meta.dirname, "../../package.json"),
-    path2.resolve(import.meta.dirname, "../../../package.json")
+    path2.resolve(import.meta.dirname, "../../../package.json"),
   ];
   for (const candidatePath of candidatePaths) {
     if (!existsSync(candidatePath)) {
@@ -119,7 +119,7 @@ function getDefaultDaemonConfig() {
   return {
     host: DEFAULT_DAEMON_HOST,
     port: DEFAULT_DAEMON_PORT,
-    mcpPath: DEFAULT_DAEMON_MCP_PATH
+    mcpPath: DEFAULT_DAEMON_MCP_PATH,
   };
 }
 function getDefaultRouterConfig() {
@@ -127,25 +127,25 @@ function getDefaultRouterConfig() {
     allowlistedNonGitPrefixes: [],
     promotion: {
       windowMs: 10 * 60 * 1e3,
-      requiredHits: 2
+      requiredHits: 2,
     },
     ttl: {
       gitMs: 60 * 60 * 1e3,
-      nonGitMs: 15 * 60 * 1e3
+      nonGitMs: 15 * 60 * 1e3,
     },
     limits: {
       maxPersistentDaemons: 12,
-      maxPersistentNonGitDaemons: 4
-    }
+      maxPersistentNonGitDaemons: 4,
+    },
   };
 }
 function getDefaultDaemonReloadConfig() {
   return {
     backend: {
       primaryBackendId: DEFAULT_BACKEND,
-      fallbackBackendId: getDefaultFallbackBackend(DEFAULT_BACKEND)
+      fallbackBackendId: getDefaultFallbackBackend(DEFAULT_BACKEND),
     },
-    router: getDefaultRouterConfig()
+    router: getDefaultRouterConfig(),
   };
 }
 function getDefaultDaemonFileConfig() {
@@ -159,7 +159,7 @@ function getDefaultDaemonFileConfig() {
     allowlist: [],
     promotion: { ...reload.router.promotion },
     ttl: { ...reload.router.ttl },
-    limits: { ...reload.router.limits }
+    limits: { ...reload.router.limits },
   };
 }
 function serializeDefaultDaemonFileConfig() {
@@ -172,7 +172,7 @@ function getDaemonPolicyConfigPaths(args = {}) {
   return {
     dir,
     jsonPath: path2.join(dir, "config.json"),
-    jsoncPath: path2.join(dir, "config.jsonc")
+    jsoncPath: path2.join(dir, "config.jsonc"),
   };
 }
 function ensureDefaultConfigFile(paths) {
@@ -181,7 +181,7 @@ function ensureDefaultConfigFile(paths) {
   writeFileSync(paths.jsonPath, text);
   return {
     path: paths.jsonPath,
-    text
+    text,
   };
 }
 function readPreferredDaemonPolicyFile(args = {}) {
@@ -189,13 +189,13 @@ function readPreferredDaemonPolicyFile(args = {}) {
   if (existsSync(paths.jsonPath)) {
     return {
       path: paths.jsonPath,
-      text: readFileSync(paths.jsonPath, "utf8")
+      text: readFileSync(paths.jsonPath, "utf8"),
     };
   }
   if (existsSync(paths.jsoncPath)) {
     return {
       path: paths.jsoncPath,
-      text: readFileSync(paths.jsoncPath, "utf8")
+      text: readFileSync(paths.jsoncPath, "utf8"),
     };
   }
   return ensureDefaultConfigFile(paths);
@@ -279,12 +279,16 @@ function readOptionalBackend(value) {
   return parseBackend(value);
 }
 function expandAllowlistEntries(entries, env) {
-  return entries.map((prefix) => expandHomePath(prefix, env)).map((result) => {
-    if (!result.ok) {
-      throw new Error(result.error.message);
-    }
-    return result.value;
-  }).filter(Boolean).map((prefix) => ({ prefix, mode: "first-child-root" }));
+  return entries
+    .map((prefix) => expandHomePath(prefix, env))
+    .map((result) => {
+      if (!result.ok) {
+        throw new Error(result.error.message);
+      }
+      return result.value;
+    })
+    .filter(Boolean)
+    .map((prefix) => ({ prefix, mode: "first-child-root" }));
 }
 function parseJsonWithComments(text) {
   let withoutComments = "";
@@ -379,51 +383,61 @@ function parseJsonWithComments(text) {
 function normalizeDaemonFileConfig(raw, env) {
   const defaults = getDefaultDaemonFileConfig();
   const fileConfig = expectObject(raw, "fff-routerd config");
-  const promotion = fileConfig.promotion == null ? null : expectObject(fileConfig.promotion, "promotion");
+  const promotion =
+    fileConfig.promotion == null ? null : expectObject(fileConfig.promotion, "promotion");
   const ttl = fileConfig.ttl == null ? null : expectObject(fileConfig.ttl, "ttl");
   const limits = fileConfig.limits == null ? null : expectObject(fileConfig.limits, "limits");
   const normalizedEnv = { ...env, HOME: configHome(env) };
   const backendId = readOptionalBackend(fileConfig.backend) ?? defaults.backend;
-  const allowlist = readOptionalStringArray(fileConfig.allowlist, "allowlist") ?? defaults.allowlist;
+  const allowlist =
+    readOptionalStringArray(fileConfig.allowlist, "allowlist") ?? defaults.allowlist;
   const host = readOptionalString(fileConfig.host, "host") ?? defaults.host;
   const port = readOptionalPort(fileConfig.port) ?? defaults.port;
   const mcpPath = readOptionalMcpPath(fileConfig.mcpPath) ?? defaults.mcpPath;
-  const promotionWindowMs = readOptionalNonNegativeInteger(promotion?.windowMs, "promotion.windowMs") ?? defaults.promotion.windowMs;
-  const promotionRequiredHits = readOptionalNonNegativeInteger(promotion?.requiredHits, "promotion.requiredHits") ?? defaults.promotion.requiredHits;
+  const promotionWindowMs =
+    readOptionalNonNegativeInteger(promotion?.windowMs, "promotion.windowMs") ??
+    defaults.promotion.windowMs;
+  const promotionRequiredHits =
+    readOptionalNonNegativeInteger(promotion?.requiredHits, "promotion.requiredHits") ??
+    defaults.promotion.requiredHits;
   const ttlGitMs = readOptionalNonNegativeInteger(ttl?.gitMs, "ttl.gitMs") ?? defaults.ttl.gitMs;
-  const ttlNonGitMs = readOptionalNonNegativeInteger(ttl?.nonGitMs, "ttl.nonGitMs") ?? defaults.ttl.nonGitMs;
-  const maxPersistentDaemons = readOptionalNonNegativeInteger(limits?.maxPersistentDaemons, "limits.maxPersistentDaemons") ?? defaults.limits.maxPersistentDaemons;
-  const maxPersistentNonGitDaemons = readOptionalNonNegativeInteger(
-    limits?.maxPersistentNonGitDaemons,
-    "limits.maxPersistentNonGitDaemons"
-  ) ?? defaults.limits.maxPersistentNonGitDaemons;
+  const ttlNonGitMs =
+    readOptionalNonNegativeInteger(ttl?.nonGitMs, "ttl.nonGitMs") ?? defaults.ttl.nonGitMs;
+  const maxPersistentDaemons =
+    readOptionalNonNegativeInteger(limits?.maxPersistentDaemons, "limits.maxPersistentDaemons") ??
+    defaults.limits.maxPersistentDaemons;
+  const maxPersistentNonGitDaemons =
+    readOptionalNonNegativeInteger(
+      limits?.maxPersistentNonGitDaemons,
+      "limits.maxPersistentNonGitDaemons",
+    ) ?? defaults.limits.maxPersistentNonGitDaemons;
   return {
     daemon: {
       host,
       port,
-      mcpPath
+      mcpPath,
     },
     reload: {
       backend: {
         primaryBackendId: backendId,
-        fallbackBackendId: getDefaultFallbackBackend(backendId)
+        fallbackBackendId: getDefaultFallbackBackend(backendId),
       },
       router: {
         allowlistedNonGitPrefixes: expandAllowlistEntries(allowlist, normalizedEnv),
         promotion: {
           windowMs: promotionWindowMs,
-          requiredHits: promotionRequiredHits
+          requiredHits: promotionRequiredHits,
         },
         ttl: {
           gitMs: ttlGitMs,
-          nonGitMs: ttlNonGitMs
+          nonGitMs: ttlNonGitMs,
         },
         limits: {
           maxPersistentDaemons,
-          maxPersistentNonGitDaemons
-        }
-      }
-    }
+          maxPersistentNonGitDaemons,
+        },
+      },
+    },
   };
 }
 function readDaemonConfigFromMetadata(args = {}) {
@@ -433,13 +447,17 @@ function readDaemonConfigFromMetadata(args = {}) {
   }
   try {
     const metadata = JSON.parse(readFileSync(paths.metadataPath, "utf8"));
-    if (typeof metadata.host !== "string" || typeof metadata.port !== "number" || typeof metadata.mcpPath !== "string") {
+    if (
+      typeof metadata.host !== "string" ||
+      typeof metadata.port !== "number" ||
+      typeof metadata.mcpPath !== "string"
+    ) {
       return null;
     }
     return {
       host: metadata.host,
       port: metadata.port,
-      mcpPath: metadata.mcpPath
+      mcpPath: metadata.mcpPath,
     };
   } catch {
     return null;
@@ -478,9 +496,7 @@ function getDaemonPaths(args = {}) {
     dir,
     metadataPath: path2.join(dir, "daemon.json"),
     lockPath: path2.join(dir, "startup.lock"),
-    stdoutLogPath: path2.join(dir, "daemon.stdout.log"),
-    stderrLogPath: path2.join(dir, "daemon.stderr.log"),
-    mcpSocketPath: mcpSocketPathForStateDir(dir)
+    mcpSocketPath: mcpSocketPathForStateDir(dir),
   };
 }
 
@@ -493,7 +509,7 @@ function toToolCall(request) {
     exclude_paths: request.excludePaths,
     limit: request.limit,
     cursor: request.cursor,
-    output_mode: request.outputMode
+    output_mode: request.outputMode,
   };
   switch (request.tool) {
     case "fff_find_files": {
@@ -502,8 +518,8 @@ function toToolCall(request) {
         name: request.tool,
         input: {
           query: findRequest.query,
-          ...common
-        }
+          ...common,
+        },
       };
     }
     case "fff_search_terms": {
@@ -513,8 +529,8 @@ function toToolCall(request) {
         input: {
           terms: searchTermsRequest.terms,
           context_lines: searchTermsRequest.contextLines,
-          ...common
-        }
+          ...common,
+        },
       };
     }
     case "fff_grep": {
@@ -526,8 +542,8 @@ function toToolCall(request) {
           literal: grepRequest.literal,
           case_sensitive: grepRequest.caseSensitive,
           context_lines: grepRequest.contextLines,
-          ...common
-        }
+          ...common,
+        },
       };
     }
   }
@@ -539,30 +555,56 @@ function unwrapToolResponse(response) {
       ok: false,
       error: {
         code: "INTERNAL_ERROR",
-        message: "daemon returned a non-text MCP tool response"
-      }
+        message: "daemon returned a non-text MCP tool response",
+      },
     };
   }
-  const parsed = JSON.parse(first.text);
+  let parsed = null;
+  try {
+    parsed = JSON.parse(first.text);
+  } catch {
+    if (response.isError) {
+      return {
+        ok: false,
+        error: {
+          code: "INTERNAL_ERROR",
+          message: first.text,
+        },
+      };
+    }
+    throw new Error(`daemon returned invalid JSON: ${first.text}`);
+  }
   if (response.isError) {
     return {
       ok: false,
       error: {
-        code: typeof parsed === "object" && parsed && "code" in parsed && typeof parsed.code === "string" ? parsed.code : "INTERNAL_ERROR",
-        message: typeof parsed === "object" && parsed && "message" in parsed && typeof parsed.message === "string" ? parsed.message : "daemon call failed"
-      }
+        code:
+          typeof parsed === "object" &&
+          parsed &&
+          "code" in parsed &&
+          typeof parsed.code === "string"
+            ? parsed.code
+            : "INTERNAL_ERROR",
+        message:
+          typeof parsed === "object" &&
+          parsed &&
+          "message" in parsed &&
+          typeof parsed.message === "string"
+            ? parsed.message
+            : "daemon call failed",
+      },
     };
   }
   return {
     ok: true,
-    value: parsed
+    value: parsed,
   };
 }
 async function createPersistentHttpToolClient(env) {
   const transport = new StreamableHTTPClientTransport(new URL(getDaemonEndpoint({ env })));
   const client = new Client(
     { name: "fff-router-http-client", version: "1.0.0" },
-    { capabilities: {} }
+    { capabilities: {} },
   );
   await client.connect(transport);
   return {
@@ -570,16 +612,14 @@ async function createPersistentHttpToolClient(env) {
       const toolCall = toToolCall(request);
       const response = await client.callTool({
         name: toolCall.name,
-        arguments: toolCall.input
+        arguments: toolCall.input,
       });
       return unwrapToolResponse(response);
     },
     async close() {
-      await client.close().catch(() => {
-      });
-      await transport.close().catch(() => {
-      });
-    }
+      await client.close().catch(() => {});
+      await transport.close().catch(() => {});
+    },
   };
 }
 async function callPublicToolOverHttp(request, env) {
@@ -590,8 +630,4 @@ async function callPublicToolOverHttp(request, env) {
     await client.close();
   }
 }
-export {
-  callPublicToolOverHttp,
-  createPersistentHttpToolClient,
-  unwrapToolResponse
-};
+export { callPublicToolOverHttp, createPersistentHttpToolClient, unwrapToolResponse };

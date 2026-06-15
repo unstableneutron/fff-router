@@ -1,8 +1,8 @@
 // lib/fff-router/daemon-autostart.ts
 import { spawn as spawnChildProcess } from "node:child_process";
-import { createWriteStream, existsSync as existsSync3, mkdirSync as mkdirSync2 } from "node:fs";
+import { constants as fsConstants, accessSync, existsSync as existsSync2 } from "node:fs";
 import { mkdir as mkdir2, open, readFile as readFile2, rm as rm2 } from "node:fs/promises";
-import path4 from "node:path";
+import path3 from "node:path";
 
 // lib/fff-router/daemon-config.ts
 import { createHash } from "node:crypto";
@@ -39,8 +39,8 @@ function invalid(message) {
     ok: false,
     error: {
       code: "INVALID_REQUEST",
-      message
-    }
+      message,
+    },
   };
 }
 function joinHome(home, suffix) {
@@ -88,7 +88,7 @@ var DEFAULT_BACKEND = "fff-node";
 function packageVersion() {
   const candidatePaths = [
     path2.resolve(import.meta.dirname, "../../package.json"),
-    path2.resolve(import.meta.dirname, "../../../package.json")
+    path2.resolve(import.meta.dirname, "../../../package.json"),
   ];
   for (const candidatePath of candidatePaths) {
     if (!existsSync(candidatePath)) {
@@ -104,38 +104,6 @@ function packageVersion() {
 var PACKAGE_VERSION = packageVersion();
 function hashFingerprint(value) {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex").slice(0, 16);
-}
-function packagedDaemonEntrypointPath() {
-  const primaryCandidatePath = path2.resolve(import.meta.dirname, "../../dist/bin/fff-routerd.js");
-  const candidatePaths = [
-    primaryCandidatePath,
-    path2.resolve(import.meta.dirname, "../../bin/fff-routerd.js")
-  ];
-  for (const candidatePath of candidatePaths) {
-    if (existsSync(candidatePath)) {
-      return candidatePath;
-    }
-  }
-  return primaryCandidatePath;
-}
-function contentFingerprint(pathValue) {
-  try {
-    return createHash("sha256").update(readFileSync(pathValue)).digest("hex");
-  } catch {
-    return "missing";
-  }
-}
-function getDaemonSourceFingerprint(args = {}) {
-  const env = args.env ?? process.env;
-  if (env.FFF_ROUTER_DAEMON_SOURCE_FINGERPRINT) {
-    return env.FFF_ROUTER_DAEMON_SOURCE_FINGERPRINT;
-  }
-  const daemonEntrypointPath = args.daemonEntrypointPath ?? env.FFF_ROUTER_DAEMON_BIN ?? env.FFF_ROUTER_DAEMON_ENTRYPOINT ?? packagedDaemonEntrypointPath();
-  return hashFingerprint({
-    packageVersion: PACKAGE_VERSION,
-    daemonEntrypointPath,
-    content: contentFingerprint(daemonEntrypointPath)
-  });
 }
 function configHome(env) {
   return env.HOME || os.homedir();
@@ -154,7 +122,7 @@ function getDefaultDaemonConfig() {
   return {
     host: DEFAULT_DAEMON_HOST,
     port: DEFAULT_DAEMON_PORT,
-    mcpPath: DEFAULT_DAEMON_MCP_PATH
+    mcpPath: DEFAULT_DAEMON_MCP_PATH,
   };
 }
 function getDefaultRouterConfig() {
@@ -162,25 +130,25 @@ function getDefaultRouterConfig() {
     allowlistedNonGitPrefixes: [],
     promotion: {
       windowMs: 10 * 60 * 1e3,
-      requiredHits: 2
+      requiredHits: 2,
     },
     ttl: {
       gitMs: 60 * 60 * 1e3,
-      nonGitMs: 15 * 60 * 1e3
+      nonGitMs: 15 * 60 * 1e3,
     },
     limits: {
       maxPersistentDaemons: 12,
-      maxPersistentNonGitDaemons: 4
-    }
+      maxPersistentNonGitDaemons: 4,
+    },
   };
 }
 function getDefaultDaemonReloadConfig() {
   return {
     backend: {
       primaryBackendId: DEFAULT_BACKEND,
-      fallbackBackendId: getDefaultFallbackBackend(DEFAULT_BACKEND)
+      fallbackBackendId: getDefaultFallbackBackend(DEFAULT_BACKEND),
     },
-    router: getDefaultRouterConfig()
+    router: getDefaultRouterConfig(),
   };
 }
 function getDefaultDaemonFileConfig() {
@@ -194,7 +162,7 @@ function getDefaultDaemonFileConfig() {
     allowlist: [],
     promotion: { ...reload.router.promotion },
     ttl: { ...reload.router.ttl },
-    limits: { ...reload.router.limits }
+    limits: { ...reload.router.limits },
   };
 }
 function serializeDefaultDaemonFileConfig() {
@@ -207,7 +175,7 @@ function getDaemonPolicyConfigPaths(args = {}) {
   return {
     dir,
     jsonPath: path2.join(dir, "config.json"),
-    jsoncPath: path2.join(dir, "config.jsonc")
+    jsoncPath: path2.join(dir, "config.jsonc"),
   };
 }
 function ensureDefaultConfigFile(paths) {
@@ -216,7 +184,7 @@ function ensureDefaultConfigFile(paths) {
   writeFileSync(paths.jsonPath, text);
   return {
     path: paths.jsonPath,
-    text
+    text,
   };
 }
 function readPreferredDaemonPolicyFile(args = {}) {
@@ -224,13 +192,13 @@ function readPreferredDaemonPolicyFile(args = {}) {
   if (existsSync(paths.jsonPath)) {
     return {
       path: paths.jsonPath,
-      text: readFileSync(paths.jsonPath, "utf8")
+      text: readFileSync(paths.jsonPath, "utf8"),
     };
   }
   if (existsSync(paths.jsoncPath)) {
     return {
       path: paths.jsoncPath,
-      text: readFileSync(paths.jsoncPath, "utf8")
+      text: readFileSync(paths.jsoncPath, "utf8"),
     };
   }
   return ensureDefaultConfigFile(paths);
@@ -314,12 +282,16 @@ function readOptionalBackend(value) {
   return parseBackend(value);
 }
 function expandAllowlistEntries(entries, env) {
-  return entries.map((prefix) => expandHomePath(prefix, env)).map((result) => {
-    if (!result.ok) {
-      throw new Error(result.error.message);
-    }
-    return result.value;
-  }).filter(Boolean).map((prefix) => ({ prefix, mode: "first-child-root" }));
+  return entries
+    .map((prefix) => expandHomePath(prefix, env))
+    .map((result) => {
+      if (!result.ok) {
+        throw new Error(result.error.message);
+      }
+      return result.value;
+    })
+    .filter(Boolean)
+    .map((prefix) => ({ prefix, mode: "first-child-root" }));
 }
 function parseJsonWithComments(text) {
   let withoutComments = "";
@@ -414,51 +386,61 @@ function parseJsonWithComments(text) {
 function normalizeDaemonFileConfig(raw, env) {
   const defaults = getDefaultDaemonFileConfig();
   const fileConfig = expectObject(raw, "fff-routerd config");
-  const promotion = fileConfig.promotion == null ? null : expectObject(fileConfig.promotion, "promotion");
+  const promotion =
+    fileConfig.promotion == null ? null : expectObject(fileConfig.promotion, "promotion");
   const ttl = fileConfig.ttl == null ? null : expectObject(fileConfig.ttl, "ttl");
   const limits = fileConfig.limits == null ? null : expectObject(fileConfig.limits, "limits");
   const normalizedEnv = { ...env, HOME: configHome(env) };
   const backendId = readOptionalBackend(fileConfig.backend) ?? defaults.backend;
-  const allowlist = readOptionalStringArray(fileConfig.allowlist, "allowlist") ?? defaults.allowlist;
+  const allowlist =
+    readOptionalStringArray(fileConfig.allowlist, "allowlist") ?? defaults.allowlist;
   const host = readOptionalString(fileConfig.host, "host") ?? defaults.host;
   const port = readOptionalPort(fileConfig.port) ?? defaults.port;
   const mcpPath = readOptionalMcpPath(fileConfig.mcpPath) ?? defaults.mcpPath;
-  const promotionWindowMs = readOptionalNonNegativeInteger(promotion?.windowMs, "promotion.windowMs") ?? defaults.promotion.windowMs;
-  const promotionRequiredHits = readOptionalNonNegativeInteger(promotion?.requiredHits, "promotion.requiredHits") ?? defaults.promotion.requiredHits;
+  const promotionWindowMs =
+    readOptionalNonNegativeInteger(promotion?.windowMs, "promotion.windowMs") ??
+    defaults.promotion.windowMs;
+  const promotionRequiredHits =
+    readOptionalNonNegativeInteger(promotion?.requiredHits, "promotion.requiredHits") ??
+    defaults.promotion.requiredHits;
   const ttlGitMs = readOptionalNonNegativeInteger(ttl?.gitMs, "ttl.gitMs") ?? defaults.ttl.gitMs;
-  const ttlNonGitMs = readOptionalNonNegativeInteger(ttl?.nonGitMs, "ttl.nonGitMs") ?? defaults.ttl.nonGitMs;
-  const maxPersistentDaemons = readOptionalNonNegativeInteger(limits?.maxPersistentDaemons, "limits.maxPersistentDaemons") ?? defaults.limits.maxPersistentDaemons;
-  const maxPersistentNonGitDaemons = readOptionalNonNegativeInteger(
-    limits?.maxPersistentNonGitDaemons,
-    "limits.maxPersistentNonGitDaemons"
-  ) ?? defaults.limits.maxPersistentNonGitDaemons;
+  const ttlNonGitMs =
+    readOptionalNonNegativeInteger(ttl?.nonGitMs, "ttl.nonGitMs") ?? defaults.ttl.nonGitMs;
+  const maxPersistentDaemons =
+    readOptionalNonNegativeInteger(limits?.maxPersistentDaemons, "limits.maxPersistentDaemons") ??
+    defaults.limits.maxPersistentDaemons;
+  const maxPersistentNonGitDaemons =
+    readOptionalNonNegativeInteger(
+      limits?.maxPersistentNonGitDaemons,
+      "limits.maxPersistentNonGitDaemons",
+    ) ?? defaults.limits.maxPersistentNonGitDaemons;
   return {
     daemon: {
       host,
       port,
-      mcpPath
+      mcpPath,
     },
     reload: {
       backend: {
         primaryBackendId: backendId,
-        fallbackBackendId: getDefaultFallbackBackend(backendId)
+        fallbackBackendId: getDefaultFallbackBackend(backendId),
       },
       router: {
         allowlistedNonGitPrefixes: expandAllowlistEntries(allowlist, normalizedEnv),
         promotion: {
           windowMs: promotionWindowMs,
-          requiredHits: promotionRequiredHits
+          requiredHits: promotionRequiredHits,
         },
         ttl: {
           gitMs: ttlGitMs,
-          nonGitMs: ttlNonGitMs
+          nonGitMs: ttlNonGitMs,
         },
         limits: {
           maxPersistentDaemons,
-          maxPersistentNonGitDaemons
-        }
-      }
-    }
+          maxPersistentNonGitDaemons,
+        },
+      },
+    },
   };
 }
 function readDaemonConfigFromMetadata(args = {}) {
@@ -468,13 +450,17 @@ function readDaemonConfigFromMetadata(args = {}) {
   }
   try {
     const metadata = JSON.parse(readFileSync(paths.metadataPath, "utf8"));
-    if (typeof metadata.host !== "string" || typeof metadata.port !== "number" || typeof metadata.mcpPath !== "string") {
+    if (
+      typeof metadata.host !== "string" ||
+      typeof metadata.port !== "number" ||
+      typeof metadata.mcpPath !== "string"
+    ) {
       return null;
     }
     return {
       host: metadata.host,
       port: metadata.port,
-      mcpPath: metadata.mcpPath
+      mcpPath: metadata.mcpPath,
     };
   } catch {
     return null;
@@ -511,11 +497,10 @@ function getDaemonServerFingerprint(args = {}) {
   return hashFingerprint({
     daemon: {
       ...daemon,
-      ...args.daemonConfig
+      ...args.daemonConfig,
     },
     mcpSocketPath: paths.mcpSocketPath,
     protocolVersion: DAEMON_PROTOCOL_VERSION,
-    daemonSourceFingerprint: getDaemonSourceFingerprint({ env: args.env })
   });
 }
 function getDaemonReloadFingerprintForConfig(config) {
@@ -531,9 +516,7 @@ function getDaemonPaths(args = {}) {
     dir,
     metadataPath: path2.join(dir, "daemon.json"),
     lockPath: path2.join(dir, "startup.lock"),
-    stdoutLogPath: path2.join(dir, "daemon.stdout.log"),
-    stderrLogPath: path2.join(dir, "daemon.stderr.log"),
-    mcpSocketPath: mcpSocketPathForStateDir(dir)
+    mcpSocketPath: mcpSocketPathForStateDir(dir),
   };
 }
 
@@ -543,39 +526,6 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 // lib/fff-router/adapters/fff-mcp-stdio.ts
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-
-// lib/fff-router/tool-resolution.ts
-import { constants as fsConstants, accessSync, existsSync as existsSync2 } from "node:fs";
-import path3 from "node:path";
-function isExecutable(pathValue) {
-  try {
-    accessSync(pathValue, fsConstants.X_OK);
-    return true;
-  } catch {
-    return false;
-  }
-}
-function commandExtensions(env) {
-  if (process.platform !== "win32") {
-    return [""];
-  }
-  const pathExt = env.PATHEXT?.split(";").filter(Boolean);
-  return pathExt && pathExt.length > 0 ? pathExt : [".EXE", ".CMD", ".BAT", ".COM"];
-}
-function resolveExecutableOnPath(command, env = process.env) {
-  const pathValue = env.PATH || process.env.PATH || "";
-  const directories = pathValue.split(path3.delimiter).filter(Boolean);
-  const extensions = commandExtensions(env);
-  for (const directory of directories) {
-    for (const extension of extensions) {
-      const candidatePath = process.platform === "win32" && extension && !command.toUpperCase().endsWith(extension) ? path3.join(directory, `${command}${extension}`) : path3.join(directory, command);
-      if (existsSync2(candidatePath) && isExecutable(candidatePath)) {
-        return candidatePath;
-      }
-    }
-  }
-  return null;
-}
 
 // lib/fff-router/mcp-server.ts
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -587,14 +537,14 @@ import * as z from "zod/v4";
 // lib/fff-router/public-api.ts
 import { Type } from "@sinclair/typebox";
 var outputModeSchema = Type.Union([Type.Literal("compact"), Type.Literal("json")]);
-var cursorSchema = Type.Null();
+var cursorSchema = Type.Union([Type.String({ minLength: 1 }), Type.Null()]);
 var ENABLE_SEARCH_TERMS = false;
 function defineTool(name, description, snippet, inputSchema) {
   return { name, description, snippet, inputSchema };
 }
 var withinSchema = Type.Union([
   Type.String({ minLength: 1 }),
-  Type.Array(Type.String({ minLength: 1 }), { minItems: 1 })
+  Type.Array(Type.String({ minLength: 1 }), { minItems: 1 }),
 ]);
 var findFilesInputSchema = Type.Object(
   {
@@ -605,9 +555,9 @@ var findFilesInputSchema = Type.Object(
     exclude_paths: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
     limit: Type.Optional(Type.Integer({ minimum: 0 })),
     cursor: Type.Optional(cursorSchema),
-    output_mode: Type.Optional(outputModeSchema)
+    output_mode: Type.Optional(outputModeSchema),
   },
-  { additionalProperties: false }
+  { additionalProperties: false },
 );
 var searchTermsInputSchema = Type.Object(
   {
@@ -619,15 +569,16 @@ var searchTermsInputSchema = Type.Object(
     context_lines: Type.Optional(Type.Integer({ minimum: 0 })),
     limit: Type.Optional(Type.Integer({ minimum: 0 })),
     cursor: Type.Optional(cursorSchema),
-    output_mode: Type.Optional(outputModeSchema)
+    output_mode: Type.Optional(outputModeSchema),
   },
-  { additionalProperties: false }
+  { additionalProperties: false },
 );
 var grepInputSchema = Type.Object(
   {
     patterns: Type.Array(Type.String({ minLength: 1 }), { minItems: 1 }),
     literal: Type.Boolean({
-      description: "Required. If true, patterns are matched as literal text (safe for code, quotes, whitespace, and regex metacharacters). If false, patterns are regex. This tool does not guess; set it explicitly."
+      description:
+        "Required. If true, patterns are matched as literal text (safe for code, quotes, whitespace, and regex metacharacters). If false, patterns are regex. This tool does not guess; set it explicitly.",
     }),
     within: Type.Optional(withinSchema),
     glob: Type.Optional(Type.String({ minLength: 1 })),
@@ -637,35 +588,38 @@ var grepInputSchema = Type.Object(
     context_lines: Type.Optional(Type.Integer({ minimum: 0 })),
     limit: Type.Optional(Type.Integer({ minimum: 0 })),
     cursor: Type.Optional(cursorSchema),
-    output_mode: Type.Optional(outputModeSchema)
+    output_mode: Type.Optional(outputModeSchema),
   },
-  { additionalProperties: false }
+  { additionalProperties: false },
 );
 var PUBLIC_TOOL_DEFINITIONS = [
   defineTool(
     "fff_find_files",
     "Fuzzy file search by name/path under an already-resolved within scope. Use it when you are exploring a topic or looking for files, not when you already have a specific code identifier. `within` accepts a single absolute path or an array of absolute paths (multi-path unions the results \u2014 same semantics as passing multiple roots to `fd`). Keep queries short and let glob, extensions, and exclude_paths do the path narrowing.",
     '{"query":"openssl header","within":"/opt/homebrew/lib","glob":"**/*.h","exclude_paths":["pkgconfig"]}',
-    findFilesInputSchema
+    findFilesInputSchema,
   ),
-  ...ENABLE_SEARCH_TERMS ? [
-    defineTool(
-      "fff_search_terms",
-      "Search for one or more literal terms under an already-resolved within scope (absolute or HOME-based).",
-      '{"terms":["router","coordinator"],"within":"$HOME/.config"}',
-      searchTermsInputSchema
-    )
-  ] : [],
+  ...(ENABLE_SEARCH_TERMS
+    ? [
+        defineTool(
+          "fff_search_terms",
+          "Search for one or more literal terms under an already-resolved within scope (absolute or HOME-based).",
+          '{"terms":["router","coordinator"],"within":"$HOME/.config"}',
+          searchTermsInputSchema,
+        ),
+      ]
+    : []),
   defineTool(
     "fff_grep",
     "Search file contents under an already-resolved within scope. `literal` is REQUIRED: set literal=true for identifier searches, code fragments, or any string containing whitespace, quotes, or punctuation where regex interpretation is unwanted; set literal=false only when you need regex features (anchors, character classes, quantifiers, alternation). This tool does not guess. Use `patterns` for one or more terms; multiple entries use OR semantics. `within` accepts a single absolute path or an array of absolute paths \u2014 use the array form to replace shell patterns like `grep PAT file1 file2 dirA dirB` in one call (all entries must share a routing target). Use `glob` / `extensions` / `exclude_paths` to prefilter files aggressively.",
     '{"patterns":["ActorAuth","actor_auth","PopulatedActorAuth"],"literal":true,"within":["crates/portl-cli/Cargo.toml","Cargo.toml"]}',
-    grepInputSchema
-  )
+    grepInputSchema,
+  ),
 ];
 
 // lib/fff-router/mcp-tools.ts
 var withinZod = z.union([z.string().min(1), z.array(z.string().min(1)).min(1)]);
+var cursorZod = z.union([z.string().min(1), z.null()]);
 var zodInputShapes = {
   fff_find_files: {
     query: z.string().min(1),
@@ -673,8 +627,8 @@ var zodInputShapes = {
     extensions: z.array(z.string().min(1)).optional(),
     exclude_paths: z.array(z.string().min(1)).optional(),
     limit: z.number().int().min(0).optional(),
-    cursor: z.null().optional(),
-    output_mode: z.enum(["compact", "json"]).optional()
+    cursor: cursorZod.optional(),
+    output_mode: z.enum(["compact", "json"]).optional(),
   },
   fff_search_terms: {
     terms: z.array(z.string().min(1)).min(1),
@@ -683,8 +637,8 @@ var zodInputShapes = {
     exclude_paths: z.array(z.string().min(1)).optional(),
     context_lines: z.number().int().min(0).optional(),
     limit: z.number().int().min(0).optional(),
-    cursor: z.null().optional(),
-    output_mode: z.enum(["compact", "json"]).optional()
+    cursor: cursorZod.optional(),
+    output_mode: z.enum(["compact", "json"]).optional(),
   },
   fff_grep: {
     patterns: z.array(z.string().min(1)).min(1),
@@ -696,21 +650,21 @@ var zodInputShapes = {
     exclude_paths: z.array(z.string().min(1)).optional(),
     context_lines: z.number().int().min(0).optional(),
     limit: z.number().int().min(0).optional(),
-    cursor: z.null().optional(),
-    output_mode: z.enum(["compact", "json"]).optional()
-  }
+    cursor: cursorZod.optional(),
+    output_mode: z.enum(["compact", "json"]).optional(),
+  },
 };
 var MCP_TOOLS = PUBLIC_TOOL_DEFINITIONS.map((tool) => ({
   ...tool,
-  zodInputShape: zodInputShapes[tool.name]
+  zodInputShape: zodInputShapes[tool.name],
 }));
 
 // lib/fff-router/http-daemon.ts
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { StdioServerTransport as StdioServerTransport2 } from "@modelcontextprotocol/sdk/server/stdio.js";
-async function readDaemonMetadata(path5) {
+async function readDaemonMetadata(path4) {
   try {
-    return JSON.parse(await readFile(path5, "utf8"));
+    return JSON.parse(await readFile(path4, "utf8"));
   } catch {
     return null;
   }
@@ -724,14 +678,14 @@ var DaemonHealthMismatchError = class extends Error {
     this.metadata = metadata;
   }
 };
-function packagedDaemonEntrypointPath2() {
-  const primaryCandidatePath = path4.resolve(import.meta.dirname, "../../dist/bin/fff-routerd.js");
+function packagedDaemonEntrypointPath() {
+  const primaryCandidatePath = path3.resolve(import.meta.dirname, "../../dist/bin/fff-routerd.js");
   const candidatePaths = [
     primaryCandidatePath,
-    path4.resolve(import.meta.dirname, "../../bin/fff-routerd.js")
+    path3.resolve(import.meta.dirname, "../../bin/fff-routerd.js"),
   ];
   for (const candidatePath of candidatePaths) {
-    if (existsSync3(candidatePath)) {
+    if (existsSync2(candidatePath)) {
       return candidatePath;
     }
   }
@@ -748,23 +702,51 @@ function isProcessAlive(pid) {
     return false;
   }
 }
+function isExecutable(pathValue) {
+  try {
+    accessSync(pathValue, fsConstants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+function commandExtensions(env) {
+  if (process.platform !== "win32") {
+    return [""];
+  }
+  const pathExt = env.PATHEXT?.split(";").filter(Boolean);
+  return pathExt && pathExt.length > 0 ? pathExt : [".EXE", ".CMD", ".BAT", ".COM"];
+}
+function defaultResolveExecutableOnPath(command, env) {
+  const pathValue = env.PATH || process.env.PATH || "";
+  const directories = pathValue.split(path3.delimiter).filter(Boolean);
+  const extensions = commandExtensions(env);
+  for (const directory of directories) {
+    for (const extension of extensions) {
+      const candidatePath =
+        process.platform === "win32" && extension && !command.toUpperCase().endsWith(extension)
+          ? path3.join(directory, `${command}${extension}`)
+          : path3.join(directory, command);
+      if (existsSync2(candidatePath) && isExecutable(candidatePath)) {
+        return candidatePath;
+      }
+    }
+  }
+  return null;
+}
 function resolveDaemonLaunchCommand(env = process.env, deps = {}) {
-  if (env.FFF_ROUTER_DAEMON_BIN) {
-    return { command: env.FFF_ROUTER_DAEMON_BIN, args: [], source: "env" };
-  }
-  if (env.FFF_ROUTER_DAEMON_ENTRYPOINT) {
-    return { command: process.execPath, args: [env.FFF_ROUTER_DAEMON_ENTRYPOINT], source: "env" };
-  }
-  if (!deps.preferPackaged && env.FFF_ROUTER_DAEMON_ALLOW_PATH === "1") {
-    const resolvedCommand = (deps.resolveExecutableOnPath ?? ((command) => resolveExecutableOnPath(command, env)))("fff-routerd");
+  if (!deps.preferPackaged) {
+    const resolvedCommand = (
+      deps.resolveExecutableOnPath ?? ((command) => defaultResolveExecutableOnPath(command, env))
+    )("fff-routerd");
     if (resolvedCommand) {
       return { command: resolvedCommand, args: [], source: "path" };
     }
   }
   return {
     command: process.execPath,
-    args: [packagedDaemonEntrypointPath2()],
-    source: "packaged"
+    args: [packagedDaemonEntrypointPath()],
+    source: "packaged",
   };
 }
 async function fetchHealthMetadata(env) {
@@ -806,13 +788,21 @@ function comparePackageVersions(left, right) {
   return 0;
 }
 function endpointMatchesConfig(metadata, config = getDaemonConfig()) {
-  return metadata.host === config.host && metadata.port === config.port && metadata.mcpPath === config.mcpPath;
+  return (
+    metadata.host === config.host &&
+    metadata.port === config.port &&
+    metadata.mcpPath === config.mcpPath
+  );
 }
 function isNewerCompatibleDaemon(metadata, env) {
   if (!metadata) {
     return false;
   }
-  return comparePackageVersions(metadata.packageVersion, PACKAGE_VERSION) === 1 && metadata.protocolVersion === DAEMON_PROTOCOL_VERSION && endpointMatchesConfig(metadata, getDaemonConfig({ env }));
+  return (
+    comparePackageVersions(metadata.packageVersion, PACKAGE_VERSION) === 1 &&
+    metadata.protocolVersion === DAEMON_PROTOCOL_VERSION &&
+    endpointMatchesConfig(metadata, getDaemonConfig({ env }))
+  );
 }
 function assertCompatibleProtocolAndVersion(metadata, env) {
   const versionComparison = comparePackageVersions(metadata.packageVersion, PACKAGE_VERSION);
@@ -820,19 +810,19 @@ function assertCompatibleProtocolAndVersion(metadata, env) {
   if (metadata.protocolVersion !== DAEMON_PROTOCOL_VERSION) {
     if (runningDaemonIsNewer) {
       throw new Error(
-        `newer incompatible fff-routerd is already running: expected protocol ${DAEMON_PROTOCOL_VERSION}, got ${metadata.protocolVersion}. Update this client or stop fff-routerd manually.`
+        `newer incompatible fff-routerd is already running: expected protocol ${DAEMON_PROTOCOL_VERSION}, got ${metadata.protocolVersion}. Update this client or stop fff-routerd manually.`,
       );
     }
     throw new DaemonHealthMismatchError(
       `daemon protocol mismatch: expected ${DAEMON_PROTOCOL_VERSION}, got ${metadata.protocolVersion}`,
       "protocol",
-      metadata
+      metadata,
     );
   }
   if (versionComparison === 1) {
     if (!endpointMatchesConfig(metadata, getDaemonConfig({ env }))) {
       throw new Error(
-        "newer fff-routerd is already running at this endpoint, but its metadata does not match the expected daemon endpoint. Stop fff-routerd manually before starting this client."
+        "newer fff-routerd is already running at this endpoint, but its metadata does not match the expected daemon endpoint. Stop fff-routerd manually before starting this client.",
       );
     }
     return "running-newer";
@@ -841,7 +831,7 @@ function assertCompatibleProtocolAndVersion(metadata, env) {
     throw new DaemonHealthMismatchError(
       `daemon package version mismatch: expected ${PACKAGE_VERSION}, got ${metadata.packageVersion}`,
       "version",
-      metadata
+      metadata,
     );
   }
   return "same";
@@ -856,7 +846,7 @@ async function checkDaemonBaseHealth(env) {
     throw new DaemonHealthMismatchError(
       "daemon server config mismatch; restart required",
       "server",
-      metadata
+      metadata,
     );
   }
 }
@@ -870,7 +860,7 @@ async function checkDaemonHealth(env) {
     throw new DaemonHealthMismatchError(
       "daemon server config mismatch; restart required",
       "server",
-      metadata
+      metadata,
     );
   }
   const expectedReloadFingerprint = getDaemonReloadFingerprint({ env });
@@ -878,7 +868,7 @@ async function checkDaemonHealth(env) {
     throw new DaemonHealthMismatchError(
       "daemon reload config mismatch; send SIGHUP to reload configuration",
       "reload",
-      metadata
+      metadata,
     );
   }
 }
@@ -893,10 +883,8 @@ async function withStartupLock(callback, env) {
       try {
         return await callback();
       } finally {
-        await handle.close().catch(() => {
-        });
-        await rm2(paths.lockPath, { force: true }).catch(() => {
-        });
+        await handle.close().catch(() => {});
+        await rm2(paths.lockPath, { force: true }).catch(() => {});
       }
     } catch (error) {
       if (typeof error !== "object" || !error || !("code" in error) || error.code !== "EEXIST") {
@@ -904,11 +892,10 @@ async function withStartupLock(callback, env) {
       }
       const lockOwner = Number.parseInt(
         (await readFile2(paths.lockPath, "utf8").catch(() => "0")).trim(),
-        10
+        10,
       );
       if (!Number.isFinite(lockOwner) || lockOwner <= 0 || !isProcessAlive(lockOwner)) {
-        await rm2(paths.lockPath, { force: true }).catch(() => {
-        });
+        await rm2(paths.lockPath, { force: true }).catch(() => {});
         continue;
       }
       if (Date.now() - startedAt > 15e3) {
@@ -923,13 +910,29 @@ function isRecoverableHealthError(error) {
     return false;
   }
   const code = typeof error === "object" && error && "code" in error ? String(error.code) : "";
-  return code === "ECONNREFUSED" || code === "ConnectionRefused" || error.message.includes("fetch") || error.message.includes("ECONNREFUSED") || error.message.includes("ConnectionRefused") || error.message.includes("Unable to connect") || error.message.includes("healthcheck failed");
+  return (
+    code === "ECONNREFUSED" ||
+    code === "ConnectionRefused" ||
+    error.message.includes("fetch") ||
+    error.message.includes("ECONNREFUSED") ||
+    error.message.includes("ConnectionRefused") ||
+    error.message.includes("Unable to connect") ||
+    error.message.includes("healthcheck failed")
+  );
 }
 function mismatchKind(error) {
   if (error instanceof DaemonHealthMismatchError) {
     return error.mismatchKind;
   }
-  if (typeof error === "object" && error && "mismatchKind" in error && (error.mismatchKind === "protocol" || error.mismatchKind === "version" || error.mismatchKind === "server" || error.mismatchKind === "reload")) {
+  if (
+    typeof error === "object" &&
+    error &&
+    "mismatchKind" in error &&
+    (error.mismatchKind === "protocol" ||
+      error.mismatchKind === "version" ||
+      error.mismatchKind === "server" ||
+      error.mismatchKind === "reload")
+  ) {
     return error.mismatchKind;
   }
   return null;
@@ -938,7 +941,15 @@ function mismatchPid(error) {
   if (error instanceof DaemonHealthMismatchError && typeof error.metadata?.pid === "number") {
     return error.metadata.pid;
   }
-  if (typeof error === "object" && error && "metadata" in error && typeof error.metadata === "object" && error.metadata && "pid" in error.metadata && typeof error.metadata.pid === "number") {
+  if (
+    typeof error === "object" &&
+    error &&
+    "metadata" in error &&
+    typeof error.metadata === "object" &&
+    error.metadata &&
+    "pid" in error.metadata &&
+    typeof error.metadata.pid === "number"
+  ) {
     return error.metadata.pid;
   }
   return null;
@@ -947,7 +958,13 @@ function mismatchMetadata(error) {
   if (error instanceof DaemonHealthMismatchError) {
     return error.metadata;
   }
-  if (typeof error === "object" && error && "metadata" in error && typeof error.metadata === "object" && error.metadata) {
+  if (
+    typeof error === "object" &&
+    error &&
+    "metadata" in error &&
+    typeof error.metadata === "object" &&
+    error.metadata
+  ) {
     return error.metadata;
   }
   return null;
@@ -957,59 +974,16 @@ function shouldPreserveNewerDaemonMismatch(error, env) {
 }
 function spawnDaemon(env, options) {
   const launchCommand = resolveDaemonLaunchCommand(env ?? process.env, options);
-  const paths = getDaemonPaths({ env });
-  mkdirSync2(paths.dir, { recursive: true });
   const child = spawnChildProcess(launchCommand.command, launchCommand.args, {
     env: env ?? process.env,
-    stdio: ["ignore", "pipe", "pipe"]
+    stdio: ["ignore", "pipe", "pipe"],
   });
-  const stdoutLog = createWriteStream(paths.stdoutLogPath, { flags: "a" });
-  const stderrLog = createWriteStream(paths.stderrLogPath, { flags: "a" });
-  child.stdout?.pipe(stdoutLog);
-  child.stderr?.pipe(stderrLog);
-  child.once("error", (error) => {
-    stderrLog.write(`fff-routerd spawn failed: ${error.message}
-`);
-    stdoutLog.end();
-    stderrLog.end();
-  });
-  child.once("close", () => {
-    stdoutLog.end();
-    stderrLog.end();
-  });
+  child.stdout?.destroy();
+  child.stderr?.destroy();
   return {
     unref: () => child.unref(),
-    source: launchCommand.source
+    source: launchCommand.source,
   };
-}
-async function readLogTail(pathValue, maxBytes = 4096) {
-  let handle;
-  try {
-    handle = await open(pathValue, "r");
-    const stat = await handle.stat();
-    const length = Math.min(stat.size, maxBytes);
-    const buffer = Buffer.alloc(length);
-    await handle.read(buffer, 0, length, Math.max(0, stat.size - length));
-    return buffer.toString("utf8").trimEnd();
-  } catch {
-    return "";
-  } finally {
-    await handle?.close().catch(() => {
-    });
-  }
-}
-async function formatDaemonStartupError(error, env) {
-  const paths = getDaemonPaths({ env });
-  const message = error instanceof Error ? error.message : String(error);
-  const stderrTail = await readLogTail(paths.stderrLogPath);
-  const details = [
-    message,
-    `daemon stdout log: ${paths.stdoutLogPath}`,
-    `daemon stderr log: ${paths.stderrLogPath}`,
-    ...stderrTail ? [`recent daemon stderr:
-${stderrTail}`] : []
-  ];
-  return new Error(details.join("\n"));
 }
 async function waitForDaemonReady(env) {
   let lastError;
@@ -1022,16 +996,7 @@ async function waitForDaemonReady(env) {
       await sleep(delay);
     }
   }
-  throw await formatDaemonStartupError(lastError, env);
-}
-async function readDaemonLogs(env) {
-  const paths = getDaemonPaths({ env });
-  return {
-    stdoutPath: paths.stdoutLogPath,
-    stderrPath: paths.stderrLogPath,
-    stdout: await readLogTail(paths.stdoutLogPath),
-    stderr: await readLogTail(paths.stderrLogPath)
-  };
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 async function signalProcess(pid, signal) {
   if (!Number.isFinite(pid) || pid <= 0 || pid === process.pid) {
@@ -1085,24 +1050,32 @@ async function ensureDaemonRunningWithDeps(env, deps) {
       if (shouldPreserveNewerDaemonMismatch(error, env)) {
         return;
       }
-      const pid = mismatchPid(error);
+      const pid = mismatchPid(error) ?? (await deps.readRunningDaemonMetadata(env))?.pid ?? null;
       if (mismatchKind(error) === "reload") {
         if (pid) {
           try {
             await deps.signalProcess(pid, "SIGHUP");
             await deps.waitForDaemonReady(env);
             return;
-          } catch {
-          }
+          } catch {}
         }
       }
-      if (mismatchKind(error) === "protocol" || mismatchKind(error) === "version" || mismatchKind(error) === "server" || mismatchKind(error) === "reload") {
+      if (
+        mismatchKind(error) === "protocol" ||
+        mismatchKind(error) === "version" ||
+        mismatchKind(error) === "server" ||
+        mismatchKind(error) === "reload"
+      ) {
         if (pid) {
           await deps.terminateProcess(pid);
         }
       } else if (!isRecoverableHealthError(error)) {
         throw error;
       }
+    }
+    const existingPid = (await deps.readRunningDaemonMetadata(env))?.pid ?? null;
+    if (existingPid) {
+      await deps.terminateProcess(existingPid);
     }
     let child = deps.spawnDaemon(env);
     try {
@@ -1112,8 +1085,12 @@ async function ensureDaemonRunningWithDeps(env, deps) {
         if (shouldPreserveNewerDaemonMismatch(error, env)) {
           return;
         }
-        if (child.source === "path" && (mismatchKind(error) === "protocol" || mismatchKind(error) === "version")) {
-          const spawnedPid = mismatchPid(error) ?? (await deps.readRunningDaemonMetadata(env))?.pid ?? null;
+        if (
+          child.source === "path" &&
+          (mismatchKind(error) === "protocol" || mismatchKind(error) === "version")
+        ) {
+          const spawnedPid =
+            mismatchPid(error) ?? (await deps.readRunningDaemonMetadata(env))?.pid ?? null;
           if (spawnedPid) {
             await deps.terminateProcess(spawnedPid);
           }
@@ -1137,7 +1114,7 @@ async function ensureDaemonRunning(env) {
     terminateProcess,
     spawnDaemon,
     waitForDaemonReady,
-    withStartupLock
+    withStartupLock,
   });
 }
 async function readRunningDaemonMetadata(env) {
@@ -1149,8 +1126,6 @@ export {
   checkDaemonHealth,
   ensureDaemonRunning,
   ensureDaemonRunningWithDeps,
-  formatDaemonStartupError,
-  readDaemonLogs,
   readRunningDaemonMetadata,
-  resolveDaemonLaunchCommand
+  resolveDaemonLaunchCommand,
 };

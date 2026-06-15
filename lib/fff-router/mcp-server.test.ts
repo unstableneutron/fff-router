@@ -1,6 +1,8 @@
 import { describe, expect, test } from "vitest";
+import * as z from "zod/v4";
 import { createFffMcpStdioAdapter } from "./adapters/fff-mcp-stdio";
 import { createSearchCoordinator } from "./coordinator";
+import { MCP_TOOLS } from "./mcp-tools";
 import { createMcpServer } from "./mcp-server";
 import { RuntimeManager } from "./runtime-manager";
 import type { PublicToolRequest, SearchCoordinator } from "./types";
@@ -37,6 +39,28 @@ describe("createMcpServer", () => {
     expect(tools.map((tool) => tool.inputSchema)).toEqual(
       (await import("./public-api")).PUBLIC_TOOL_DEFINITIONS.map((tool) => tool.inputSchema),
     );
+  });
+
+  test("accepts opaque cursor strings at the SDK validation layer", () => {
+    const findFiles = MCP_TOOLS.find((tool) => tool.name === "fff_find_files");
+    const grep = MCP_TOOLS.find((tool) => tool.name === "fff_grep");
+    if (!findFiles || !grep) throw new Error("expected public tools");
+
+    expect(() =>
+      z.object(findFiles.zodInputShape).parse({
+        query: "router",
+        within: "/repo/src",
+        cursor: "2",
+      }),
+    ).not.toThrow();
+    expect(() =>
+      z.object(grep.zodInputShape).parse({
+        patterns: ["router"],
+        literal: true,
+        within: "/repo/src",
+        cursor: "fff_c1",
+      }),
+    ).not.toThrow();
   });
 
   test("invokes the coordinator with normalized input and propagates compact/json responses", async () => {

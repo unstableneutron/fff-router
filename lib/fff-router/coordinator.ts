@@ -127,6 +127,7 @@ function buildBackendRequest(args: {
       args.request.excludePaths,
     ),
     limit: args.request.limit,
+    cursor: args.request.cursor,
   };
 
   switch (args.request.tool) {
@@ -157,6 +158,7 @@ function shapePublicResult(args: {
   persistenceRoot: string;
   backendUsed: SearchBackendId;
   fallbackApplied: boolean;
+  nextCursor: string | null;
   items: Array<Record<string, unknown>>;
   renderedCompact?: string;
   summary?: {
@@ -188,7 +190,7 @@ function shapePublicResult(args: {
     return {
       mode: "json",
       base_path: args.basePath,
-      next_cursor: null,
+      next_cursor: args.nextCursor,
       backend_used: args.backendUsed,
       fallback_applied: args.fallbackApplied,
       ...(args.fallbackApplied ? { fallback_reason: "backend_error" as const } : {}),
@@ -208,14 +210,13 @@ function shapePublicResult(args: {
 
   if (
     args.backendUsed === "fff-mcp" &&
-    (args.request.tool === "fff_search_terms" || args.request.tool === "fff_grep") &&
     typeof args.renderedCompact === "string" &&
     args.renderedCompact.length > 0
   ) {
     return {
       mode: "compact",
       base_path: args.basePath,
-      next_cursor: null,
+      next_cursor: args.nextCursor,
       text: args.renderedCompact,
     };
   }
@@ -225,7 +226,7 @@ function shapePublicResult(args: {
       return {
         mode: "compact",
         base_path: args.basePath,
-        next_cursor: null,
+        next_cursor: args.nextCursor,
         items: args.items.map((item) => ({ path: String(item.path) })),
       };
     case "fff_search_terms":
@@ -233,7 +234,7 @@ function shapePublicResult(args: {
       return {
         mode: "compact",
         base_path: args.basePath,
-        next_cursor: null,
+        next_cursor: args.nextCursor,
         items: args.items.map((item) => ({
           path: String(item.path),
           line: Number(item.line),
@@ -498,6 +499,10 @@ export class SearchCoordinatorImpl implements SearchCoordinator {
       };
     }
 
+    if (request.cursor !== null && primaryAdapter.backendId !== "fff-mcp") {
+      return invalid("cursor pagination is only supported by the fff-mcp backend");
+    }
+
     const validatedWithin = await this.validateWithin({ withinPaths: request.within });
     if (!validatedWithin.ok) {
       return validatedWithin;
@@ -621,6 +626,7 @@ export class SearchCoordinatorImpl implements SearchCoordinator {
           persistenceRoot: lifecyclePlan.value.target.persistenceRoot,
           backendUsed: primaryResult.value.backendId,
           fallbackApplied: false,
+          nextCursor: primaryResult.value.nextCursor,
           items: normalizedItems,
           renderedCompact: primaryResult.value.renderedCompact,
           summary: primaryResult.value.summary,
@@ -646,6 +652,16 @@ export class SearchCoordinatorImpl implements SearchCoordinator {
     }
 
     if (!runtimeConfig.fallbackBackendId) {
+      return {
+        ok: false,
+        error: {
+          code: primaryResult.error.code,
+          message: primaryResult.error.message,
+        },
+      };
+    }
+
+    if (request.cursor !== null && runtimeConfig.fallbackBackendId !== "fff-mcp") {
       return {
         ok: false,
         error: {
@@ -697,6 +713,7 @@ export class SearchCoordinatorImpl implements SearchCoordinator {
         persistenceRoot: lifecyclePlan.value.target.persistenceRoot,
         backendUsed: fallbackResult.value.backendId,
         fallbackApplied: true,
+        nextCursor: fallbackResult.value.nextCursor,
         items: normalizedItems,
         renderedCompact: fallbackResult.value.renderedCompact,
         summary: fallbackResult.value.summary,

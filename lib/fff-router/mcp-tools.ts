@@ -6,6 +6,7 @@ import type { PublicToolName, SearchCoordinator } from "./types";
 // absolute paths. Multi-path is expressed as an array so the MCP schema
 // stays explicit — callers don't have to know about brace-syntax tricks.
 const withinZod = z.union([z.string().min(1), z.array(z.string().min(1)).min(1)]);
+const cursorZod = z.union([z.string().min(1), z.null()]);
 
 const zodInputShapes = {
   fff_find_files: {
@@ -14,7 +15,7 @@ const zodInputShapes = {
     extensions: z.array(z.string().min(1)).optional(),
     exclude_paths: z.array(z.string().min(1)).optional(),
     limit: z.number().int().min(0).optional(),
-    cursor: z.null().optional(),
+    cursor: cursorZod.optional(),
     output_mode: z.enum(["compact", "json"]).optional(),
   },
   fff_search_terms: {
@@ -24,7 +25,7 @@ const zodInputShapes = {
     exclude_paths: z.array(z.string().min(1)).optional(),
     context_lines: z.number().int().min(0).optional(),
     limit: z.number().int().min(0).optional(),
-    cursor: z.null().optional(),
+    cursor: cursorZod.optional(),
     output_mode: z.enum(["compact", "json"]).optional(),
   },
   fff_grep: {
@@ -37,7 +38,7 @@ const zodInputShapes = {
     exclude_paths: z.array(z.string().min(1)).optional(),
     context_lines: z.number().int().min(0).optional(),
     limit: z.number().int().min(0).optional(),
-    cursor: z.null().optional(),
+    cursor: cursorZod.optional(),
     output_mode: z.enum(["compact", "json"]).optional(),
   },
 } as const satisfies Record<PublicToolName, z.ZodRawShape>;

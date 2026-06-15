@@ -281,18 +281,51 @@ function stripFindFilesSuffix(line: string): string {
     .trim();
 }
 
+function parseNextCursor(line: string): string | null {
+  const cursorLine = line.match(/^cursor:\s*(.+)$/);
+  if (cursorLine?.[1]) {
+    return cursorLine[1].trim().replace(/^"|"$/g, "");
+  }
+
+  const quoted = line.match(/\bcursor="([^"]+)"/);
+  if (quoted?.[1]) {
+    return quoted[1].trim();
+  }
+
+  const bare = line.match(/\bcursor=([^\s\]]+)/);
+  if (bare?.[1]) {
+    return bare[1].trim().replace(/^"|"$/g, "");
+  }
+
+  return null;
+}
+
 function parseFindFilesOutput(text: string, persistenceRoot: string) {
   const items: Array<{ path: string; relativePath: string }> = [];
+  const summary: BackendSearchSummary = {};
+  let nextCursor: string | null = null;
 
   for (const rawLine of text.split(/\r?\n/)) {
     const line = rawLine.trimEnd();
-    if (
-      !line ||
-      line.startsWith("→") ||
-      line.startsWith("cursor:") ||
-      /^\d+\/\d+\s+matches/.test(line) ||
-      /^0\s+results/.test(line)
-    ) {
+    const cursor = parseNextCursor(line);
+    if (cursor) {
+      nextCursor = cursor;
+      continue;
+    }
+
+    const readRecommendation = parseReadRecommendation(line);
+    if (readRecommendation) {
+      summary.readRecommendation = readRecommendation;
+      continue;
+    }
+
+    const shownSummary = parseShownSummary(line);
+    if (shownSummary.shownCount !== undefined || shownSummary.totalCount !== undefined) {
+      Object.assign(summary, shownSummary);
+      continue;
+    }
+
+    if (!line || line.startsWith("→") || /^0\s+results/.test(line)) {
       continue;
     }
 
@@ -307,7 +340,7 @@ function parseFindFilesOutput(text: string, persistenceRoot: string) {
     });
   }
 
-  return items;
+  return { items, summary, nextCursor };
 }
 
 function parseReadRecommendation(
@@ -331,7 +364,7 @@ function parseReadRecommendation(
 }
 
 function parseShownSummary(line: string): Pick<BackendSearchSummary, "shownCount" | "totalCount"> {
-  const match = line.match(/^(\d+)\/(\d+)\s+matches\s+shown$/);
+  const match = line.match(/^(\d+)\/(\d+)\s+matches(?:\s+shown)?$/);
   if (!match) {
     return {};
   }
@@ -340,6 +373,42 @@ function parseShownSummary(line: string): Pick<BackendSearchSummary, "shownCount
     shownCount: Number(match[1]),
     totalCount: Number(match[2]),
   };
+}
+
+function filterRenderedFindFilesText(
+  text: string,
+  keep: (relativePath: string) => boolean,
+): string {
+  const out: string[] = [];
+
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trimEnd();
+
+    const readRecommendation = parseReadRecommendation(line);
+    if (readRecommendation) {
+      if (keep(readRecommendation.relativePath)) {
+        out.push(rawLine);
+      }
+      continue;
+    }
+
+    if (
+      !line ||
+      parseNextCursor(line) !== null ||
+      /^\d+\/\d+\s+matches(?:\s+shown)?$/.test(line) ||
+      /^0\s+results/.test(line)
+    ) {
+      out.push(rawLine);
+      continue;
+    }
+
+    const relativePath = stripFindFilesSuffix(line);
+    if (relativePath && keep(relativePath)) {
+      out.push(rawLine);
+    }
+  }
+
+  return out.join("\n");
 }
 
 /**
@@ -431,6 +500,7 @@ function parseTextMatchOutput(text: string, persistenceRoot: string) {
   }> = [];
 
   const summary: BackendSearchSummary = {};
+  let nextCursor: string | null = null;
   let currentPath: string | null = null;
   let currentPathIsDefinition = false;
   let pendingBefore: string[] = [];
@@ -447,7 +517,13 @@ function parseTextMatchOutput(text: string, persistenceRoot: string) {
 
   for (const rawLine of text.split(/\r?\n/)) {
     const line = rawLine.trimEnd();
-    if (!line || line.startsWith("cursor:")) {
+    if (!line) {
+      continue;
+    }
+
+    const cursor = parseNextCursor(line);
+    if (cursor) {
+      nextCursor = cursor;
       continue;
     }
 
@@ -523,7 +599,7 @@ function parseTextMatchOutput(text: string, persistenceRoot: string) {
     pendingBefore = [];
   }
 
-  return { items, summary };
+  return { items, summary, nextCursor };
 }
 
 /**
@@ -680,14 +756,14 @@ async function executeTextMatchWithFilteredCursorDrain(
   const seenCursors = new Set<string>();
   let repeatedCursor: string | undefined;
   let pageCapHit = false;
+  let nextCursor = page.parsed.nextCursor ?? extractUnsupportedCursor(text);
 
   while (collectedItems.length < request.limit) {
-    const cursor = extractUnsupportedCursor(text);
-    if (cursor === null) {
+    if (nextCursor === null) {
       break;
     }
-    if (seenCursors.has(cursor)) {
-      repeatedCursor = cursor;
+    if (seenCursors.has(nextCursor)) {
+      repeatedCursor = nextCursor;
       break;
     }
     if (pages.length >= MAX_FILTERED_CURSOR_PAGES) {
@@ -695,11 +771,12 @@ async function executeTextMatchWithFilteredCursorDrain(
       break;
     }
 
-    seenCursors.add(cursor);
-    text = await callToolText(runtime, toolName, { ...baseArguments, cursor });
+    seenCursors.add(nextCursor);
+    text = await callToolText(runtime, toolName, { ...baseArguments, cursor: nextCursor });
     page = evaluateTextMatchPage(request, text);
     pages.push(page);
     collectedItems.push(...page.filteredItems);
+    nextCursor = page.parsed.nextCursor ?? extractUnsupportedCursor(text);
   }
 
   const items = collectedItems.slice(0, request.limit);
@@ -710,6 +787,7 @@ async function executeTextMatchWithFilteredCursorDrain(
   );
   return {
     items,
+    nextCursor,
     renderedCompact: renderDrainedTextMatchCompact(pages, items),
     summary: summarizeDrainedTextMatchPages(pages, items),
     diagnostics: {
@@ -721,6 +799,19 @@ async function executeTextMatchWithFilteredCursorDrain(
       },
     },
   };
+}
+
+function rewriteRenderedFindFilesIfNeeded(
+  text: string,
+  originalItems: Array<{ relativePath: string }>,
+  filteredItems: Array<{ relativePath: string }>,
+): string {
+  const survivingPaths = new Set(filteredItems.map((item) => item.relativePath));
+  const somethingDropped = originalItems.some((item) => !survivingPaths.has(item.relativePath));
+  if (!somethingDropped) {
+    return text;
+  }
+  return filterRenderedFindFilesText(text, (relativePath) => survivingPaths.has(relativePath));
 }
 
 /**
@@ -916,17 +1007,25 @@ export function createFffMcpStdioAdapter(): SearchBackendAdapter<FffMcpRuntime> 
             const text = await callToolText(args.runtime, "find_files", {
               query: compileFindFilesQuery(args.request),
               maxResults: args.request.limit,
+              ...(args.request.cursor !== null && args.request.cursor !== undefined
+                ? { cursor: args.request.cursor }
+                : {}),
             });
+            const parsed = parseFindFilesOutput(text, args.request.persistenceRoot);
+            const filteredItems = filterItems(args.request, parsed.items);
             return {
               ok: true,
               value: {
                 backendId: "fff-mcp",
                 queryKind: "find_files",
-                items: filterItems(
-                  args.request,
-                  parseFindFilesOutput(text, args.request.persistenceRoot),
+                items: filteredItems,
+                nextCursor: parsed.nextCursor,
+                renderedCompact: rewriteRenderedFindFilesIfNeeded(
+                  text,
+                  parsed.items,
+                  filteredItems,
                 ),
-                nextCursor: null,
+                summary: narrowSummaryToSurvivingPaths(parsed.summary, filteredItems),
               },
             };
           }
@@ -939,6 +1038,9 @@ export function createFffMcpStdioAdapter(): SearchBackendAdapter<FffMcpRuntime> 
                 constraints: compileConstraints(args.request),
                 maxResults: args.request.limit,
                 context: args.request.contextLines,
+                ...(args.request.cursor !== null && args.request.cursor !== undefined
+                  ? { cursor: args.request.cursor }
+                  : {}),
               },
               args.request,
             );
@@ -948,7 +1050,6 @@ export function createFffMcpStdioAdapter(): SearchBackendAdapter<FffMcpRuntime> 
                 backendId: "fff-mcp",
                 queryKind: "search_terms",
                 ...value,
-                nextCursor: null,
               },
             };
           }
@@ -964,10 +1065,16 @@ export function createFffMcpStdioAdapter(): SearchBackendAdapter<FffMcpRuntime> 
                   constraints: compileConstraints(args.request),
                   maxResults: args.request.limit,
                   context: args.request.contextLines,
+                  ...(args.request.cursor !== null && args.request.cursor !== undefined
+                    ? { cursor: args.request.cursor }
+                    : {}),
                 }
               : {
                   query: compileGrepQuery(args.request),
                   maxResults: args.request.limit,
+                  ...(args.request.cursor !== null && args.request.cursor !== undefined
+                    ? { cursor: args.request.cursor }
+                    : {}),
                 };
             const value = await executeTextMatchWithFilteredCursorDrain(
               args.runtime,
@@ -981,7 +1088,6 @@ export function createFffMcpStdioAdapter(): SearchBackendAdapter<FffMcpRuntime> 
                 backendId: "fff-mcp",
                 queryKind: "grep",
                 ...value,
-                nextCursor: null,
               },
             };
           }

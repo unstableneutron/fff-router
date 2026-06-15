@@ -49,10 +49,14 @@ Supported output modes:
 - `compact` (default)
 - `json`
 
-Pagination is intentionally deferred for now:
+Pagination:
 
-- request `cursor` must be omitted or `null`
-- responses always return `next_cursor: null`
+- request `cursor` is omitted or `null` on the first page
+- when the selected backend returns an opaque cursor, responses include
+  `next_cursor: "<cursor>"`
+- pass that value back as `cursor` to continue the same search
+- cursor continuation is currently supported for the `fff-mcp` backend; other
+  backends reject non-null cursors instead of silently restarting from page one
 
 ## `within` semantics
 
@@ -122,7 +126,10 @@ Fallback happens only on backend failure, not on zero results.
 
 - `fff-node` — direct in-process `@ff-labs/fff-node` runtime owned by `fff-routerd`
 - `rg` — direct `rg` / `fd` execution, now also available as an explicit primary backend
-- `fff-mcp` — experimental stock upstream `fff-mcp` integration over stdio MCP; request/response mapping is best-effort in this slice because upstream still returns AI-oriented text rather than a structured compatibility contract
+- `fff-mcp` — stock upstream `fff-mcp` integration over stdio MCP; the agent
+  profile preserves upstream compact text, read recommendations, and opaque
+  cursor continuation while structured mode keeps the normalized
+  `fff_find_files` / `fff_grep` contract
 
 ## Runtime reuse model
 
@@ -246,7 +253,10 @@ with fresh binaries.
 launch MCP servers as child processes. It exposes `find_files`, `grep`, and
 `multi_grep` with fff-mcp-style inputs and plain text outputs, while executing
 searches through the shared `fff-routerd` daemon over HTTP. It does not create a
-separate search runtime pool.
+separate search runtime pool. When the daemon is configured with
+`"backend": "fff-mcp"`, this profile preserves native compact output for all
+three tools, including `→ Read ...` recommendations, definition/context output,
+zero-result fallback text, and returned cursor strings.
 
 To expose the structured extension-oriented tools instead (`fff_find_files` and
 `fff_grep` with JSON result envelopes), use:
