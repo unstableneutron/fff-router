@@ -664,13 +664,16 @@ function rewriteRenderedCompactIfNeeded(
   const filteredText = somethingDropped
     ? filterRenderedCompactText(text, (relativePath) => survivingPaths.has(relativePath))
     : text;
-  const withoutCursor = stripUnsupportedCursorLines(filteredText);
+  const renderedText =
+    somethingDropped || filteredItems.length === 0
+      ? stripUnsupportedCursorLines(filteredText)
+      : filteredText;
 
-  if (isMetadataOnlyCompactText(withoutCursor)) {
+  if (isMetadataOnlyCompactText(renderedText)) {
     return undefined;
   }
 
-  return withoutCursor;
+  return renderedText;
 }
 
 function stripUnsupportedCursorLines(text: string): string {
@@ -802,8 +805,9 @@ async function executeTextMatchWithFilteredCursorDrain(
   let repeatedCursor: string | undefined;
   let pageCapHit = false;
   let nextCursor = page.parsed.nextCursor ?? extractUnsupportedCursor(text);
+  const shouldDrainFilteredPages = request.cursor === null || request.cursor === undefined;
 
-  while (collectedItems.length < request.limit) {
+  while (shouldDrainFilteredPages && collectedItems.length < request.limit) {
     if (nextCursor === null) {
       break;
     }

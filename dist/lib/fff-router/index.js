@@ -35,12 +35,9 @@ var __toESM = (mod, isNodeMode, target) => (
   )
 );
 
-// ../../../.cache/aube/virtual-store/picomatch@4.0.4-57db1111b1e656b2/node_modules/picomatch/lib/constants.js
+// node_modules/.pnpm/picomatch@4.0.4/node_modules/picomatch/lib/constants.js
 var require_constants = __commonJS({
-  "../../../.cache/aube/virtual-store/picomatch@4.0.4-57db1111b1e656b2/node_modules/picomatch/lib/constants.js"(
-    exports,
-    module,
-  ) {
+  "node_modules/.pnpm/picomatch@4.0.4/node_modules/picomatch/lib/constants.js"(exports, module) {
     "use strict";
     var WIN_SLASH = "\\\\/";
     var WIN_NO_SLASH = `[^${WIN_SLASH}]`;
@@ -240,11 +237,9 @@ var require_constants = __commonJS({
   },
 });
 
-// ../../../.cache/aube/virtual-store/picomatch@4.0.4-57db1111b1e656b2/node_modules/picomatch/lib/utils.js
+// node_modules/.pnpm/picomatch@4.0.4/node_modules/picomatch/lib/utils.js
 var require_utils = __commonJS({
-  "../../../.cache/aube/virtual-store/picomatch@4.0.4-57db1111b1e656b2/node_modules/picomatch/lib/utils.js"(
-    exports,
-  ) {
+  "node_modules/.pnpm/picomatch@4.0.4/node_modules/picomatch/lib/utils.js"(exports) {
     "use strict";
     var {
       REGEX_BACKSLASH,
@@ -295,8 +290,8 @@ var require_utils = __commonJS({
       }
       return output;
     };
-    exports.basename = (path6, { windows } = {}) => {
-      const segs = path6.split(windows ? /[\\/]/ : "/");
+    exports.basename = (path7, { windows } = {}) => {
+      const segs = path7.split(windows ? /[\\/]/ : "/");
       const last = segs[segs.length - 1];
       if (last === "") {
         return segs[segs.length - 2];
@@ -306,12 +301,9 @@ var require_utils = __commonJS({
   },
 });
 
-// ../../../.cache/aube/virtual-store/picomatch@4.0.4-57db1111b1e656b2/node_modules/picomatch/lib/scan.js
+// node_modules/.pnpm/picomatch@4.0.4/node_modules/picomatch/lib/scan.js
 var require_scan = __commonJS({
-  "../../../.cache/aube/virtual-store/picomatch@4.0.4-57db1111b1e656b2/node_modules/picomatch/lib/scan.js"(
-    exports,
-    module,
-  ) {
+  "node_modules/.pnpm/picomatch@4.0.4/node_modules/picomatch/lib/scan.js"(exports, module) {
     "use strict";
     var utils = require_utils();
     var {
@@ -644,12 +636,9 @@ var require_scan = __commonJS({
   },
 });
 
-// ../../../.cache/aube/virtual-store/picomatch@4.0.4-57db1111b1e656b2/node_modules/picomatch/lib/parse.js
+// node_modules/.pnpm/picomatch@4.0.4/node_modules/picomatch/lib/parse.js
 var require_parse = __commonJS({
-  "../../../.cache/aube/virtual-store/picomatch@4.0.4-57db1111b1e656b2/node_modules/picomatch/lib/parse.js"(
-    exports,
-    module,
-  ) {
+  "node_modules/.pnpm/picomatch@4.0.4/node_modules/picomatch/lib/parse.js"(exports, module) {
     "use strict";
     var constants = require_constants();
     var utils = require_utils();
@@ -1673,12 +1662,9 @@ var require_parse = __commonJS({
   },
 });
 
-// ../../../.cache/aube/virtual-store/picomatch@4.0.4-57db1111b1e656b2/node_modules/picomatch/lib/picomatch.js
+// node_modules/.pnpm/picomatch@4.0.4/node_modules/picomatch/lib/picomatch.js
 var require_picomatch = __commonJS({
-  "../../../.cache/aube/virtual-store/picomatch@4.0.4-57db1111b1e656b2/node_modules/picomatch/lib/picomatch.js"(
-    exports,
-    module,
-  ) {
+  "node_modules/.pnpm/picomatch@4.0.4/node_modules/picomatch/lib/picomatch.js"(exports, module) {
     "use strict";
     var scan = require_scan();
     var parse = require_parse();
@@ -1818,12 +1804,9 @@ var require_picomatch = __commonJS({
   },
 });
 
-// ../../../.cache/aube/virtual-store/picomatch@4.0.4-57db1111b1e656b2/node_modules/picomatch/index.js
+// node_modules/.pnpm/picomatch@4.0.4/node_modules/picomatch/index.js
 var require_picomatch2 = __commonJS({
-  "../../../.cache/aube/virtual-store/picomatch@4.0.4-57db1111b1e656b2/node_modules/picomatch/index.js"(
-    exports,
-    module,
-  ) {
+  "node_modules/.pnpm/picomatch@4.0.4/node_modules/picomatch/index.js"(exports, module) {
     "use strict";
     var pico = require_picomatch();
     var utils = require_utils();
@@ -1840,9 +1823,9 @@ var require_picomatch2 = __commonJS({
 
 // lib/fff-router/daemon-autostart.ts
 import { spawn as spawnChildProcess } from "node:child_process";
-import { constants as fsConstants, accessSync, existsSync as existsSync2 } from "node:fs";
+import { createWriteStream, existsSync as existsSync3, mkdirSync as mkdirSync2 } from "node:fs";
 import { mkdir as mkdir2, open, readFile as readFile2, rm as rm2 } from "node:fs/promises";
-import path5 from "node:path";
+import path6 from "node:path";
 
 // lib/fff-router/daemon-config.ts
 import { createHash } from "node:crypto";
@@ -1925,6 +1908,7 @@ var DAEMON_PROTOCOL_VERSION = "fff-router-http-daemon-v1";
 var DEFAULT_DAEMON_PORT = 4319;
 var DEFAULT_DAEMON_MCP_PATH = "/mcp";
 var DEFAULT_BACKEND = "fff-node";
+var DEFAULT_BACKEND_TOOL_TIMEOUT_MS = 3e4;
 function packageVersion() {
   const candidatePaths = [
     path2.resolve(import.meta.dirname, "../../package.json"),
@@ -1944,6 +1928,42 @@ function packageVersion() {
 var PACKAGE_VERSION = packageVersion();
 function hashFingerprint(value) {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex").slice(0, 16);
+}
+function packagedDaemonEntrypointPath() {
+  const primaryCandidatePath = path2.resolve(import.meta.dirname, "../../dist/bin/fff-routerd.js");
+  const candidatePaths = [
+    primaryCandidatePath,
+    path2.resolve(import.meta.dirname, "../../bin/fff-routerd.js"),
+  ];
+  for (const candidatePath of candidatePaths) {
+    if (existsSync(candidatePath)) {
+      return candidatePath;
+    }
+  }
+  return primaryCandidatePath;
+}
+function contentFingerprint(pathValue) {
+  try {
+    return createHash("sha256").update(readFileSync(pathValue)).digest("hex");
+  } catch {
+    return "missing";
+  }
+}
+function getDaemonSourceFingerprint(args = {}) {
+  const env = args.env ?? process.env;
+  if (env.FFF_ROUTER_DAEMON_SOURCE_FINGERPRINT) {
+    return env.FFF_ROUTER_DAEMON_SOURCE_FINGERPRINT;
+  }
+  const daemonEntrypointPath =
+    args.daemonEntrypointPath ??
+    env.FFF_ROUTER_DAEMON_BIN ??
+    env.FFF_ROUTER_DAEMON_ENTRYPOINT ??
+    packagedDaemonEntrypointPath();
+  return hashFingerprint({
+    packageVersion: PACKAGE_VERSION,
+    daemonEntrypointPath,
+    content: contentFingerprint(daemonEntrypointPath),
+  });
 }
 function configHome(env) {
   return env.HOME || os.homedir();
@@ -1980,6 +2000,9 @@ function getDefaultRouterConfig() {
       maxPersistentDaemons: 12,
       maxPersistentNonGitDaemons: 4,
     },
+    runtime: {
+      toolTimeoutMs: DEFAULT_BACKEND_TOOL_TIMEOUT_MS,
+    },
   };
 }
 function getDefaultDaemonReloadConfig() {
@@ -2003,6 +2026,9 @@ function getDefaultDaemonFileConfig() {
     promotion: { ...reload.router.promotion },
     ttl: { ...reload.router.ttl },
     limits: { ...reload.router.limits },
+    runtime: {
+      toolTimeoutMs: reload.router.runtime?.toolTimeoutMs ?? DEFAULT_BACKEND_TOOL_TIMEOUT_MS,
+    },
   };
 }
 function serializeDefaultDaemonFileConfig() {
@@ -2230,6 +2256,7 @@ function normalizeDaemonFileConfig(raw, env) {
     fileConfig.promotion == null ? null : expectObject(fileConfig.promotion, "promotion");
   const ttl = fileConfig.ttl == null ? null : expectObject(fileConfig.ttl, "ttl");
   const limits = fileConfig.limits == null ? null : expectObject(fileConfig.limits, "limits");
+  const runtime = fileConfig.runtime == null ? null : expectObject(fileConfig.runtime, "runtime");
   const normalizedEnv = { ...env, HOME: configHome(env) };
   const backendId = readOptionalBackend(fileConfig.backend) ?? defaults.backend;
   const allowlist =
@@ -2254,6 +2281,9 @@ function normalizeDaemonFileConfig(raw, env) {
       limits?.maxPersistentNonGitDaemons,
       "limits.maxPersistentNonGitDaemons",
     ) ?? defaults.limits.maxPersistentNonGitDaemons;
+  const toolTimeoutMs =
+    readOptionalNonNegativeInteger(runtime?.toolTimeoutMs, "runtime.toolTimeoutMs") ??
+    defaults.runtime.toolTimeoutMs;
   return {
     daemon: {
       host,
@@ -2278,6 +2308,9 @@ function normalizeDaemonFileConfig(raw, env) {
         limits: {
           maxPersistentDaemons,
           maxPersistentNonGitDaemons,
+        },
+        runtime: {
+          toolTimeoutMs,
         },
       },
     },
@@ -2345,6 +2378,7 @@ function getDaemonServerFingerprint(args = {}) {
     },
     mcpSocketPath: paths.mcpSocketPath,
     protocolVersion: DAEMON_PROTOCOL_VERSION,
+    daemonSourceFingerprint: getDaemonSourceFingerprint({ env: args.env }),
   });
 }
 function getDaemonReloadFingerprintForConfig(config) {
@@ -2360,6 +2394,8 @@ function getDaemonPaths(args = {}) {
     dir,
     metadataPath: path2.join(dir, "daemon.json"),
     lockPath: path2.join(dir, "startup.lock"),
+    stdoutLogPath: path2.join(dir, "daemon.stdout.log"),
+    stderrLogPath: path2.join(dir, "daemon.stderr.log"),
     mcpSocketPath: mcpSocketPathForStateDir(dir),
   };
 }
@@ -2371,6 +2407,42 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
+// lib/fff-router/tool-resolution.ts
+import { constants as fsConstants, accessSync, existsSync as existsSync2 } from "node:fs";
+import path3 from "node:path";
+function isExecutable(pathValue) {
+  try {
+    accessSync(pathValue, fsConstants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+function commandExtensions(env) {
+  if (process.platform !== "win32") {
+    return [""];
+  }
+  const pathExt = env.PATHEXT?.split(";").filter(Boolean);
+  return pathExt && pathExt.length > 0 ? pathExt : [".EXE", ".CMD", ".BAT", ".COM"];
+}
+function resolveExecutableOnPath(command, env = process.env) {
+  const pathValue = env.PATH || process.env.PATH || "";
+  const directories = pathValue.split(path3.delimiter).filter(Boolean);
+  const extensions = commandExtensions(env);
+  for (const directory of directories) {
+    for (const extension of extensions) {
+      const candidatePath =
+        process.platform === "win32" && extension && !command.toUpperCase().endsWith(extension)
+          ? path3.join(directory, `${command}${extension}`)
+          : path3.join(directory, command);
+      if (existsSync2(candidatePath) && isExecutable(candidatePath)) {
+        return candidatePath;
+      }
+    }
+  }
+  return null;
+}
+
 // lib/fff-router/mcp-server.ts
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -2380,7 +2452,7 @@ import * as z from "zod/v4";
 
 // lib/fff-router/public-api.ts
 var import_picomatch = __toESM(require_picomatch2(), 1);
-import path3 from "node:path";
+import path4 from "node:path";
 import fs from "node:fs";
 import { Type } from "@sinclair/typebox";
 var EXTENSION_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._+-]*$/;
@@ -2429,7 +2501,7 @@ function normalizeWithinString(value, env) {
   if (!expanded.ok) {
     return expanded;
   }
-  if (!path3.isAbsolute(expanded.value)) {
+  if (!path4.isAbsolute(expanded.value)) {
     return invalid2("within must be absolute for direct MCP callers");
   }
   return { ok: true, value: expanded.value };
@@ -2496,7 +2568,7 @@ function normalizeGlobPattern(value) {
   if (!trimmed) {
     return invalid2("glob must not be empty");
   }
-  if (path3.isAbsolute(trimmed)) {
+  if (path4.isAbsolute(trimmed)) {
     return invalid2("glob must be relative to the resolved base path");
   }
   if (trimmed.startsWith("!")) {
@@ -2525,7 +2597,7 @@ function validateExcludePathSyntax(entry) {
   if (!trimmed) {
     return invalid2("exclude_paths must not contain empty values");
   }
-  if (path3.isAbsolute(trimmed)) {
+  if (path4.isAbsolute(trimmed)) {
     return invalid2("exclude_paths must be relative to the resolved base path");
   }
   if (trimmed.startsWith("!")) {
@@ -2557,7 +2629,7 @@ function resolveExcludeExpansionBase(within) {
   }
   try {
     const stats = fs.statSync(primaryWithin);
-    return stats.isFile() ? path3.dirname(primaryWithin) : primaryWithin;
+    return stats.isFile() ? path4.dirname(primaryWithin) : primaryWithin;
   } catch {
     return primaryWithin;
   }
@@ -2570,7 +2642,7 @@ function expandExcludeGlobPath(basePath, pattern) {
       return [prefix.join("/")];
     }
     if (!containsExcludeGlobMeta(segment)) {
-      const nextAbs = path3.join(absDir, segment);
+      const nextAbs = path4.join(absDir, segment);
       if (rest.length === 0) {
         return fs.existsSync(nextAbs) ? [[...prefix, segment].join("/")] : [];
       }
@@ -2601,7 +2673,7 @@ function expandExcludeGlobPath(basePath, pattern) {
         if (!entry.isDirectory()) {
           return [];
         }
-        return expand(path3.join(absDir, entry.name), nextPrefix, rest);
+        return expand(path4.join(absDir, entry.name), nextPrefix, rest);
       });
   }
   return expand(basePath, [], segments);
@@ -3034,7 +3106,7 @@ var MCP_TOOLS = PUBLIC_TOOL_DEFINITIONS.map((tool) => ({
 
 // lib/fff-router/resolve-within.ts
 import fs2 from "node:fs/promises";
-import path4 from "node:path";
+import path5 from "node:path";
 function invalid3(message) {
   return {
     ok: false,
@@ -3067,15 +3139,12 @@ function validateAbsolutePath(candidate, field) {
   if (trimmed === "") {
     return invalid3(`${field} must be a non-empty path`);
   }
-  if (!path4.isAbsolute(trimmed)) {
+  if (!path5.isAbsolute(trimmed)) {
     return invalid3(`${field} must be absolute`);
   }
   return { ok: true, value: trimmed };
 }
 function resolveStatType(stats) {
-  if (!stats) {
-    return internalError("failed to inspect resolved within path");
-  }
   if (stats.isDirectory()) {
     return { ok: true, value: "directory" };
   }
@@ -3104,7 +3173,7 @@ async function resolveWithinFromCaller(args) {
   return {
     ok: true,
     value: {
-      resolvedWithin: path4.isAbsolute(within) ? within : path4.resolve(callerCwd.value, within),
+      resolvedWithin: path5.isAbsolute(within) ? within : path5.resolve(callerCwd.value, within),
     },
   };
 }
@@ -3146,7 +3215,7 @@ async function validateResolvedWithinEntry(candidate) {
     ok: true,
     value: {
       resolvedWithin,
-      basePath: path4.dirname(resolvedWithin),
+      basePath: path5.dirname(resolvedWithin),
       fileRestriction: resolvedWithin,
     },
   };
@@ -3181,9 +3250,9 @@ async function validateResolvedWithin(args) {
 // lib/fff-router/http-daemon.ts
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { StdioServerTransport as StdioServerTransport2 } from "@modelcontextprotocol/sdk/server/stdio.js";
-async function readDaemonMetadata(path6) {
+async function readDaemonMetadata(path7) {
   try {
-    return JSON.parse(await readFile(path6, "utf8"));
+    return JSON.parse(await readFile(path7, "utf8"));
   } catch {
     return null;
   }
@@ -3197,14 +3266,14 @@ var DaemonHealthMismatchError = class extends Error {
     this.metadata = metadata;
   }
 };
-function packagedDaemonEntrypointPath() {
-  const primaryCandidatePath = path5.resolve(import.meta.dirname, "../../dist/bin/fff-routerd.js");
+function packagedDaemonEntrypointPath2() {
+  const primaryCandidatePath = path6.resolve(import.meta.dirname, "../../dist/bin/fff-routerd.js");
   const candidatePaths = [
     primaryCandidatePath,
-    path5.resolve(import.meta.dirname, "../../bin/fff-routerd.js"),
+    path6.resolve(import.meta.dirname, "../../bin/fff-routerd.js"),
   ];
   for (const candidatePath of candidatePaths) {
-    if (existsSync2(candidatePath)) {
+    if (existsSync3(candidatePath)) {
       return candidatePath;
     }
   }
@@ -3221,42 +3290,16 @@ function isProcessAlive(pid) {
     return false;
   }
 }
-function isExecutable(pathValue) {
-  try {
-    accessSync(pathValue, fsConstants.X_OK);
-    return true;
-  } catch {
-    return false;
-  }
-}
-function commandExtensions(env) {
-  if (process.platform !== "win32") {
-    return [""];
-  }
-  const pathExt = env.PATHEXT?.split(";").filter(Boolean);
-  return pathExt && pathExt.length > 0 ? pathExt : [".EXE", ".CMD", ".BAT", ".COM"];
-}
-function defaultResolveExecutableOnPath(command, env) {
-  const pathValue = env.PATH || process.env.PATH || "";
-  const directories = pathValue.split(path5.delimiter).filter(Boolean);
-  const extensions = commandExtensions(env);
-  for (const directory of directories) {
-    for (const extension of extensions) {
-      const candidatePath =
-        process.platform === "win32" && extension && !command.toUpperCase().endsWith(extension)
-          ? path5.join(directory, `${command}${extension}`)
-          : path5.join(directory, command);
-      if (existsSync2(candidatePath) && isExecutable(candidatePath)) {
-        return candidatePath;
-      }
-    }
-  }
-  return null;
-}
 function resolveDaemonLaunchCommand(env = process.env, deps = {}) {
-  if (!deps.preferPackaged) {
+  if (env.FFF_ROUTER_DAEMON_BIN) {
+    return { command: env.FFF_ROUTER_DAEMON_BIN, args: [], source: "env" };
+  }
+  if (env.FFF_ROUTER_DAEMON_ENTRYPOINT) {
+    return { command: process.execPath, args: [env.FFF_ROUTER_DAEMON_ENTRYPOINT], source: "env" };
+  }
+  if (!deps.preferPackaged && env.FFF_ROUTER_DAEMON_ALLOW_PATH === "1") {
     const resolvedCommand = (
-      deps.resolveExecutableOnPath ?? ((command) => defaultResolveExecutableOnPath(command, env))
+      deps.resolveExecutableOnPath ?? ((command) => resolveExecutableOnPath(command, env))
     )("fff-routerd");
     if (resolvedCommand) {
       return { command: resolvedCommand, args: [], source: "path" };
@@ -3264,7 +3307,7 @@ function resolveDaemonLaunchCommand(env = process.env, deps = {}) {
   }
   return {
     command: process.execPath,
-    args: [packagedDaemonEntrypointPath()],
+    args: [packagedDaemonEntrypointPath2()],
     source: "packaged",
   };
 }
@@ -3493,16 +3536,62 @@ function shouldPreserveNewerDaemonMismatch(error, env) {
 }
 function spawnDaemon(env, options) {
   const launchCommand = resolveDaemonLaunchCommand(env ?? process.env, options);
+  const paths = getDaemonPaths({ env });
+  mkdirSync2(paths.dir, { recursive: true });
   const child = spawnChildProcess(launchCommand.command, launchCommand.args, {
     env: env ?? process.env,
     stdio: ["ignore", "pipe", "pipe"],
   });
-  child.stdout?.destroy();
-  child.stderr?.destroy();
+  const stdoutLog = createWriteStream(paths.stdoutLogPath, { flags: "a" });
+  const stderrLog = createWriteStream(paths.stderrLogPath, { flags: "a" });
+  child.stdout?.pipe(stdoutLog);
+  child.stderr?.pipe(stderrLog);
+  child.once("error", (error) => {
+    stderrLog.write(`fff-routerd spawn failed: ${error.message}
+`);
+    stdoutLog.end();
+    stderrLog.end();
+  });
+  child.once("close", () => {
+    stdoutLog.end();
+    stderrLog.end();
+  });
   return {
     unref: () => child.unref(),
     source: launchCommand.source,
   };
+}
+async function readLogTail(pathValue, maxBytes = 4096) {
+  let handle;
+  try {
+    handle = await open(pathValue, "r");
+    const stat = await handle.stat();
+    const length = Math.min(stat.size, maxBytes);
+    const buffer = Buffer.alloc(length);
+    await handle.read(buffer, 0, length, Math.max(0, stat.size - length));
+    return buffer.toString("utf8").trimEnd();
+  } catch {
+    return "";
+  } finally {
+    await handle?.close().catch(() => {});
+  }
+}
+async function formatDaemonStartupError(error, env) {
+  const paths = getDaemonPaths({ env });
+  const message = error instanceof Error ? error.message : String(error);
+  const stderrTail = await readLogTail(paths.stderrLogPath);
+  const details = [
+    message,
+    `daemon stdout log: ${paths.stdoutLogPath}`,
+    `daemon stderr log: ${paths.stderrLogPath}`,
+    ...(stderrTail
+      ? [
+          `recent daemon stderr:
+${stderrTail}`,
+        ]
+      : []),
+  ];
+  return new Error(details.join("\n"));
 }
 async function waitForDaemonReady(env) {
   let lastError;
@@ -3515,7 +3604,16 @@ async function waitForDaemonReady(env) {
       await sleep(delay);
     }
   }
-  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+  throw await formatDaemonStartupError(lastError, env);
+}
+async function readDaemonLogs(env) {
+  const paths = getDaemonPaths({ env });
+  return {
+    stdoutPath: paths.stdoutLogPath,
+    stderrPath: paths.stderrLogPath,
+    stdout: await readLogTail(paths.stdoutLogPath),
+    stderr: await readLogTail(paths.stderrLogPath),
+  };
 }
 async function signalProcess(pid, signal) {
   if (!Number.isFinite(pid) || pid <= 0 || pid === process.pid) {
@@ -3569,7 +3667,7 @@ async function ensureDaemonRunningWithDeps(env, deps) {
       if (shouldPreserveNewerDaemonMismatch(error, env)) {
         return;
       }
-      const pid = mismatchPid(error) ?? (await deps.readRunningDaemonMetadata(env))?.pid ?? null;
+      const pid = mismatchPid(error);
       if (mismatchKind(error) === "reload") {
         if (pid) {
           try {
@@ -3591,10 +3689,6 @@ async function ensureDaemonRunningWithDeps(env, deps) {
       } else if (!isRecoverableHealthError(error)) {
         throw error;
       }
-    }
-    const existingPid = (await deps.readRunningDaemonMetadata(env))?.pid ?? null;
-    if (existingPid) {
-      await deps.terminateProcess(existingPid);
     }
     let child = deps.spawnDaemon(env);
     try {
@@ -3718,23 +3812,13 @@ function unwrapToolResponse(response) {
     throw new Error(`daemon returned invalid JSON: ${first.text}`);
   }
   if (response.isError) {
+    const errorPayload = typeof parsed === "object" && parsed !== null ? parsed : {};
     return {
       ok: false,
       error: {
-        code:
-          typeof parsed === "object" &&
-          parsed &&
-          "code" in parsed &&
-          typeof parsed.code === "string"
-            ? parsed.code
-            : "INTERNAL_ERROR",
+        code: typeof errorPayload.code === "string" ? errorPayload.code : "INTERNAL_ERROR",
         message:
-          typeof parsed === "object" &&
-          parsed &&
-          "message" in parsed &&
-          typeof parsed.message === "string"
-            ? parsed.message
-            : "daemon call failed",
+          typeof errorPayload.message === "string" ? errorPayload.message : "daemon call failed",
       },
     };
   }
@@ -3784,6 +3868,7 @@ export {
   ensureDaemonRunning,
   ensureDaemonRunningWithDeps,
   findFilesInputSchema,
+  formatDaemonStartupError,
   grepInputSchema,
   isCompactOutputMode,
   isJsonOutputMode,
@@ -3797,6 +3882,7 @@ export {
   normalizeWithin,
   parsePublicOutputMode,
   publicErrorResult,
+  readDaemonLogs,
   readRunningDaemonMetadata,
   resolveDaemonLaunchCommand,
   resolveWithinFromCaller,

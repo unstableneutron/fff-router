@@ -36,12 +36,9 @@ var __toESM = (mod, isNodeMode, target) => (
   )
 );
 
-// ../../../.cache/aube/virtual-store/picomatch@4.0.4-57db1111b1e656b2/node_modules/picomatch/lib/constants.js
+// node_modules/.pnpm/picomatch@4.0.4/node_modules/picomatch/lib/constants.js
 var require_constants = __commonJS({
-  "../../../.cache/aube/virtual-store/picomatch@4.0.4-57db1111b1e656b2/node_modules/picomatch/lib/constants.js"(
-    exports,
-    module,
-  ) {
+  "node_modules/.pnpm/picomatch@4.0.4/node_modules/picomatch/lib/constants.js"(exports, module) {
     "use strict";
     var WIN_SLASH = "\\\\/";
     var WIN_NO_SLASH = `[^${WIN_SLASH}]`;
@@ -241,11 +238,9 @@ var require_constants = __commonJS({
   },
 });
 
-// ../../../.cache/aube/virtual-store/picomatch@4.0.4-57db1111b1e656b2/node_modules/picomatch/lib/utils.js
+// node_modules/.pnpm/picomatch@4.0.4/node_modules/picomatch/lib/utils.js
 var require_utils = __commonJS({
-  "../../../.cache/aube/virtual-store/picomatch@4.0.4-57db1111b1e656b2/node_modules/picomatch/lib/utils.js"(
-    exports,
-  ) {
+  "node_modules/.pnpm/picomatch@4.0.4/node_modules/picomatch/lib/utils.js"(exports) {
     "use strict";
     var {
       REGEX_BACKSLASH,
@@ -296,8 +291,8 @@ var require_utils = __commonJS({
       }
       return output;
     };
-    exports.basename = (path16, { windows } = {}) => {
-      const segs = path16.split(windows ? /[\\/]/ : "/");
+    exports.basename = (path17, { windows } = {}) => {
+      const segs = path17.split(windows ? /[\\/]/ : "/");
       const last = segs[segs.length - 1];
       if (last === "") {
         return segs[segs.length - 2];
@@ -307,12 +302,9 @@ var require_utils = __commonJS({
   },
 });
 
-// ../../../.cache/aube/virtual-store/picomatch@4.0.4-57db1111b1e656b2/node_modules/picomatch/lib/scan.js
+// node_modules/.pnpm/picomatch@4.0.4/node_modules/picomatch/lib/scan.js
 var require_scan = __commonJS({
-  "../../../.cache/aube/virtual-store/picomatch@4.0.4-57db1111b1e656b2/node_modules/picomatch/lib/scan.js"(
-    exports,
-    module,
-  ) {
+  "node_modules/.pnpm/picomatch@4.0.4/node_modules/picomatch/lib/scan.js"(exports, module) {
     "use strict";
     var utils = require_utils();
     var {
@@ -645,12 +637,9 @@ var require_scan = __commonJS({
   },
 });
 
-// ../../../.cache/aube/virtual-store/picomatch@4.0.4-57db1111b1e656b2/node_modules/picomatch/lib/parse.js
+// node_modules/.pnpm/picomatch@4.0.4/node_modules/picomatch/lib/parse.js
 var require_parse = __commonJS({
-  "../../../.cache/aube/virtual-store/picomatch@4.0.4-57db1111b1e656b2/node_modules/picomatch/lib/parse.js"(
-    exports,
-    module,
-  ) {
+  "node_modules/.pnpm/picomatch@4.0.4/node_modules/picomatch/lib/parse.js"(exports, module) {
     "use strict";
     var constants = require_constants();
     var utils = require_utils();
@@ -1674,12 +1663,9 @@ var require_parse = __commonJS({
   },
 });
 
-// ../../../.cache/aube/virtual-store/picomatch@4.0.4-57db1111b1e656b2/node_modules/picomatch/lib/picomatch.js
+// node_modules/.pnpm/picomatch@4.0.4/node_modules/picomatch/lib/picomatch.js
 var require_picomatch = __commonJS({
-  "../../../.cache/aube/virtual-store/picomatch@4.0.4-57db1111b1e656b2/node_modules/picomatch/lib/picomatch.js"(
-    exports,
-    module,
-  ) {
+  "node_modules/.pnpm/picomatch@4.0.4/node_modules/picomatch/lib/picomatch.js"(exports, module) {
     "use strict";
     var scan = require_scan();
     var parse = require_parse();
@@ -1819,12 +1805,9 @@ var require_picomatch = __commonJS({
   },
 });
 
-// ../../../.cache/aube/virtual-store/picomatch@4.0.4-57db1111b1e656b2/node_modules/picomatch/index.js
+// node_modules/.pnpm/picomatch@4.0.4/node_modules/picomatch/index.js
 var require_picomatch2 = __commonJS({
-  "../../../.cache/aube/virtual-store/picomatch@4.0.4-57db1111b1e656b2/node_modules/picomatch/index.js"(
-    exports,
-    module,
-  ) {
+  "node_modules/.pnpm/picomatch@4.0.4/node_modules/picomatch/index.js"(exports, module) {
     "use strict";
     var pico = require_picomatch();
     var utils = require_utils();
@@ -1840,12 +1823,170 @@ var require_picomatch2 = __commonJS({
 });
 
 // lib/fff-router/fff-mcp-installer.ts
-import { existsSync } from "node:fs";
 import { chmod, mkdir, rename, writeFile } from "node:fs/promises";
 import os from "node:os";
+import path2 from "node:path";
+
+// lib/fff-router/tool-resolution.ts
+import { spawn } from "node:child_process";
+import { constants as fsConstants, accessSync, existsSync } from "node:fs";
 import path from "node:path";
+var TOOL_ENV_VARS = {
+  "fff-mcp": "FFF_ROUTER_FFF_MCP_BIN",
+  rg: "FFF_ROUTER_RG_BIN",
+  fd: "FFF_ROUTER_FD_BIN",
+};
+function isExecutable(pathValue) {
+  try {
+    accessSync(pathValue, fsConstants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+function commandExtensions(env) {
+  if (process.platform !== "win32") {
+    return [""];
+  }
+  const pathExt = env.PATHEXT?.split(";").filter(Boolean);
+  return pathExt && pathExt.length > 0 ? pathExt : [".EXE", ".CMD", ".BAT", ".COM"];
+}
+function resolveExecutableOnPath(command, env = process.env) {
+  const pathValue = env.PATH || process.env.PATH || "";
+  const directories = pathValue.split(path.delimiter).filter(Boolean);
+  const extensions = commandExtensions(env);
+  for (const directory of directories) {
+    for (const extension of extensions) {
+      const candidatePath =
+        process.platform === "win32" && extension && !command.toUpperCase().endsWith(extension)
+          ? path.join(directory, `${command}${extension}`)
+          : path.join(directory, command);
+      if (existsSync(candidatePath) && isExecutable(candidatePath)) {
+        return candidatePath;
+      }
+    }
+  }
+  return null;
+}
+function remediation(tool, envVar) {
+  return `Install ${tool} or set ${envVar} to an executable path.`;
+}
+function resolveToolCommand(tool, deps = {}) {
+  const env = deps.env ?? process.env;
+  const envVar = TOOL_ENV_VARS[tool];
+  const executableCheck = deps.isExecutable ?? isExecutable;
+  const override = env[envVar];
+  if (override) {
+    const executable = executableCheck(override);
+    return {
+      tool,
+      command: override,
+      source: "env",
+      envVar,
+      executable,
+      ...(!executable ? { remediation: remediation(tool, envVar) } : {}),
+    };
+  }
+  const pathCommand = (
+    deps.resolveExecutableOnPath ?? ((command) => resolveExecutableOnPath(command, env))
+  )(tool);
+  if (pathCommand) {
+    return {
+      tool,
+      command: pathCommand,
+      source: "path",
+      envVar,
+      executable: executableCheck(pathCommand),
+      ...(!executableCheck(pathCommand) ? { remediation: remediation(tool, envVar) } : {}),
+    };
+  }
+  return {
+    tool,
+    command: null,
+    source: "missing",
+    envVar,
+    executable: false,
+    remediation: remediation(tool, envVar),
+  };
+}
+function readStream(stream) {
+  if (!stream) {
+    return Promise.resolve("");
+  }
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    stream.on("data", (chunk) => {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
+    });
+    stream.once("error", reject);
+    stream.once("end", () => {
+      resolve(Buffer.concat(chunks).toString("utf8"));
+    });
+  });
+}
+async function runVersion(command, options) {
+  try {
+    const proc = spawn(command, ["--version"], {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let timedOut = false;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      proc.kill("SIGKILL");
+    }, options.timeoutMs);
+    const [stdout, stderr] = await Promise.all([
+      readStream(proc.stdout),
+      readStream(proc.stderr),
+      new Promise((resolve, reject) => {
+        proc.once("error", reject);
+        proc.once("close", resolve);
+      }),
+    ]);
+    clearTimeout(timeout);
+    if (timedOut) {
+      return void 0;
+    }
+    return (stdout || stderr).trim().split(/\r?\n/)[0] || void 0;
+  } catch {
+    return void 0;
+  }
+}
+async function runVersionWithTimeout(run, command, timeoutMs) {
+  let timeout;
+  try {
+    return await Promise.race([
+      run(command, { timeoutMs }),
+      new Promise((resolve) => {
+        timeout = setTimeout(() => resolve(void 0), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
+async function getToolDiagnostic(tool, deps = {}) {
+  const resolution = resolveToolCommand(tool, deps);
+  if (!resolution.command || !resolution.executable) {
+    return resolution;
+  }
+  const version = (
+    await runVersionWithTimeout(
+      deps.runVersion ?? runVersion,
+      resolution.command,
+      deps.versionTimeoutMs ?? 1e3,
+    )
+  )?.trim();
+  return {
+    ...resolution,
+    ...(version ? { version: version.split(/\r?\n/)[0] } : {}),
+  };
+}
+
+// lib/fff-router/fff-mcp-installer.ts
 function defaultInstallDir(env) {
-  return env.FFF_MCP_INSTALL_DIR || path.join(env.HOME || os.homedir(), ".local", "bin");
+  return env.FFF_MCP_INSTALL_DIR || path2.join(env.HOME || os.homedir(), ".local", "bin");
 }
 function detectFffMcpTarget(platform = process.platform, arch = process.arch) {
   switch (platform) {
@@ -1880,27 +2021,26 @@ function detectFffMcpTarget(platform = process.platform, arch = process.arch) {
       throw new Error(`Unsupported OS: ${platform}`);
   }
 }
-function findFffMcpOnPath(env = process.env) {
-  const pathValue = env.PATH || process.env.PATH || "";
-  const directories = pathValue.split(path.delimiter).filter(Boolean);
-  const names =
-    process.platform === "win32" ? ["fff-mcp.exe", "fff-mcp.cmd", "fff-mcp"] : ["fff-mcp"];
-  for (const directory of directories) {
-    for (const name of names) {
-      const candidate = path.join(directory, name);
-      if (existsSync(candidate)) {
-        return candidate;
-      }
-    }
-  }
-  return null;
-}
 async function getDoctorFffMcpStatus(env = process.env) {
-  const foundPath = findFffMcpOnPath(env);
-  if (!foundPath) {
-    return { found: false };
+  const diagnostic = await getToolDiagnostic("fff-mcp", { env });
+  if (!diagnostic.command) {
+    return {
+      found: false,
+      source: "missing",
+      executable: false,
+      envVar: diagnostic.envVar,
+      ...(diagnostic.remediation ? { remediation: diagnostic.remediation } : {}),
+    };
   }
-  return { found: true, path: foundPath };
+  return {
+    found: true,
+    path: diagnostic.command,
+    source: diagnostic.source === "env" ? "env" : "path",
+    executable: diagnostic.executable,
+    envVar: diagnostic.envVar,
+    ...(diagnostic.version ? { version: diagnostic.version } : {}),
+    ...(diagnostic.remediation ? { remediation: diagnostic.remediation } : {}),
+  };
 }
 function releaseFilename(target) {
   const extension = target.includes("windows") ? ".exe" : "";
@@ -1923,15 +2063,15 @@ async function installFffMcpBinary(args = {}) {
   const installDir = defaultInstallDir(env);
   const filename = releaseFilename(target);
   const binaryName = target.includes("windows") ? "fff-mcp.exe" : "fff-mcp";
-  const tempPath = path.join(installDir, `${binaryName}.download`);
-  const finalPath = path.join(installDir, binaryName);
+  const tempPath = path2.join(installDir, `${binaryName}.download`);
+  const finalPath = path2.join(installDir, binaryName);
   const url = `https://github.com/dmtrKovalenko/fff.nvim/releases/download/${tag}/${filename}`;
   await mkdir(installDir, { recursive: true });
   await downloadToFile2(url, tempPath);
   await chmod(tempPath, 493);
   await rename(tempPath, finalPath);
   await writeFile(
-    path.join(installDir, ".fff-mcp-install.json"),
+    path2.join(installDir, ".fff-mcp-install.json"),
     `${JSON.stringify({ tag, target, installedAt: Date.now() }, null, 2)}
 `,
   );
@@ -1939,7 +2079,7 @@ async function installFffMcpBinary(args = {}) {
 }
 
 // lib/fff-router/agent-mcp.ts
-import path14 from "node:path";
+import path15 from "node:path";
 import { stdin as processStdin } from "node:process";
 import * as z2 from "zod/v4";
 import { McpServer as McpServer2 } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -1947,15 +2087,15 @@ import { StdioServerTransport as StdioServerTransport3 } from "@modelcontextprot
 
 // lib/fff-router/daemon-autostart.ts
 import { spawn as spawnChildProcess } from "node:child_process";
-import { constants as fsConstants, accessSync, existsSync as existsSync3 } from "node:fs";
+import { createWriteStream, existsSync as existsSync3, mkdirSync as mkdirSync2 } from "node:fs";
 import { mkdir as mkdir3, open, readFile as readFile2, rm as rm2 } from "node:fs/promises";
-import path13 from "node:path";
+import path14 from "node:path";
 
 // lib/fff-router/daemon-config.ts
 import { createHash } from "node:crypto";
 import { existsSync as existsSync2, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import os2 from "node:os";
-import path3 from "node:path";
+import path4 from "node:path";
 
 // lib/fff-router/backend-config.ts
 function parseBackend(raw) {
@@ -1980,7 +2120,7 @@ function getDefaultFallbackBackend(primaryBackendId) {
 }
 
 // lib/fff-router/home-path.ts
-import path2 from "node:path";
+import path3 from "node:path";
 function invalid(message) {
   return {
     ok: false,
@@ -1991,7 +2131,7 @@ function invalid(message) {
   };
 }
 function joinHome(home, suffix) {
-  return suffix ? path2.join(home, suffix) : home;
+  return suffix ? path3.join(home, suffix) : home;
 }
 function expandHomePath(candidate, env = process.env) {
   const trimmed = candidate.trim();
@@ -2000,7 +2140,7 @@ function expandHomePath(candidate, env = process.env) {
     if (!home) {
       return invalid("HOME must be set to expand '~', '$HOME', or '${HOME}' paths");
     }
-    if (!path2.isAbsolute(home)) {
+    if (!path3.isAbsolute(home)) {
       return invalid("HOME must be absolute to expand '~', '$HOME', or '${HOME}' paths");
     }
     return { ok: true, value: joinHome(home, trimmed.slice(2)) };
@@ -2009,7 +2149,7 @@ function expandHomePath(candidate, env = process.env) {
     if (!home) {
       return invalid("HOME must be set to expand '~', '$HOME', or '${HOME}' paths");
     }
-    if (!path2.isAbsolute(home)) {
+    if (!path3.isAbsolute(home)) {
       return invalid("HOME must be absolute to expand '~', '$HOME', or '${HOME}' paths");
     }
     return { ok: true, value: joinHome(home, trimmed.slice("$HOME/".length)) };
@@ -2018,7 +2158,7 @@ function expandHomePath(candidate, env = process.env) {
     if (!home) {
       return invalid("HOME must be set to expand '~', '$HOME', or '${HOME}' paths");
     }
-    if (!path2.isAbsolute(home)) {
+    if (!path3.isAbsolute(home)) {
       return invalid("HOME must be absolute to expand '~', '$HOME', or '${HOME}' paths");
     }
     return { ok: true, value: joinHome(home, trimmed.slice("${HOME}/".length)) };
@@ -2032,10 +2172,11 @@ var DAEMON_PROTOCOL_VERSION = "fff-router-http-daemon-v1";
 var DEFAULT_DAEMON_PORT = 4319;
 var DEFAULT_DAEMON_MCP_PATH = "/mcp";
 var DEFAULT_BACKEND = "fff-node";
+var DEFAULT_BACKEND_TOOL_TIMEOUT_MS = 3e4;
 function packageVersion() {
   const candidatePaths = [
-    path3.resolve(import.meta.dirname, "../../package.json"),
-    path3.resolve(import.meta.dirname, "../../../package.json"),
+    path4.resolve(import.meta.dirname, "../../package.json"),
+    path4.resolve(import.meta.dirname, "../../../package.json"),
   ];
   for (const candidatePath of candidatePaths) {
     if (!existsSync2(candidatePath)) {
@@ -2052,18 +2193,54 @@ var PACKAGE_VERSION = packageVersion();
 function hashFingerprint(value) {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex").slice(0, 16);
 }
+function packagedDaemonEntrypointPath() {
+  const primaryCandidatePath = path4.resolve(import.meta.dirname, "../../dist/bin/fff-routerd.js");
+  const candidatePaths = [
+    primaryCandidatePath,
+    path4.resolve(import.meta.dirname, "../../bin/fff-routerd.js"),
+  ];
+  for (const candidatePath of candidatePaths) {
+    if (existsSync2(candidatePath)) {
+      return candidatePath;
+    }
+  }
+  return primaryCandidatePath;
+}
+function contentFingerprint(pathValue) {
+  try {
+    return createHash("sha256").update(readFileSync(pathValue)).digest("hex");
+  } catch {
+    return "missing";
+  }
+}
+function getDaemonSourceFingerprint(args = {}) {
+  const env = args.env ?? process.env;
+  if (env.FFF_ROUTER_DAEMON_SOURCE_FINGERPRINT) {
+    return env.FFF_ROUTER_DAEMON_SOURCE_FINGERPRINT;
+  }
+  const daemonEntrypointPath =
+    args.daemonEntrypointPath ??
+    env.FFF_ROUTER_DAEMON_BIN ??
+    env.FFF_ROUTER_DAEMON_ENTRYPOINT ??
+    packagedDaemonEntrypointPath();
+  return hashFingerprint({
+    packageVersion: PACKAGE_VERSION,
+    daemonEntrypointPath,
+    content: contentFingerprint(daemonEntrypointPath),
+  });
+}
 function configHome(env) {
   return env.HOME || os2.homedir();
 }
 function stateHome(env) {
-  return env.XDG_STATE_HOME || path3.join(configHome(env), ".local", "state");
+  return env.XDG_STATE_HOME || path4.join(configHome(env), ".local", "state");
 }
 function mcpSocketPathForStateDir(dir) {
   const id = hashFingerprint({ dir });
   if (process.platform === "win32") {
     return `\\\\.\\pipe\\fff-routerd-${id}`;
   }
-  return path3.join("/tmp", `fff-routerd-${id}.sock`);
+  return path4.join("/tmp", `fff-routerd-${id}.sock`);
 }
 function getDefaultDaemonConfig() {
   return {
@@ -2086,6 +2263,9 @@ function getDefaultRouterConfig() {
     limits: {
       maxPersistentDaemons: 12,
       maxPersistentNonGitDaemons: 4,
+    },
+    runtime: {
+      toolTimeoutMs: DEFAULT_BACKEND_TOOL_TIMEOUT_MS,
     },
   };
 }
@@ -2110,6 +2290,9 @@ function getDefaultDaemonFileConfig() {
     promotion: { ...reload.router.promotion },
     ttl: { ...reload.router.ttl },
     limits: { ...reload.router.limits },
+    runtime: {
+      toolTimeoutMs: reload.router.runtime?.toolTimeoutMs ?? DEFAULT_BACKEND_TOOL_TIMEOUT_MS,
+    },
   };
 }
 function serializeDefaultDaemonFileConfig() {
@@ -2118,11 +2301,11 @@ function serializeDefaultDaemonFileConfig() {
 }
 function getDaemonPolicyConfigPaths(args = {}) {
   const env = args.env ?? process.env;
-  const dir = path3.join(configHome(env), ".config", "fff-routerd");
+  const dir = path4.join(configHome(env), ".config", "fff-routerd");
   return {
     dir,
-    jsonPath: path3.join(dir, "config.json"),
-    jsoncPath: path3.join(dir, "config.jsonc"),
+    jsonPath: path4.join(dir, "config.json"),
+    jsoncPath: path4.join(dir, "config.jsonc"),
   };
 }
 function ensureDefaultConfigFile(paths) {
@@ -2337,6 +2520,7 @@ function normalizeDaemonFileConfig(raw, env) {
     fileConfig.promotion == null ? null : expectObject(fileConfig.promotion, "promotion");
   const ttl = fileConfig.ttl == null ? null : expectObject(fileConfig.ttl, "ttl");
   const limits = fileConfig.limits == null ? null : expectObject(fileConfig.limits, "limits");
+  const runtime = fileConfig.runtime == null ? null : expectObject(fileConfig.runtime, "runtime");
   const normalizedEnv = { ...env, HOME: configHome(env) };
   const backendId = readOptionalBackend(fileConfig.backend) ?? defaults.backend;
   const allowlist =
@@ -2361,6 +2545,9 @@ function normalizeDaemonFileConfig(raw, env) {
       limits?.maxPersistentNonGitDaemons,
       "limits.maxPersistentNonGitDaemons",
     ) ?? defaults.limits.maxPersistentNonGitDaemons;
+  const toolTimeoutMs =
+    readOptionalNonNegativeInteger(runtime?.toolTimeoutMs, "runtime.toolTimeoutMs") ??
+    defaults.runtime.toolTimeoutMs;
   return {
     daemon: {
       host,
@@ -2385,6 +2572,9 @@ function normalizeDaemonFileConfig(raw, env) {
         limits: {
           maxPersistentDaemons,
           maxPersistentNonGitDaemons,
+        },
+        runtime: {
+          toolTimeoutMs,
         },
       },
     },
@@ -2452,6 +2642,7 @@ function getDaemonServerFingerprint(args = {}) {
     },
     mcpSocketPath: paths.mcpSocketPath,
     protocolVersion: DAEMON_PROTOCOL_VERSION,
+    daemonSourceFingerprint: getDaemonSourceFingerprint({ env: args.env }),
   });
 }
 function getDaemonReloadFingerprintForConfig(config) {
@@ -2462,11 +2653,13 @@ function getDaemonReloadFingerprint(args = {}) {
 }
 function getDaemonPaths(args = {}) {
   const env = args.env ?? process.env;
-  const dir = path3.join(stateHome(env), "fff-routerd");
+  const dir = path4.join(stateHome(env), "fff-routerd");
   return {
     dir,
-    metadataPath: path3.join(dir, "daemon.json"),
-    lockPath: path3.join(dir, "startup.lock"),
+    metadataPath: path4.join(dir, "daemon.json"),
+    lockPath: path4.join(dir, "startup.lock"),
+    stdoutLogPath: path4.join(dir, "daemon.stdout.log"),
+    stderrLogPath: path4.join(dir, "daemon.stderr.log"),
     mcpSocketPath: mcpSocketPathForStateDir(dir),
   };
 }
@@ -2478,13 +2671,13 @@ import { createServer as createNetServer } from "node:net";
 import { mkdir as mkdir2, readFile, rm, writeFile as writeFile2 } from "node:fs/promises";
 
 // lib/fff-router/adapters/fff-mcp-stdio.ts
-import path5 from "node:path";
+import path6 from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
 // lib/fff-router/adapters/common.ts
 var import_picomatch = __toESM(require_picomatch2(), 1);
-import path4 from "node:path";
+import path5 from "node:path";
 function normalizeRelativePath(relativePath) {
   return relativePath.replace(/\\/g, "/");
 }
@@ -2492,7 +2685,7 @@ function matchesSingleEntry(entry, candidatePath) {
   if (entry.fileRestriction) {
     return candidatePath === entry.fileRestriction;
   }
-  return candidatePath === entry.within || candidatePath.startsWith(entry.within + path4.sep);
+  return candidatePath === entry.within || candidatePath.startsWith(entry.within + path5.sep);
 }
 function pathWithinScope(request, candidatePath) {
   if (
@@ -2553,10 +2746,11 @@ function filterItems(request, items) {
     .slice(0, request.limit);
 }
 function toRelativePath(persistenceRoot, absolutePath) {
-  return normalizeRelativePath(path4.relative(persistenceRoot, absolutePath));
+  return normalizeRelativePath(path5.relative(persistenceRoot, absolutePath));
 }
 
 // lib/fff-router/adapters/fff-mcp-stdio.ts
+var MAX_FILTERED_CURSOR_PAGES = 20;
 function backendUnavailable(message) {
   return {
     ok: false,
@@ -2578,10 +2772,32 @@ function searchFailed(message) {
   };
 }
 function discoverFffMcpCommand() {
-  return process.env.FFF_ROUTER_FFF_MCP_BIN || "fff-mcp";
+  const resolution = resolveToolCommand("fff-mcp");
+  if (!resolution.command || !resolution.executable) {
+    throw new Error(resolution.remediation ?? "fff-mcp is not available");
+  }
+  return resolution.command;
 }
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+async function closeBestEffort(close, timeoutMs) {
+  let timeout = null;
+  try {
+    await Promise.race([
+      Promise.resolve()
+        .then(close)
+        .catch(() => {}),
+      new Promise((resolve) => {
+        timeout = setTimeout(resolve, timeoutMs);
+        timeout.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
 }
 function inheritedStringEnv() {
   return Object.fromEntries(
@@ -2591,6 +2807,19 @@ function inheritedStringEnv() {
 function normalizeRelative(relativePath) {
   return relativePath.replace(/\\/g, "/").replace(/^\.\//, "");
 }
+var GLOB_META_PATTERN = /[*?[\]{}!]/;
+function compileFffMcpGlobConstraint(glob) {
+  const normalized = normalizeRelative(glob);
+  if (
+    !normalized.includes("/") ||
+    normalized.startsWith("**/") ||
+    normalized.endsWith("/") ||
+    GLOB_META_PATTERN.test(normalized)
+  ) {
+    return glob;
+  }
+  return `**/${normalized}`;
+}
 function formatExcludeConstraint(excludePath) {
   return excludePath.includes(".") || excludePath.endsWith("/")
     ? `!${excludePath}`
@@ -2598,13 +2827,13 @@ function formatExcludeConstraint(excludePath) {
 }
 function encodeWithinEntryToken(entry, persistenceRoot) {
   if (entry.fileRestriction) {
-    const relativeFile = normalizeRelative(path5.relative(persistenceRoot, entry.fileRestriction));
+    const relativeFile = normalizeRelative(path6.relative(persistenceRoot, entry.fileRestriction));
     if (!relativeFile || relativeFile === ".") {
       return null;
     }
     return `**/${relativeFile}`;
   }
-  const baseRelative = normalizeRelative(path5.relative(persistenceRoot, entry.basePath));
+  const baseRelative = normalizeRelative(path6.relative(persistenceRoot, entry.basePath));
   if (!baseRelative || baseRelative === ".") {
     return null;
   }
@@ -2648,21 +2877,21 @@ function buildConstraintTokens(request) {
     }
   } else if (request.fileRestriction) {
     const relativeFile = normalizeRelative(
-      path5.relative(request.persistenceRoot, request.fileRestriction),
+      path6.relative(request.persistenceRoot, request.fileRestriction),
     );
     if (relativeFile && relativeFile !== ".") {
       tokens.push(`**/${relativeFile}`);
     }
   } else {
     const baseRelative = normalizeRelative(
-      path5.relative(request.persistenceRoot, request.basePath),
+      path6.relative(request.persistenceRoot, request.basePath),
     );
     if (baseRelative && baseRelative !== ".") {
       tokens.push(baseRelative.endsWith("/") ? baseRelative : `${baseRelative}/`);
     }
   }
   if (request.glob) {
-    tokens.push(request.glob);
+    tokens.push(compileFffMcpGlobConstraint(request.glob));
   }
   for (const extension of request.extensions) {
     tokens.push(`*.${extension}`);
@@ -2739,7 +2968,7 @@ function parseFindFilesOutput(text, persistenceRoot) {
       continue;
     }
     items.push({
-      path: path5.join(persistenceRoot, relativePath),
+      path: path6.join(persistenceRoot, relativePath),
       relativePath,
     });
   }
@@ -2880,7 +3109,7 @@ function parseTextMatchOutput(text, persistenceRoot) {
           continue;
         }
         currentMatch = {
-          path: path5.join(persistenceRoot, currentPath),
+          path: path6.join(persistenceRoot, currentPath),
           relativePath: currentPath,
           line: lineNumber,
           text: content,
@@ -2920,10 +3149,151 @@ function parseTextMatchOutput(text, persistenceRoot) {
 function rewriteRenderedCompactIfNeeded(text, originalItems, filteredItems) {
   const survivingPaths = new Set(filteredItems.map((item) => item.relativePath));
   const somethingDropped = originalItems.some((item) => !survivingPaths.has(item.relativePath));
-  if (!somethingDropped) {
-    return text;
+  const filteredText = somethingDropped
+    ? filterRenderedCompactText(text, (relativePath) => survivingPaths.has(relativePath))
+    : text;
+  const renderedText =
+    somethingDropped || filteredItems.length === 0
+      ? stripUnsupportedCursorLines(filteredText)
+      : filteredText;
+  if (isMetadataOnlyCompactText(renderedText)) {
+    return void 0;
   }
-  return filterRenderedCompactText(text, (relativePath) => survivingPaths.has(relativePath));
+  return renderedText;
+}
+function stripUnsupportedCursorLines(text) {
+  let removed = false;
+  const lines = text.split(/\r?\n/).filter((rawLine) => {
+    const line = rawLine.trimEnd();
+    if (line.startsWith("cursor:")) {
+      removed = true;
+      return false;
+    }
+    return true;
+  });
+  return removed ? lines.join("\n").trimEnd() : text;
+}
+function isMetadataOnlyCompactText(text) {
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trimEnd();
+    if (!line || /^\d+\/\d+\s+matches\s+shown$/.test(line)) {
+      continue;
+    }
+    return false;
+  }
+  return true;
+}
+function extractUnsupportedCursor(text) {
+  for (const rawLine of text.split(/\r?\n/)) {
+    const match = rawLine.trimEnd().match(/^cursor:\s*(\S+)\s*$/);
+    if (match?.[1]) {
+      return match[1];
+    }
+  }
+  return null;
+}
+function evaluateTextMatchPage(request, text) {
+  const parsed = parseTextMatchOutput(text, request.persistenceRoot);
+  const filteredItems = filterItems(request, parsed.items).filter(isTextMatchItem);
+  return {
+    text,
+    parsed,
+    filteredItems,
+  };
+}
+function isTextMatchItem(item) {
+  return typeof item.line === "number" && typeof item.text === "string";
+}
+function renderSyntheticTextMatchCompact(items) {
+  if (items.length === 0) {
+    return void 0;
+  }
+  const label = items.length === 1 ? "filtered match" : "filtered matches";
+  const lines = [`${items.length} ${label} shown`];
+  for (const item of items) {
+    lines.push(`${item.relativePath}${item.isDefinition ? " [def]" : ""}`);
+    lines.push(` ${item.line}: ${item.text}`);
+  }
+  return lines.join("\n");
+}
+function renderDrainedTextMatchCompact(pages, items) {
+  if (pages.length <= 1) {
+    const page = pages[0];
+    if (!page) {
+      return void 0;
+    }
+    return rewriteRenderedCompactIfNeeded(page.text, page.parsed.items, page.filteredItems);
+  }
+  return renderSyntheticTextMatchCompact(items);
+}
+function summarizeDrainedTextMatchPages(pages, collectedItems) {
+  if (pages.length <= 1) {
+    const page = pages[0];
+    if (!page) {
+      return {};
+    }
+    return summarizeFilteredTextMatchPage(page.parsed.summary, page.filteredItems);
+  }
+  if (collectedItems.length === 0) {
+    return {};
+  }
+  return { shownCount: collectedItems.length };
+}
+function summarizeFilteredTextMatchPage(summary, filteredItems) {
+  if (filteredItems.length === 0) {
+    return {};
+  }
+  return narrowSummaryToSurvivingPaths(summary, filteredItems);
+}
+async function executeTextMatchWithFilteredCursorDrain(runtime, toolName, baseArguments, request) {
+  let text = await callToolText(runtime, toolName, baseArguments);
+  let page = evaluateTextMatchPage(request, text);
+  const pages = [page];
+  const collectedItems = [...page.filteredItems];
+  const seenCursors = /* @__PURE__ */ new Set();
+  let repeatedCursor;
+  let pageCapHit = false;
+  let nextCursor = page.parsed.nextCursor ?? extractUnsupportedCursor(text);
+  const shouldDrainFilteredPages = request.cursor === null || request.cursor === void 0;
+  while (shouldDrainFilteredPages && collectedItems.length < request.limit) {
+    if (nextCursor === null) {
+      break;
+    }
+    if (seenCursors.has(nextCursor)) {
+      repeatedCursor = nextCursor;
+      break;
+    }
+    if (pages.length >= MAX_FILTERED_CURSOR_PAGES) {
+      pageCapHit = true;
+      break;
+    }
+    seenCursors.add(nextCursor);
+    text = await callToolText(runtime, toolName, { ...baseArguments, cursor: nextCursor });
+    page = evaluateTextMatchPage(request, text);
+    pages.push(page);
+    collectedItems.push(...page.filteredItems);
+    nextCursor = page.parsed.nextCursor ?? extractUnsupportedCursor(text);
+  }
+  const items = collectedItems.slice(0, request.limit);
+  const filteredOutCount = pages.reduce(
+    (count, drainedPage) =>
+      count + Math.max(0, drainedPage.parsed.items.length - drainedPage.filteredItems.length),
+    0,
+  );
+  return {
+    items,
+    nextCursor,
+    renderedCompact: renderDrainedTextMatchCompact(pages, items),
+    summary: summarizeDrainedTextMatchPages(pages, items),
+    diagnostics: {
+      cursorDrain: {
+        pagesFetched: pages.length,
+        filteredOutCount,
+        ...(repeatedCursor ? { repeatedCursor } : {}),
+        pageCapHit,
+      },
+    },
+  };
 }
 function rewriteRenderedFindFilesIfNeeded(text, originalItems, filteredItems) {
   const survivingPaths = new Set(filteredItems.map((item) => item.relativePath));
@@ -2999,28 +3369,56 @@ async function waitForFffMcpReady(callTool, optionsOrDelay = {}) {
       ". Raise FFF_ROUTER_FFF_MCP_READY_TIMEOUT_MS if this repository is large.",
   );
 }
-function createFffMcpStdioAdapter() {
+function createFffMcpStdioAdapter(options = {}) {
   return {
     backendId: "fff-mcp",
     supportedQueryKinds: ["find_files", "search_terms", "grep"],
     async startRuntime(args) {
-      const transport = new StdioClientTransport({
+      const transportParams = {
         command: discoverFffMcpCommand(),
         args: [args.persistenceRoot],
         cwd: args.persistenceRoot,
         env: inheritedStringEnv(),
         stderr: "pipe",
-      });
-      const client = new Client(
-        { name: "fff-router-fff-mcp", version: "1.0.0" },
-        { capabilities: {} },
-      );
+      };
+      const transport =
+        options.createTransport?.(transportParams) ?? new StdioClientTransport(transportParams);
+      const client =
+        options.createClient?.() ??
+        new Client({ name: "fff-router-fff-mcp", version: "1.0.0" }, { capabilities: {} });
       await client.connect(transport);
+      let closed = false;
+      const closeHandlers = /* @__PURE__ */ new Set();
+      const markClosed = () => {
+        if (closed) {
+          return;
+        }
+        closed = true;
+        for (const handler of closeHandlers) {
+          handler();
+        }
+      };
+      const previousOnClose = transport.onclose;
+      transport.onclose = () => {
+        markClosed();
+        previousOnClose?.();
+      };
       const runtime = {
         id: `fff-mcp::${args.persistenceRoot}`,
+        get pid() {
+          return transport.pid ?? null;
+        },
+        onClose(handler) {
+          closeHandlers.add(handler);
+          return () => {
+            closeHandlers.delete(handler);
+          };
+        },
         async close() {
-          await client.close().catch(() => {});
-          await transport.close().catch(() => {});
+          markClosed();
+          const closeTimeoutMs = options.closeTimeoutMs ?? 500;
+          await closeBestEffort(() => client.close(), closeTimeoutMs);
+          await closeBestEffort(() => transport.close(), closeTimeoutMs);
         },
         async callTool(name, args2) {
           const response = await client.callTool({ name, arguments: args2 });
@@ -3032,7 +3430,7 @@ function createFffMcpStdioAdapter() {
         },
       };
       try {
-        await waitForFffMcpReady(runtime.callTool.bind(runtime));
+        await (options.waitForReady ?? waitForFffMcpReady)(runtime.callTool.bind(runtime));
       } catch (error) {
         await Promise.resolve(runtime.close()).catch(() => {});
         throw error;
@@ -3072,32 +3470,33 @@ function createFffMcpStdioAdapter() {
             };
           }
           case "search_terms": {
-            const text = await callToolText(args.runtime, "multi_grep", {
-              patterns: args.request.terms,
-              constraints: compileConstraints(args.request),
-              maxResults: args.request.limit,
-              context: args.request.contextLines,
-              ...(args.request.cursor !== null && args.request.cursor !== void 0
-                ? { cursor: args.request.cursor }
-                : {}),
-            });
-            const parsed = parseTextMatchOutput(text, args.request.persistenceRoot);
-            const filteredItems = filterItems(args.request, parsed.items);
+            const value = await executeTextMatchWithFilteredCursorDrain(
+              args.runtime,
+              "multi_grep",
+              {
+                patterns: args.request.terms,
+                constraints: compileConstraints(args.request),
+                maxResults: args.request.limit,
+                context: args.request.contextLines,
+                ...(args.request.cursor !== null && args.request.cursor !== void 0
+                  ? { cursor: args.request.cursor }
+                  : {}),
+              },
+              args.request,
+            );
             return {
               ok: true,
               value: {
                 backendId: "fff-mcp",
                 queryKind: "search_terms",
-                items: filteredItems,
-                nextCursor: parsed.nextCursor,
-                renderedCompact: rewriteRenderedCompactIfNeeded(text, parsed.items, filteredItems),
-                summary: narrowSummaryToSurvivingPaths(parsed.summary, filteredItems),
+                ...value,
               },
             };
           }
           case "grep": {
-            const text = args.request.literal
-              ? await callToolText(args.runtime, "multi_grep", {
+            const toolName = args.request.literal ? "multi_grep" : "grep";
+            const toolArguments = args.request.literal
+              ? {
                   patterns: args.request.patterns,
                   constraints: compileConstraints(args.request),
                   maxResults: args.request.limit,
@@ -3105,25 +3504,26 @@ function createFffMcpStdioAdapter() {
                   ...(args.request.cursor !== null && args.request.cursor !== void 0
                     ? { cursor: args.request.cursor }
                     : {}),
-                })
-              : await callToolText(args.runtime, "grep", {
+                }
+              : {
                   query: compileGrepQuery(args.request),
                   maxResults: args.request.limit,
                   ...(args.request.cursor !== null && args.request.cursor !== void 0
                     ? { cursor: args.request.cursor }
                     : {}),
-                });
-            const parsed = parseTextMatchOutput(text, args.request.persistenceRoot);
-            const filteredItems = filterItems(args.request, parsed.items);
+                };
+            const value = await executeTextMatchWithFilteredCursorDrain(
+              args.runtime,
+              toolName,
+              toolArguments,
+              args.request,
+            );
             return {
               ok: true,
               value: {
                 backendId: "fff-mcp",
                 queryKind: "grep",
-                items: filteredItems,
-                nextCursor: parsed.nextCursor,
-                renderedCompact: rewriteRenderedCompactIfNeeded(text, parsed.items, filteredItems),
-                summary: narrowSummaryToSurvivingPaths(parsed.summary, filteredItems),
+                ...value,
               },
             };
           }
@@ -3137,12 +3537,12 @@ function createFffMcpStdioAdapter() {
 
 // lib/fff-router/adapters/fff-scope.ts
 import fs from "node:fs";
-import path6 from "node:path";
+import path7 from "node:path";
 function isEncodableToken(token) {
   return token !== "" && token !== "." && !/\s/.test(token);
 }
 function looksLikeFile(relativePath) {
-  const base = path6.posix.basename(relativePath);
+  const base = path7.posix.basename(relativePath);
   const dot = base.lastIndexOf(".");
   if (dot <= 0 || dot === base.length - 1) {
     return false;
@@ -3151,7 +3551,7 @@ function looksLikeFile(relativePath) {
   return /^[A-Za-z][A-Za-z0-9]{0,9}$/.test(ext);
 }
 function classifyPathKind(persistenceRoot, relativePath) {
-  const absolutePath = path6.join(persistenceRoot, relativePath);
+  const absolutePath = path7.join(persistenceRoot, relativePath);
   try {
     const stats = fs.statSync(absolutePath);
     return stats.isFile() ? "file" : "dir";
@@ -3168,7 +3568,7 @@ function encodePathToken(relativePath, kind, negate = false) {
   return `${negate ? "!" : ""}${normalized}${suffix}`;
 }
 function toRepoRelativeToken(request, candidatePath) {
-  if (path6.isAbsolute(candidatePath)) {
+  if (path7.isAbsolute(candidatePath)) {
     return toRelativePath(request.persistenceRoot, candidatePath);
   }
   return normalizeRelativePath(candidatePath);
@@ -3423,9 +3823,9 @@ function createFffNodeAdapter() {
 }
 
 // lib/fff-router/adapters/rg.ts
-import { spawn } from "node:child_process";
-import path7 from "node:path";
-function readStream(stream) {
+import { spawn as spawn2 } from "node:child_process";
+import path8 from "node:path";
+function readStream2(stream) {
   if (!stream) {
     return Promise.resolve("");
   }
@@ -3442,13 +3842,13 @@ function readStream(stream) {
 }
 async function runCommandWithSpawn(command, args, cwd) {
   try {
-    const proc = spawn(command, args, {
+    const proc = spawn2(command, args, {
       cwd,
       stdio: ["ignore", "pipe", "pipe"],
     });
     const [stdout, stderr, exitCode] = await Promise.all([
-      readStream(proc.stdout),
-      readStream(proc.stderr),
+      readStream2(proc.stdout),
+      readStream2(proc.stderr),
       new Promise((resolve, reject) => {
         proc.once("error", reject);
         proc.once("close", resolve);
@@ -3593,6 +3993,7 @@ function parseRgJsonMatches(stdout, persistenceRoot) {
 }
 function createRgAdapter(deps) {
   const runCommand = deps?.runCommand ?? defaultRunCommand;
+  const resolveToolCommand2 = deps?.resolveToolCommand ?? resolveToolCommand;
   return {
     backendId: "rg",
     supportedQueryKinds: ["find_files", "search_terms", "grep"],
@@ -3600,8 +4001,12 @@ function createRgAdapter(deps) {
       switch (args.request.queryKind) {
         case "find_files": {
           const request = args.request;
+          const fd = resolveToolCommand2("fd");
+          if (!fd.command || !fd.executable) {
+            return backendUnavailable3(fd.remediation ?? "fd is not available");
+          }
           const command = await runCommand(
-            "fd",
+            fd.command,
             [
               "--type",
               "f",
@@ -3614,7 +4019,7 @@ function createRgAdapter(deps) {
             request.persistenceRoot,
           );
           if (!command.ok) {
-            return mapCommandFailure("fd", command);
+            return mapCommandFailure(fd.command, command);
           }
           const items = filterItems(
             request,
@@ -3622,7 +4027,7 @@ function createRgAdapter(deps) {
               .split(/\r?\n/)
               .filter(Boolean)
               .map((relativePath) => ({
-                path: path7.join(request.persistenceRoot, relativePath),
+                path: path8.join(request.persistenceRoot, relativePath),
                 relativePath: relativePath.replace(/\\/g, "/"),
               }))
               .filter((item) => fuzzyMatch(item.relativePath, request.query)),
@@ -3639,8 +4044,12 @@ function createRgAdapter(deps) {
         }
         case "search_terms": {
           const request = args.request;
+          const rg = resolveToolCommand2("rg");
+          if (!rg.command || !rg.executable) {
+            return backendUnavailable3(rg.remediation ?? "rg is not available");
+          }
           const command = await runCommand(
-            "rg",
+            rg.command,
             [
               "--json",
               "--fixed-strings",
@@ -3653,7 +4062,7 @@ function createRgAdapter(deps) {
             request.persistenceRoot,
           );
           if (!command.ok) {
-            return mapCommandFailure("rg", command);
+            return mapCommandFailure(rg.command, command);
           }
           const parsed = parseRgJsonMatches(command.stdout, request.persistenceRoot);
           if (!parsed.ok) {
@@ -3685,9 +4094,13 @@ function createRgAdapter(deps) {
           }
           rgArgs.push(...request.patterns.flatMap((pattern) => ["-e", pattern]));
           rgArgs.push(...buildSearchTargets(request));
-          const command = await runCommand("rg", rgArgs, request.persistenceRoot);
+          const rg = resolveToolCommand2("rg");
+          if (!rg.command || !rg.executable) {
+            return backendUnavailable3(rg.remediation ?? "rg is not available");
+          }
+          const command = await runCommand(rg.command, rgArgs, request.persistenceRoot);
           if (!command.ok) {
-            return mapCommandFailure("rg", command);
+            return mapCommandFailure(rg.command, command);
           }
           const parsed = parseRgJsonMatches(command.stdout, request.persistenceRoot);
           if (!parsed.ok) {
@@ -3717,7 +4130,7 @@ import * as z from "zod/v4";
 
 // lib/fff-router/public-api.ts
 var import_picomatch2 = __toESM(require_picomatch2(), 1);
-import path8 from "node:path";
+import path9 from "node:path";
 import fs2 from "node:fs";
 import { Type } from "@sinclair/typebox";
 var EXTENSION_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._+-]*$/;
@@ -3766,7 +4179,7 @@ function normalizeWithinString(value, env) {
   if (!expanded.ok) {
     return expanded;
   }
-  if (!path8.isAbsolute(expanded.value)) {
+  if (!path9.isAbsolute(expanded.value)) {
     return invalid2("within must be absolute for direct MCP callers");
   }
   return { ok: true, value: expanded.value };
@@ -3833,7 +4246,7 @@ function normalizeGlobPattern(value) {
   if (!trimmed) {
     return invalid2("glob must not be empty");
   }
-  if (path8.isAbsolute(trimmed)) {
+  if (path9.isAbsolute(trimmed)) {
     return invalid2("glob must be relative to the resolved base path");
   }
   if (trimmed.startsWith("!")) {
@@ -3862,7 +4275,7 @@ function validateExcludePathSyntax(entry) {
   if (!trimmed) {
     return invalid2("exclude_paths must not contain empty values");
   }
-  if (path8.isAbsolute(trimmed)) {
+  if (path9.isAbsolute(trimmed)) {
     return invalid2("exclude_paths must be relative to the resolved base path");
   }
   if (trimmed.startsWith("!")) {
@@ -3894,7 +4307,7 @@ function resolveExcludeExpansionBase(within) {
   }
   try {
     const stats = fs2.statSync(primaryWithin);
-    return stats.isFile() ? path8.dirname(primaryWithin) : primaryWithin;
+    return stats.isFile() ? path9.dirname(primaryWithin) : primaryWithin;
   } catch {
     return primaryWithin;
   }
@@ -3907,7 +4320,7 @@ function expandExcludeGlobPath(basePath, pattern) {
       return [prefix.join("/")];
     }
     if (!containsExcludeGlobMeta(segment)) {
-      const nextAbs = path8.join(absDir, segment);
+      const nextAbs = path9.join(absDir, segment);
       if (rest.length === 0) {
         return fs2.existsSync(nextAbs) ? [[...prefix, segment].join("/")] : [];
       }
@@ -3938,7 +4351,7 @@ function expandExcludeGlobPath(basePath, pattern) {
         if (!entry.isDirectory()) {
           return [];
         }
-        return expand(path8.join(absDir, entry.name), nextPrefix, rest);
+        return expand(path9.join(absDir, entry.name), nextPrefix, rest);
       });
   }
   return expand(basePath, [], segments);
@@ -4463,6 +4876,7 @@ function runtimeRegistryKey(backendId, persistenceRoot) {
 }
 var RuntimeManager = class {
   entries = /* @__PURE__ */ new Map();
+  stats = /* @__PURE__ */ new Map();
   mutationLocked = false;
   waitingMutations = [];
   releaseMutationLock() {
@@ -4487,6 +4901,101 @@ var RuntimeManager = class {
       this.releaseMutationLock();
     }
   }
+  async markRuntimeClosed(key, token) {
+    await this.withMutationLock(() => {
+      const current = this.entries.get(key);
+      if (current?.token !== token) {
+        return;
+      }
+      current.detachClose?.();
+      this.entries.delete(key);
+      this.markStatsDead(key);
+    });
+  }
+  markStatsDead(key) {
+    const current = this.stats.get(key);
+    if (!current) {
+      return;
+    }
+    this.stats.set(key, { ...current, state: "dead" });
+  }
+  markStatsStarting(key, spec) {
+    const previous = this.stats.get(key);
+    const next = {
+      ...previous,
+      key,
+      backendId: spec.backendId,
+      persistenceRoot: spec.persistenceRoot,
+      state: "starting",
+      startedAt: Date.now(),
+      restartCount: previous ? previous.restartCount + 1 : 0,
+    };
+    this.stats.set(key, next);
+    return next;
+  }
+  createStartupLocked(key, token, spec) {
+    this.markStatsStarting(key, spec);
+    const created = Promise.resolve(spec.start())
+      .then(async (runtime) => {
+        let shouldClose = false;
+        await this.withMutationLock(() => {
+          const current = this.entries.get(key);
+          if (!current || current.token !== token) {
+            shouldClose = true;
+            return;
+          }
+          const detachClose = runtime.onClose?.(() => {
+            void this.markRuntimeClosed(key, token);
+          });
+          this.entries.set(key, {
+            token,
+            runtime,
+            detachClose,
+          });
+          const currentStats = this.stats.get(key);
+          this.stats.set(key, {
+            ...(currentStats ?? {
+              key,
+              backendId: spec.backendId,
+              persistenceRoot: spec.persistenceRoot,
+              restartCount: 0,
+            }),
+            state: "ready",
+            runtimeId: runtime.id,
+            pid: runtime.pid,
+          });
+        });
+        if (shouldClose) {
+          await closeRuntime(runtime);
+          throw new Error(`Runtime '${key}' was evicted before startup completed`);
+        }
+        return runtime;
+      })
+      .catch(async (error) => {
+        await this.withMutationLock(() => {
+          const current = this.entries.get(key);
+          if (current?.token === token) {
+            current.detachClose?.();
+            this.entries.delete(key);
+          }
+        });
+        const currentStats = this.stats.get(key);
+        this.stats.set(key, {
+          ...(currentStats ?? {
+            key,
+            backendId: spec.backendId,
+            persistenceRoot: spec.persistenceRoot,
+            restartCount: 0,
+          }),
+          state: "dead",
+          lastError: error instanceof Error ? error.message : String(error),
+          lastErrorAt: Date.now(),
+        });
+        throw error;
+      });
+    this.entries.set(key, { token, startup: created });
+    return created;
+  }
   async getOrStartRuntime(spec) {
     const key = runtimeRegistryKey(spec.backendId, spec.persistenceRoot);
     const startup = await this.withMutationLock(() => {
@@ -4497,50 +5006,111 @@ var RuntimeManager = class {
       if (existing?.startup) {
         return existing.startup;
       }
-      const token = Symbol(key);
-      const created = Promise.resolve(spec.start())
-        .then(async (runtime) => {
-          let shouldClose = false;
-          await this.withMutationLock(() => {
-            const current = this.entries.get(key);
-            if (!current || current.token !== token) {
-              shouldClose = true;
-              return;
-            }
-            this.entries.set(key, {
-              token,
-              runtime,
-            });
-          });
-          if (shouldClose) {
-            await closeRuntime(runtime);
-            throw new Error(`Runtime '${key}' was evicted before startup completed`);
-          }
-          return runtime;
-        })
-        .catch(async (error) => {
-          await this.withMutationLock(() => {
-            const current = this.entries.get(key);
-            if (current?.token === token) {
-              this.entries.delete(key);
-            }
-          });
-          throw error;
-        });
-      this.entries.set(key, { token, startup: created });
-      return created;
+      return this.createStartupLocked(key, Symbol(key), spec);
     });
+    return startup;
+  }
+  async restartRuntime(spec, staleRuntime) {
+    const key = runtimeRegistryKey(spec.backendId, spec.persistenceRoot);
+    let runtimeToClose;
+    const startup = await this.withMutationLock(() => {
+      const existing = this.entries.get(key);
+      if (staleRuntime && existing?.startup) {
+        return existing.startup;
+      }
+      if (staleRuntime && existing?.runtime && existing.runtime !== staleRuntime) {
+        return Promise.resolve(existing.runtime);
+      }
+      existing?.detachClose?.();
+      runtimeToClose = existing?.runtime;
+      return this.createStartupLocked(key, Symbol(key), spec);
+    });
+    if (runtimeToClose) {
+      await closeRuntime(runtimeToClose);
+    }
     return startup;
   }
   async withRuntime(spec, execute) {
     const runtime = await this.getOrStartRuntime(spec);
     return await execute(runtime);
   }
+  recordRuntimeCallStart(args) {
+    const key = runtimeRegistryKey(args.backendId, args.persistenceRoot);
+    const current = this.stats.get(key) ?? {
+      key,
+      backendId: args.backendId,
+      persistenceRoot: args.persistenceRoot,
+      state: "dead",
+      restartCount: 0,
+    };
+    this.stats.set(key, {
+      ...current,
+      lastCallAt: args.at ?? Date.now(),
+    });
+  }
+  recordRuntimeCallSuccess(args) {
+    const key = runtimeRegistryKey(args.backendId, args.persistenceRoot);
+    const current = this.stats.get(key) ?? {
+      key,
+      backendId: args.backendId,
+      persistenceRoot: args.persistenceRoot,
+      state: "dead",
+      restartCount: 0,
+    };
+    this.stats.set(key, {
+      ...current,
+      lastSuccessAt: args.at ?? Date.now(),
+    });
+  }
+  recordRuntimeCallError(args) {
+    const key = runtimeRegistryKey(args.backendId, args.persistenceRoot);
+    const current = this.stats.get(key) ?? {
+      key,
+      backendId: args.backendId,
+      persistenceRoot: args.persistenceRoot,
+      state: "dead",
+      restartCount: 0,
+    };
+    this.stats.set(key, {
+      ...current,
+      lastError: args.error,
+      lastErrorAt: args.at ?? Date.now(),
+    });
+  }
+  getDiagnostics(now = Date.now) {
+    return Array.from(this.stats.values())
+      .sort((a, b) => a.key.localeCompare(b.key))
+      .map((stats) => {
+        const entry = this.entries.get(stats.key);
+        const state = entry?.runtime ? "ready" : entry?.startup ? "starting" : stats.state;
+        const runtime = entry?.runtime;
+        return {
+          key: stats.key,
+          backendId: stats.backendId,
+          persistenceRoot: stats.persistenceRoot,
+          state,
+          ...((runtime?.id ?? stats.runtimeId)
+            ? { runtimeId: runtime?.id ?? stats.runtimeId }
+            : {}),
+          ...(runtime?.pid !== void 0 || stats.pid !== void 0
+            ? { pid: runtime?.pid ?? stats.pid }
+            : {}),
+          ...(stats.startedAt !== void 0 ? { uptimeMs: Math.max(0, now() - stats.startedAt) } : {}),
+          ...(stats.lastCallAt !== void 0 ? { lastCallAt: stats.lastCallAt } : {}),
+          ...(stats.lastSuccessAt !== void 0 ? { lastSuccessAt: stats.lastSuccessAt } : {}),
+          ...(stats.lastError !== void 0 ? { lastError: stats.lastError } : {}),
+          ...(stats.lastErrorAt !== void 0 ? { lastErrorAt: stats.lastErrorAt } : {}),
+          restartCount: stats.restartCount,
+        };
+      });
+  }
   async evictRuntime(key) {
     const runtime = await this.withMutationLock(() => {
       const registryKey = runtimeRegistryKey(key.backendId, key.persistenceRoot);
       const entry = this.entries.get(registryKey);
+      entry?.detachClose?.();
       this.entries.delete(registryKey);
+      this.markStatsDead(registryKey);
       return entry?.runtime;
     });
     if (runtime) {
@@ -4552,6 +5122,12 @@ var RuntimeManager = class {
       const collected = Array.from(this.entries.values())
         .map((entry) => entry.runtime)
         .filter((runtime) => runtime != null);
+      for (const entry of this.entries.values()) {
+        entry.detachClose?.();
+      }
+      for (const key of this.entries.keys()) {
+        this.markStatsDead(key);
+      }
       this.entries.clear();
       return collected;
     });
@@ -4560,10 +5136,10 @@ var RuntimeManager = class {
 };
 
 // lib/fff-router/coordinator.ts
-import path12 from "node:path";
+import path13 from "node:path";
 
 // lib/fff-router/routing.ts
-import path9 from "node:path";
+import path10 from "node:path";
 function invalidConfig(message) {
   return {
     ok: false,
@@ -4585,10 +5161,10 @@ function outsideAllowedScope(realPath) {
 function normalizeAllowlistedPrefixes(config) {
   const normalized = /* @__PURE__ */ new Set();
   for (const entry of config.allowlistedNonGitPrefixes) {
-    if (!path9.isAbsolute(entry.prefix)) {
+    if (!path10.isAbsolute(entry.prefix)) {
       return invalidConfig("allowlisted non-git prefixes must be absolute paths");
     }
-    normalized.add(path9.normalize(entry.prefix));
+    normalized.add(path10.normalize(entry.prefix));
   }
   return {
     ok: true,
@@ -4597,22 +5173,22 @@ function normalizeAllowlistedPrefixes(config) {
 }
 function longestMatchingPrefix(realPath, prefixes) {
   for (const prefix of prefixes) {
-    if (realPath === prefix || realPath.startsWith(prefix + path9.sep)) {
+    if (realPath === prefix || realPath.startsWith(prefix + path10.sep)) {
       return prefix;
     }
   }
   return null;
 }
 function deriveFirstChildRoot(prefix, realPath) {
-  const relative = path9.relative(prefix, realPath);
-  if (!relative || relative.startsWith("..") || path9.isAbsolute(relative)) {
+  const relative = path10.relative(prefix, realPath);
+  if (!relative || relative.startsWith("..") || path10.isAbsolute(relative)) {
     return null;
   }
-  const firstSegment = relative.split(path9.sep)[0];
+  const firstSegment = relative.split(path10.sep)[0];
   if (!firstSegment) {
     return null;
   }
-  return path9.join(prefix, firstSegment);
+  return path10.join(prefix, firstSegment);
 }
 function deriveRoutingTarget(args) {
   if (args.gitRoot) {
@@ -4620,7 +5196,7 @@ function deriveRoutingTarget(args) {
       ok: true,
       value: {
         rootType: "git",
-        persistenceRoot: path9.normalize(args.gitRoot),
+        persistenceRoot: path10.normalize(args.gitRoot),
         searchScope: args.realPath,
         backendMode: "persistent",
         ttlMs: args.config.ttl.gitMs,
@@ -4828,7 +5404,7 @@ function planRoutingLifecycle(args) {
 
 // lib/fff-router/resolve-path.ts
 import fs3 from "node:fs/promises";
-import path10 from "node:path";
+import path11 from "node:path";
 function searchPathError(code, message) {
   return { ok: false, error: { code, message } };
 }
@@ -4841,12 +5417,12 @@ async function pathExists(candidatePath) {
   }
 }
 async function discoverGitRoot(realPath, statType) {
-  let current = statType === "directory" ? realPath : path10.dirname(realPath);
+  let current = statType === "directory" ? realPath : path11.dirname(realPath);
   while (true) {
-    if (await pathExists(path10.join(current, ".git"))) {
+    if (await pathExists(path11.join(current, ".git"))) {
       return current;
     }
-    const parent = path10.dirname(current);
+    const parent = path11.dirname(current);
     if (parent === current) {
       return null;
     }
@@ -4854,12 +5430,6 @@ async function discoverGitRoot(realPath, statType) {
   }
 }
 function resolveStatType(stats) {
-  if (!stats) {
-    return searchPathError(
-      "SEARCH_PATH_REALPATH_FAILED",
-      "failed to inspect canonicalized search_path",
-    );
-  }
   if (stats.isDirectory()) {
     return { ok: true, value: "directory" };
   }
@@ -4907,7 +5477,7 @@ async function resolveSearchPath(searchPath) {
 
 // lib/fff-router/resolve-within.ts
 import fs4 from "node:fs/promises";
-import path11 from "node:path";
+import path12 from "node:path";
 function invalid3(message) {
   return {
     ok: false,
@@ -4940,15 +5510,12 @@ function validateAbsolutePath(candidate, field) {
   if (trimmed === "") {
     return invalid3(`${field} must be a non-empty path`);
   }
-  if (!path11.isAbsolute(trimmed)) {
+  if (!path12.isAbsolute(trimmed)) {
     return invalid3(`${field} must be absolute`);
   }
   return { ok: true, value: trimmed };
 }
 function resolveStatType2(stats) {
-  if (!stats) {
-    return internalError("failed to inspect resolved within path");
-  }
   if (stats.isDirectory()) {
     return { ok: true, value: "directory" };
   }
@@ -4995,7 +5562,7 @@ async function validateResolvedWithinEntry(candidate) {
     ok: true,
     value: {
       resolvedWithin,
-      basePath: path11.dirname(resolvedWithin),
+      basePath: path12.dirname(resolvedWithin),
       fileRestriction: resolvedWithin,
     },
   };
@@ -5025,6 +5592,14 @@ async function validateResolvedWithinPaths(args) {
 }
 
 // lib/fff-router/coordinator.ts
+var DEFAULT_BACKEND_TOOL_TIMEOUT_MS2 = 3e4;
+var BackendCallTimeoutError = class extends Error {
+  constructor(backendId, timeoutMs) {
+    super(`${backendId} backend call timed out after ${timeoutMs}ms`);
+    this.backendId = backendId;
+    this.timeoutMs = timeoutMs;
+  }
+};
 function createCoordinatorRuntimeConfigRef(config) {
   return { current: config };
 }
@@ -5048,15 +5623,18 @@ function queryKindForRequest(request) {
       return "grep";
   }
 }
+function defaultWriteDiagnostic(event) {
+  console.error(JSON.stringify({ event: "fff-router.backend_diagnostics", ...event }));
+}
 function translateExcludePaths(validatedWithin, persistenceRoot, excludePaths) {
   const baseRelative = normalizeRelativePath(
-    path12.relative(persistenceRoot, validatedWithin.basePath),
+    path13.relative(persistenceRoot, validatedWithin.basePath),
   );
   return excludePaths.map((excludePath) => {
     if (!baseRelative || baseRelative === ".") {
       return excludePath;
     }
-    return normalizeRelativePath(path12.join(baseRelative, excludePath));
+    return normalizeRelativePath(path13.join(baseRelative, excludePath));
   });
 }
 function buildBackendRequest(args) {
@@ -5098,16 +5676,41 @@ function buildBackendRequest(args) {
       };
   }
 }
+function isStaleRuntimeErrorMessage(message) {
+  return (
+    /\b(Not connected|EPIPE|ECONNRESET|EOF)\b/i.test(message) ||
+    /\b(transport|stdio|stream)\b.*\b(closed|ended|destroyed|disconnected)\b/i.test(message)
+  );
+}
+async function withBackendCallTimeout(promise, args) {
+  if (!Number.isFinite(args.timeoutMs) || args.timeoutMs <= 0) {
+    return await promise;
+  }
+  let timeout = null;
+  const timeoutPromise = new Promise((_resolve, reject) => {
+    timeout = setTimeout(() => {
+      reject(new BackendCallTimeoutError(args.backendId, args.timeoutMs));
+    }, args.timeoutMs);
+    timeout.unref?.();
+  });
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
 function shapePublicResult(args) {
   if (args.request.outputMode === "json") {
     const readRecommendation = args.summary?.readRecommendation
       ? (() => {
-          const absolutePath = path12.join(
+          const absolutePath = path13.join(
             args.persistenceRoot,
             args.summary.readRecommendation.relativePath,
           );
           return {
-            path: normalizeCoordinatorPath(path12.relative(args.basePath, absolutePath)),
+            path: normalizeCoordinatorPath(path13.relative(args.basePath, absolutePath)),
             absolute_path: absolutePath,
             ...(args.summary?.readRecommendation?.reason
               ? { reason: args.summary.readRecommendation.reason }
@@ -5174,7 +5777,7 @@ function normalizeBackendItems(basePath, items) {
     const absolutePath = String(item.path);
     const normalized = {
       ...item,
-      path: normalizeCoordinatorPath(path12.relative(basePath, absolutePath)),
+      path: normalizeCoordinatorPath(path13.relative(basePath, absolutePath)),
     };
     if (typeof item.line === "number") {
       return {
@@ -5202,6 +5805,7 @@ var SearchCoordinatorImpl = class {
     this.resolveRoutingPath = deps.resolveRoutingPath ?? resolveSearchPath;
     this.planLifecycle = deps.planLifecycle ?? planRoutingLifecycle;
     this.now = deps.now ?? Date.now;
+    this.writeDiagnostic = deps.writeDiagnostic ?? defaultWriteDiagnostic;
   }
   lifecycleState = {
     daemons: {},
@@ -5214,6 +5818,7 @@ var SearchCoordinatorImpl = class {
   resolveRoutingPath;
   planLifecycle;
   now;
+  writeDiagnostic;
   releasePlanningLock() {
     const next = this.planningWaiters.shift();
     if (next) {
@@ -5305,22 +5910,11 @@ var SearchCoordinatorImpl = class {
       };
     }
     if (!args.adapter.startRuntime) {
-      return args.adapter.execute({ request: args.request });
-    }
-    if (!shouldUsePersistentRuntime) {
       try {
-        const runtime = await args.adapter.startRuntime({
+        return await withBackendCallTimeout(args.adapter.execute({ request: args.request }), {
           backendId: args.adapter.backendId,
-          persistenceRoot: args.request.persistenceRoot,
+          timeoutMs: args.toolTimeoutMs,
         });
-        const result = await args.adapter.execute({
-          request: args.request,
-          runtime,
-        });
-        try {
-          await runtime.close();
-        } catch {}
-        return result;
       } catch (error) {
         return {
           ok: false,
@@ -5332,22 +5926,102 @@ var SearchCoordinatorImpl = class {
         };
       }
     }
-    try {
-      return await this.deps.runtimeManager.withRuntime(
-        {
+    if (!shouldUsePersistentRuntime) {
+      let runtime = null;
+      try {
+        runtime = await args.adapter.startRuntime({
           backendId: args.adapter.backendId,
           persistenceRoot: args.request.persistenceRoot,
-          start: async () => {
-            return await args.adapter.startRuntime?.({
-              backendId: args.adapter.backendId,
-              persistenceRoot: args.request.persistenceRoot,
-            });
+        });
+        const result = await withBackendCallTimeout(
+          args.adapter.execute({
+            request: args.request,
+            runtime,
+          }),
+          { backendId: args.adapter.backendId, timeoutMs: args.toolTimeoutMs },
+        );
+        return result;
+      } catch (error) {
+        return {
+          ok: false,
+          error: {
+            code: "BACKEND_UNAVAILABLE",
+            backendId: args.adapter.backendId,
+            message: error instanceof Error ? error.message : String(error),
           },
+        };
+      } finally {
+        try {
+          await runtime?.close();
+        } catch {}
+      }
+    }
+    try {
+      const runtimeSpec = {
+        backendId: args.adapter.backendId,
+        persistenceRoot: args.request.persistenceRoot,
+        start: async () => {
+          return await args.adapter.startRuntime?.({
+            backendId: args.adapter.backendId,
+            persistenceRoot: args.request.persistenceRoot,
+          });
         },
-        async (runtime) => {
-          return await args.adapter.execute({ request: args.request, runtime });
-        },
-      );
+      };
+      const execute = async () =>
+        await this.deps.runtimeManager.withRuntime(runtimeSpec, async (runtime) => {
+          runtimeUsed = runtime;
+          return await executeWithRuntime(runtime);
+        });
+      const runtimeKey = {
+        backendId: args.adapter.backendId,
+        persistenceRoot: args.request.persistenceRoot,
+      };
+      const executeWithRuntime = async (runtime) => {
+        this.deps.runtimeManager.recordRuntimeCallStart(runtimeKey);
+        try {
+          const result = await withBackendCallTimeout(
+            args.adapter.execute({ request: args.request, runtime }),
+            { backendId: args.adapter.backendId, timeoutMs: args.toolTimeoutMs },
+          );
+          if (result.ok) {
+            this.deps.runtimeManager.recordRuntimeCallSuccess(runtimeKey);
+          } else {
+            this.deps.runtimeManager.recordRuntimeCallError({
+              ...runtimeKey,
+              error: result.error.message,
+            });
+          }
+          return result;
+        } catch (error) {
+          this.deps.runtimeManager.recordRuntimeCallError({
+            ...runtimeKey,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          throw error;
+        }
+      };
+      let runtimeUsed;
+      let firstResult;
+      try {
+        firstResult = await execute();
+      } catch (error) {
+        if (!(error instanceof BackendCallTimeoutError)) {
+          throw error;
+        }
+        const freshRuntime = await this.deps.runtimeManager.restartRuntime(
+          runtimeSpec,
+          runtimeUsed,
+        );
+        return await executeWithRuntime(freshRuntime);
+      }
+      if (!firstResult.ok && isStaleRuntimeErrorMessage(firstResult.error.message)) {
+        const freshRuntime = await this.deps.runtimeManager.restartRuntime(
+          runtimeSpec,
+          runtimeUsed,
+        );
+        return await executeWithRuntime(freshRuntime);
+      }
+      return firstResult;
     } catch (error) {
       return {
         ok: false,
@@ -5358,6 +6032,18 @@ var SearchCoordinatorImpl = class {
         },
       };
     }
+  }
+  emitBackendDiagnostics(result) {
+    if (!result.ok || !result.value.diagnostics) {
+      return;
+    }
+    try {
+      this.writeDiagnostic({
+        backendId: result.value.backendId,
+        queryKind: result.value.queryKind,
+        diagnostics: result.value.diagnostics,
+      });
+    } catch {}
   }
   async execute(request) {
     if (!request.within || request.within.length === 0) {
@@ -5476,7 +6162,10 @@ var SearchCoordinatorImpl = class {
       adapter: primaryAdapter,
       request: primaryRequest,
       lifecyclePlan: lifecyclePlan.value,
+      toolTimeoutMs:
+        runtimeConfig.config.runtime?.toolTimeoutMs ?? DEFAULT_BACKEND_TOOL_TIMEOUT_MS2,
     });
+    this.emitBackendDiagnostics(primaryResult);
     if (primaryResult.ok) {
       const normalizedItems2 = normalizeBackendItems(
         validatedWithin.value.basePath,
@@ -5544,7 +6233,10 @@ var SearchCoordinatorImpl = class {
         ...lifecyclePlan.value,
         action: { type: "run-ephemeral", key: lifecyclePlan.value.action.key },
       },
+      toolTimeoutMs:
+        runtimeConfig.config.runtime?.toolTimeoutMs ?? DEFAULT_BACKEND_TOOL_TIMEOUT_MS2,
     });
+    this.emitBackendDiagnostics(fallbackResult);
     if (!fallbackResult.ok) {
       return {
         ok: false,
@@ -5595,16 +6287,16 @@ async function readJsonBody(req) {
   }
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
 }
-async function readDaemonMetadata(path16) {
+async function readDaemonMetadata(path17) {
   try {
-    return JSON.parse(await readFile(path16, "utf8"));
+    return JSON.parse(await readFile(path17, "utf8"));
   } catch {
     return null;
   }
 }
-async function writeDaemonMetadata(path16, metadata) {
+async function writeDaemonMetadata(path17, metadata) {
   await writeFile2(
-    path16,
+    path17,
     `${JSON.stringify(metadata, null, 2)}
 `,
   );
@@ -5642,6 +6334,7 @@ function buildMetadata(args) {
     mcpSocketPath: getDaemonPaths({ env: args.env }).mcpSocketPath,
     protocolVersion: DAEMON_PROTOCOL_VERSION,
     packageVersion: PACKAGE_VERSION,
+    daemonSourceFingerprint: getDaemonSourceFingerprint({ env: args.env }),
     serverFingerprint: getDaemonServerFingerprint({
       env: args.env,
       daemonConfig: {
@@ -5698,15 +6391,18 @@ async function startHttpDaemon(args = {}) {
       });
       const backendChanged =
         liveConfigRef.current.primaryBackendId !== nextRuntimeConfig.primaryBackendId;
+      const shouldClearRuntimes = override?.clearRuntimes === true;
       await writeDaemonMetadata(paths.metadataPath, nextMetadata);
       liveConfigRef.current = nextRuntimeConfig;
-      if (backendChanged && !args.coordinator) {
+      if ((backendChanged || shouldClearRuntimes) && !args.coordinator) {
         const previousRuntimeManager = runtimeManager;
         runtimeManager = new RuntimeManager();
         currentCoordinator =
           args.createCoordinator?.({ liveConfigRef, runtimeManager }) ??
           createDefaultCoordinator({ liveConfigRef, runtimeManager });
         await previousRuntimeManager.closeAll();
+      } else if (shouldClearRuntimes) {
+        await runtimeManager.closeAll();
       }
       metadata = nextMetadata;
     });
@@ -5771,7 +6467,7 @@ async function startHttpDaemon(args = {}) {
     );
     if (url.pathname === "/health") {
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ ok: true, metadata }));
+      res.end(JSON.stringify({ ok: true, metadata, runtimes: runtimeManager.getDiagnostics() }));
       return;
     }
     if (url.pathname !== config.mcpPath) {
@@ -5912,11 +6608,11 @@ var DaemonHealthMismatchError = class extends Error {
     this.metadata = metadata;
   }
 };
-function packagedDaemonEntrypointPath() {
-  const primaryCandidatePath = path13.resolve(import.meta.dirname, "../../dist/bin/fff-routerd.js");
+function packagedDaemonEntrypointPath2() {
+  const primaryCandidatePath = path14.resolve(import.meta.dirname, "../../dist/bin/fff-routerd.js");
   const candidatePaths = [
     primaryCandidatePath,
-    path13.resolve(import.meta.dirname, "../../bin/fff-routerd.js"),
+    path14.resolve(import.meta.dirname, "../../bin/fff-routerd.js"),
   ];
   for (const candidatePath of candidatePaths) {
     if (existsSync3(candidatePath)) {
@@ -5936,42 +6632,16 @@ function isProcessAlive(pid) {
     return false;
   }
 }
-function isExecutable(pathValue) {
-  try {
-    accessSync(pathValue, fsConstants.X_OK);
-    return true;
-  } catch {
-    return false;
-  }
-}
-function commandExtensions(env) {
-  if (process.platform !== "win32") {
-    return [""];
-  }
-  const pathExt = env.PATHEXT?.split(";").filter(Boolean);
-  return pathExt && pathExt.length > 0 ? pathExt : [".EXE", ".CMD", ".BAT", ".COM"];
-}
-function defaultResolveExecutableOnPath(command, env) {
-  const pathValue = env.PATH || process.env.PATH || "";
-  const directories = pathValue.split(path13.delimiter).filter(Boolean);
-  const extensions = commandExtensions(env);
-  for (const directory of directories) {
-    for (const extension of extensions) {
-      const candidatePath =
-        process.platform === "win32" && extension && !command.toUpperCase().endsWith(extension)
-          ? path13.join(directory, `${command}${extension}`)
-          : path13.join(directory, command);
-      if (existsSync3(candidatePath) && isExecutable(candidatePath)) {
-        return candidatePath;
-      }
-    }
-  }
-  return null;
-}
 function resolveDaemonLaunchCommand(env = process.env, deps = {}) {
-  if (!deps.preferPackaged) {
+  if (env.FFF_ROUTER_DAEMON_BIN) {
+    return { command: env.FFF_ROUTER_DAEMON_BIN, args: [], source: "env" };
+  }
+  if (env.FFF_ROUTER_DAEMON_ENTRYPOINT) {
+    return { command: process.execPath, args: [env.FFF_ROUTER_DAEMON_ENTRYPOINT], source: "env" };
+  }
+  if (!deps.preferPackaged && env.FFF_ROUTER_DAEMON_ALLOW_PATH === "1") {
     const resolvedCommand = (
-      deps.resolveExecutableOnPath ?? ((command) => defaultResolveExecutableOnPath(command, env))
+      deps.resolveExecutableOnPath ?? ((command) => resolveExecutableOnPath(command, env))
     )("fff-routerd");
     if (resolvedCommand) {
       return { command: resolvedCommand, args: [], source: "path" };
@@ -5979,7 +6649,7 @@ function resolveDaemonLaunchCommand(env = process.env, deps = {}) {
   }
   return {
     command: process.execPath,
-    args: [packagedDaemonEntrypointPath()],
+    args: [packagedDaemonEntrypointPath2()],
     source: "packaged",
   };
 }
@@ -6208,16 +6878,62 @@ function shouldPreserveNewerDaemonMismatch(error, env) {
 }
 function spawnDaemon(env, options) {
   const launchCommand = resolveDaemonLaunchCommand(env ?? process.env, options);
+  const paths = getDaemonPaths({ env });
+  mkdirSync2(paths.dir, { recursive: true });
   const child = spawnChildProcess(launchCommand.command, launchCommand.args, {
     env: env ?? process.env,
     stdio: ["ignore", "pipe", "pipe"],
   });
-  child.stdout?.destroy();
-  child.stderr?.destroy();
+  const stdoutLog = createWriteStream(paths.stdoutLogPath, { flags: "a" });
+  const stderrLog = createWriteStream(paths.stderrLogPath, { flags: "a" });
+  child.stdout?.pipe(stdoutLog);
+  child.stderr?.pipe(stderrLog);
+  child.once("error", (error) => {
+    stderrLog.write(`fff-routerd spawn failed: ${error.message}
+`);
+    stdoutLog.end();
+    stderrLog.end();
+  });
+  child.once("close", () => {
+    stdoutLog.end();
+    stderrLog.end();
+  });
   return {
     unref: () => child.unref(),
     source: launchCommand.source,
   };
+}
+async function readLogTail(pathValue, maxBytes = 4096) {
+  let handle;
+  try {
+    handle = await open(pathValue, "r");
+    const stat = await handle.stat();
+    const length = Math.min(stat.size, maxBytes);
+    const buffer = Buffer.alloc(length);
+    await handle.read(buffer, 0, length, Math.max(0, stat.size - length));
+    return buffer.toString("utf8").trimEnd();
+  } catch {
+    return "";
+  } finally {
+    await handle?.close().catch(() => {});
+  }
+}
+async function formatDaemonStartupError(error, env) {
+  const paths = getDaemonPaths({ env });
+  const message = error instanceof Error ? error.message : String(error);
+  const stderrTail = await readLogTail(paths.stderrLogPath);
+  const details = [
+    message,
+    `daemon stdout log: ${paths.stdoutLogPath}`,
+    `daemon stderr log: ${paths.stderrLogPath}`,
+    ...(stderrTail
+      ? [
+          `recent daemon stderr:
+${stderrTail}`,
+        ]
+      : []),
+  ];
+  return new Error(details.join("\n"));
 }
 async function waitForDaemonReady(env) {
   let lastError;
@@ -6230,7 +6946,16 @@ async function waitForDaemonReady(env) {
       await sleep2(delay);
     }
   }
-  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+  throw await formatDaemonStartupError(lastError, env);
+}
+async function readDaemonLogs(env) {
+  const paths = getDaemonPaths({ env });
+  return {
+    stdoutPath: paths.stdoutLogPath,
+    stderrPath: paths.stderrLogPath,
+    stdout: await readLogTail(paths.stdoutLogPath),
+    stderr: await readLogTail(paths.stderrLogPath),
+  };
 }
 async function signalProcess(pid, signal) {
   if (!Number.isFinite(pid) || pid <= 0 || pid === process.pid) {
@@ -6284,7 +7009,7 @@ async function ensureDaemonRunningWithDeps(env, deps) {
       if (shouldPreserveNewerDaemonMismatch(error, env)) {
         return;
       }
-      const pid = mismatchPid(error) ?? (await deps.readRunningDaemonMetadata(env))?.pid ?? null;
+      const pid = mismatchPid(error);
       if (mismatchKind(error) === "reload") {
         if (pid) {
           try {
@@ -6306,10 +7031,6 @@ async function ensureDaemonRunningWithDeps(env, deps) {
       } else if (!isRecoverableHealthError(error)) {
         throw error;
       }
-    }
-    const existingPid = (await deps.readRunningDaemonMetadata(env))?.pid ?? null;
-    if (existingPid) {
-      await deps.terminateProcess(existingPid);
     }
     let child = deps.spawnDaemon(env);
     try {
@@ -6433,23 +7154,13 @@ function unwrapToolResponse(response) {
     throw new Error(`daemon returned invalid JSON: ${first.text}`);
   }
   if (response.isError) {
+    const errorPayload = typeof parsed === "object" && parsed !== null ? parsed : {};
     return {
       ok: false,
       error: {
-        code:
-          typeof parsed === "object" &&
-          parsed &&
-          "code" in parsed &&
-          typeof parsed.code === "string"
-            ? parsed.code
-            : "INTERNAL_ERROR",
+        code: typeof errorPayload.code === "string" ? errorPayload.code : "INTERNAL_ERROR",
         message:
-          typeof parsed === "object" &&
-          parsed &&
-          "message" in parsed &&
-          typeof parsed.message === "string"
-            ? parsed.message
-            : "daemon call failed",
+          typeof errorPayload.message === "string" ? errorPayload.message : "daemon call failed",
       },
     };
   }
@@ -6645,15 +7356,15 @@ function resolveAgentWithin(value, cwd, env) {
   if (!expanded.ok) {
     throw new Error(expanded.error.message);
   }
-  return path14.isAbsolute(expanded.value) ? expanded.value : path14.resolve(cwd, expanded.value);
+  return path15.isAbsolute(expanded.value) ? expanded.value : path15.resolve(cwd, expanded.value);
 }
-var GLOB_META_PATTERN = /[*?[\]{}!]/;
+var GLOB_META_PATTERN2 = /[*?[\]{}!]/;
 function isConstraintToken(token) {
   return (
     token.startsWith("!") ||
     token.endsWith("/") ||
     token.includes("/") ||
-    GLOB_META_PATTERN.test(token)
+    GLOB_META_PATTERN2.test(token)
   );
 }
 function normalizeExcludeToken(token) {
@@ -6896,7 +7607,7 @@ async function runAgentMcpServer(args = {}) {
 
 // lib/fff-router/daemon-update.ts
 import { createHash as createHash2 } from "node:crypto";
-import { spawn as spawn2 } from "node:child_process";
+import { spawn as spawn3 } from "node:child_process";
 import {
   access,
   chmod as chmod2,
@@ -6906,7 +7617,7 @@ import {
 } from "node:fs/promises";
 import { constants as fsConstants2 } from "node:fs";
 import os3 from "node:os";
-import path15 from "node:path";
+import path16 from "node:path";
 import { createInterface } from "node:readline/promises";
 import { stdin as processStdin2, stdout as processStdout } from "node:process";
 import { promisify } from "node:util";
@@ -6917,10 +7628,10 @@ var FFF_ROUTER_GITHUB_PACKAGE_JSON =
   "https://raw.githubusercontent.com/unstableneutron/fff-router/main/package.json";
 var FFF_ROUTER_AUBE_SPEC = "github:unstableneutron/fff-router";
 function defaultInstallDir2(env) {
-  return env.FFF_MCP_INSTALL_DIR || path15.join(env.HOME || os3.homedir(), ".local", "bin");
+  return env.FFF_MCP_INSTALL_DIR || path16.join(env.HOME || os3.homedir(), ".local", "bin");
 }
 function fffMcpBinaryPath(env, target) {
-  return path15.join(
+  return path16.join(
     defaultInstallDir2(env),
     target.includes("windows") ? "fff-mcp.exe" : "fff-mcp",
   );
@@ -7109,8 +7820,8 @@ async function sha256File(filePath) {
     .digest("hex");
 }
 async function installFffMcpUpdate(plan, deps = {}) {
-  const directory = path15.dirname(plan.binaryPath);
-  const tempPath = path15.join(directory, `.fff-mcp.${process.pid}.${Date.now()}.download`);
+  const directory = path16.dirname(plan.binaryPath);
+  const tempPath = path16.join(directory, `.fff-mcp.${process.pid}.${Date.now()}.download`);
   await mkdir4(directory, { recursive: true });
   await (deps.downloadToFile ?? downloadToFile)(plan.assetUrl, tempPath);
   const expectedDigest = extractSha256(await (deps.fetchText ?? fetchText)(plan.checksumUrl));
@@ -7121,7 +7832,7 @@ async function installFffMcpUpdate(plan, deps = {}) {
   await chmod2(tempPath, 493);
   await rename2(tempPath, plan.binaryPath);
   await writeFile3(
-    path15.join(directory, ".fff-mcp-install.json"),
+    path16.join(directory, ".fff-mcp-install.json"),
     `${JSON.stringify(
       {
         tag: plan.latestTag,
@@ -7143,10 +7854,10 @@ function commandExtensions2(env) {
   return env.PATHEXT?.split(";").filter(Boolean) ?? [".EXE", ".CMD", ".BAT", ".COM"];
 }
 async function commandExists(command, env = process.env) {
-  const directories = (env.PATH || process.env.PATH || "").split(path15.delimiter).filter(Boolean);
+  const directories = (env.PATH || process.env.PATH || "").split(path16.delimiter).filter(Boolean);
   for (const directory of directories) {
     for (const extension of commandExtensions2(env)) {
-      const candidate = path15.join(directory, extension ? `${command}${extension}` : command);
+      const candidate = path16.join(directory, extension ? `${command}${extension}` : command);
       try {
         await access(candidate, fsConstants2.X_OK);
         return true;
@@ -7198,7 +7909,7 @@ async function checkFffRouterdUpdate(args = {}) {
 }
 async function installFffRouterdUpdate(plan) {
   await new Promise((resolve, reject) => {
-    const child = spawn2(plan.command[0], plan.command.slice(1), { stdio: "inherit" });
+    const child = spawn3(plan.command[0], plan.command.slice(1), { stdio: "inherit" });
     child.once("error", reject);
     child.once("exit", (code) => {
       if (code === 0) {
@@ -7419,6 +8130,19 @@ function isProcessAlive2(pid) {
     return false;
   }
 }
+async function fetchHealthMetadata2(env) {
+  try {
+    const config = getDaemonConfig({ env });
+    const response = await fetch(new URL("/health", getDaemonOriginFromConfig(config)));
+    if (!response.ok) {
+      return null;
+    }
+    const payload = await response.json();
+    return payload.ok && payload.metadata ? payload.metadata : null;
+  } catch {
+    return null;
+  }
+}
 function parseDaemonCliCommand(argv) {
   const [command, ...rest] = argv;
   switch (command) {
@@ -7442,9 +8166,17 @@ function parseDaemonCliCommand(argv) {
     case "status":
       return { name: "status" };
     case "reload":
-      return { name: "reload" };
+      if (rest.length === 0) {
+        return { name: "reload" };
+      }
+      if (rest.length === 1 && rest[0] === "--clear-runtimes") {
+        return { name: "reload", clearRuntimes: true };
+      }
+      throw new Error(`unknown reload arguments: ${rest.join(" ")}`);
     case "stop":
       return { name: "stop" };
+    case "logs":
+      return { name: "logs" };
     case "doctor":
       return { name: "doctor" };
     case "install-fff-mcp":
@@ -7456,18 +8188,40 @@ function parseDaemonCliCommand(argv) {
   }
 }
 async function getDaemonStatus(env = process.env) {
-  const metadata = await readDaemonMetadata(getDaemonPaths({ env }).metadataPath);
-  if (!metadata || !isProcessAlive2(metadata.pid)) {
+  const metadata = await fetchHealthMetadata2(env);
+  if (!metadata) {
     return { running: false, metadata: null };
   }
   return { running: true, metadata };
 }
-async function reloadDaemon(env = process.env) {
+async function getToolReport(env) {
+  const fffMcp = await getDoctorFffMcpStatus(env);
+  return {
+    fffMcp,
+    rg: await getToolDiagnostic("rg", { env }),
+    fd: await getToolDiagnostic("fd", { env }),
+    daemon: resolveDaemonLaunchCommand(env),
+  };
+}
+async function getDaemonStatusReport(env = process.env) {
+  return {
+    ...(await getDaemonStatus(env)),
+    tools: await getToolReport(env),
+  };
+}
+async function reloadDaemon(env = process.env, options = {}) {
   const status = await getDaemonStatus(env);
   if (!status.metadata) {
     return false;
   }
-  process.kill(status.metadata.pid, "SIGHUP");
+  try {
+    process.kill(status.metadata.pid, options.clearRuntimes ? "SIGUSR2" : "SIGHUP");
+  } catch (error) {
+    if (typeof error === "object" && error && "code" in error && error.code === "ESRCH") {
+      return false;
+    }
+    throw error;
+  }
   return true;
 }
 async function sleep3(ms) {
@@ -7478,7 +8232,14 @@ async function stopDaemon(env = process.env) {
   if (!status.metadata) {
     return false;
   }
-  process.kill(status.metadata.pid, "SIGTERM");
+  try {
+    process.kill(status.metadata.pid, "SIGTERM");
+  } catch (error) {
+    if (typeof error === "object" && error && "code" in error && error.code === "ESRCH") {
+      return false;
+    }
+    throw error;
+  }
   for (const delay of [25, 50, 100, 200, 400, 800]) {
     if (!isProcessAlive2(status.metadata.pid)) {
       return true;
@@ -7518,20 +8279,58 @@ async function runForegroundDaemon(env = process.env) {
       console.error("fff-routerd reload failed:", error);
     });
   });
+  process.on("SIGUSR2", () => {
+    void daemon.reload({ clearRuntimes: true }).catch((error) => {
+      console.error("fff-routerd clear-runtimes reload failed:", error);
+    });
+  });
   await new Promise(() => {});
 }
 async function getDoctorReport(env = process.env) {
   const status = await getDaemonStatus(env);
   const policyPaths = getDaemonPolicyConfigPaths({ env });
   const daemonPaths = getDaemonPaths({ env });
+  const tools = await getToolReport(env);
+  const runtimes = status.metadata
+    ? await getRuntimeDiagnosticsFromHealth(status.metadata)
+    : void 0;
   return {
     ...status,
     endpoint: getDaemonEndpoint({ env }),
     configPath: policyPaths.jsonPath,
     stateDir: daemonPaths.dir,
     daemonConfig: getDaemonConfig({ env }),
-    fffMcp: await getDoctorFffMcpStatus(env),
+    fffMcp: tools.fffMcp,
+    tools,
+    ...(runtimes ? { runtimes } : {}),
   };
+}
+async function getRuntimeDiagnosticsFromHealth(metadata) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 500);
+  timeout.unref?.();
+  try {
+    const response = await fetch(
+      `${getDaemonOriginFromConfig({
+        host: metadata.host,
+        port: metadata.port,
+        mcpPath: metadata.mcpPath,
+      })}/health`,
+      { signal: controller.signal },
+    );
+    if (!response.ok) {
+      return void 0;
+    }
+    const body = await response.json();
+    if (!Array.isArray(body.runtimes)) {
+      return void 0;
+    }
+    return body.runtimes;
+  } catch {
+    return void 0;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 async function executeDaemonCliCommand(command, deps) {
   switch (command.name) {
@@ -7542,13 +8341,15 @@ async function executeDaemonCliCommand(command, deps) {
       await (deps.runMcpServer ?? runSelectedMcpServer)(command.profile);
       return 0;
     case "status": {
-      const status = await deps.getStatus();
+      const status = await (deps.getStatusReport ?? deps.getStatus)();
       deps.writeStdout(`${JSON.stringify(status, null, 2)}
 `);
       return 0;
     }
     case "reload": {
-      const reloaded = await deps.reloadDaemon();
+      const reloaded = await deps.reloadDaemon(
+        command.clearRuntimes ? { clearRuntimes: true } : void 0,
+      );
       if (!reloaded) {
         deps.writeStderr("fff-routerd is not running\n");
         return 1;
@@ -7563,6 +8364,12 @@ async function executeDaemonCliCommand(command, deps) {
         return 1;
       }
       deps.writeStdout("Stopped fff-routerd\n");
+      return 0;
+    }
+    case "logs": {
+      const logs = await (deps.getLogs ?? readDaemonLogs)();
+      deps.writeStdout(`${JSON.stringify(logs, null, 2)}
+`);
       return 0;
     }
     case "doctor": {
@@ -7592,8 +8399,10 @@ async function main(argv, env = process.env) {
   const command = parseDaemonCliCommand(argv);
   return await executeDaemonCliCommand(command, {
     getStatus: async () => await getDaemonStatus(env),
-    reloadDaemon: async () => await reloadDaemon(env),
+    getStatusReport: async () => await getDaemonStatusReport(env),
+    reloadDaemon: async (options) => await reloadDaemon(env, options),
     stopDaemon: async () => await stopDaemon(env),
+    getLogs: async () => await readDaemonLogs(env),
     getDoctorReport: async () => await getDoctorReport(env),
     installFffMcp: async () => await installFffMcpBinary({ env }),
     runUpdate: async () =>

@@ -82,6 +82,7 @@ var DEFAULT_DAEMON_HOST = "127.0.0.1";
 var DEFAULT_DAEMON_PORT = 4319;
 var DEFAULT_DAEMON_MCP_PATH = "/mcp";
 var DEFAULT_BACKEND = "fff-node";
+var DEFAULT_BACKEND_TOOL_TIMEOUT_MS = 3e4;
 function packageVersion() {
   const candidatePaths = [
     path2.resolve(import.meta.dirname, "../../package.json"),
@@ -137,6 +138,9 @@ function getDefaultRouterConfig() {
       maxPersistentDaemons: 12,
       maxPersistentNonGitDaemons: 4,
     },
+    runtime: {
+      toolTimeoutMs: DEFAULT_BACKEND_TOOL_TIMEOUT_MS,
+    },
   };
 }
 function getDefaultDaemonReloadConfig() {
@@ -160,6 +164,9 @@ function getDefaultDaemonFileConfig() {
     promotion: { ...reload.router.promotion },
     ttl: { ...reload.router.ttl },
     limits: { ...reload.router.limits },
+    runtime: {
+      toolTimeoutMs: reload.router.runtime?.toolTimeoutMs ?? DEFAULT_BACKEND_TOOL_TIMEOUT_MS,
+    },
   };
 }
 function serializeDefaultDaemonFileConfig() {
@@ -387,6 +394,7 @@ function normalizeDaemonFileConfig(raw, env) {
     fileConfig.promotion == null ? null : expectObject(fileConfig.promotion, "promotion");
   const ttl = fileConfig.ttl == null ? null : expectObject(fileConfig.ttl, "ttl");
   const limits = fileConfig.limits == null ? null : expectObject(fileConfig.limits, "limits");
+  const runtime = fileConfig.runtime == null ? null : expectObject(fileConfig.runtime, "runtime");
   const normalizedEnv = { ...env, HOME: configHome(env) };
   const backendId = readOptionalBackend(fileConfig.backend) ?? defaults.backend;
   const allowlist =
@@ -411,6 +419,9 @@ function normalizeDaemonFileConfig(raw, env) {
       limits?.maxPersistentNonGitDaemons,
       "limits.maxPersistentNonGitDaemons",
     ) ?? defaults.limits.maxPersistentNonGitDaemons;
+  const toolTimeoutMs =
+    readOptionalNonNegativeInteger(runtime?.toolTimeoutMs, "runtime.toolTimeoutMs") ??
+    defaults.runtime.toolTimeoutMs;
   return {
     daemon: {
       host,
@@ -435,6 +446,9 @@ function normalizeDaemonFileConfig(raw, env) {
         limits: {
           maxPersistentDaemons,
           maxPersistentNonGitDaemons,
+        },
+        runtime: {
+          toolTimeoutMs,
         },
       },
     },
@@ -496,6 +510,8 @@ function getDaemonPaths(args = {}) {
     dir,
     metadataPath: path2.join(dir, "daemon.json"),
     lockPath: path2.join(dir, "startup.lock"),
+    stdoutLogPath: path2.join(dir, "daemon.stdout.log"),
+    stderrLogPath: path2.join(dir, "daemon.stderr.log"),
     mcpSocketPath: mcpSocketPathForStateDir(dir),
   };
 }
@@ -575,23 +591,13 @@ function unwrapToolResponse(response) {
     throw new Error(`daemon returned invalid JSON: ${first.text}`);
   }
   if (response.isError) {
+    const errorPayload = typeof parsed === "object" && parsed !== null ? parsed : {};
     return {
       ok: false,
       error: {
-        code:
-          typeof parsed === "object" &&
-          parsed &&
-          "code" in parsed &&
-          typeof parsed.code === "string"
-            ? parsed.code
-            : "INTERNAL_ERROR",
+        code: typeof errorPayload.code === "string" ? errorPayload.code : "INTERNAL_ERROR",
         message:
-          typeof parsed === "object" &&
-          parsed &&
-          "message" in parsed &&
-          typeof parsed.message === "string"
-            ? parsed.message
-            : "daemon call failed",
+          typeof errorPayload.message === "string" ? errorPayload.message : "daemon call failed",
       },
     };
   }
