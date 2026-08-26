@@ -1,10 +1,11 @@
 import { spawn } from "node:child_process";
 import { constants as fsConstants, accessSync, existsSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import type { Readable } from "node:stream";
 
-export type ResolvableToolName = "fff-mcp" | "rg" | "fd";
-export type ToolResolutionSource = "env" | "path" | "missing";
+export type ResolvableToolName = "fff-mcp";
+export type ToolResolutionSource = "env" | "path" | "managed" | "missing";
 
 export type ToolResolution = {
   tool: ResolvableToolName;
@@ -21,9 +22,13 @@ export type ToolDiagnostic = ToolResolution & {
 
 const TOOL_ENV_VARS = {
   "fff-mcp": "FFF_ROUTER_FFF_MCP_BIN",
-  rg: "FFF_ROUTER_RG_BIN",
-  fd: "FFF_ROUTER_FD_BIN",
 } as const satisfies Record<ResolvableToolName, string>;
+
+function managedInstallPath(env: NodeJS.ProcessEnv): string {
+  const installDir =
+    env.FFF_MCP_INSTALL_DIR || path.join(env.HOME || os.homedir(), ".local", "bin");
+  return path.join(installDir, process.platform === "win32" ? "fff-mcp.exe" : "fff-mcp");
+}
 
 function isExecutable(pathValue: string): boolean {
   try {
@@ -106,6 +111,19 @@ export function resolveToolCommand(
       envVar,
       executable: executableCheck(pathCommand),
       ...(!executableCheck(pathCommand) ? { remediation: remediation(tool, envVar) } : {}),
+    };
+  }
+
+  const managedCommand = managedInstallPath(env);
+  if (existsSync(managedCommand)) {
+    const executable = executableCheck(managedCommand);
+    return {
+      tool,
+      command: managedCommand,
+      source: "managed",
+      envVar,
+      executable,
+      ...(!executable ? { remediation: remediation(tool, envVar) } : {}),
     };
   }
 

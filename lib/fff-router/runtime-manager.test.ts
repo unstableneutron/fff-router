@@ -1,407 +1,166 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
+import { WorkerPool } from "./runtime-manager";
 import type { SearchBackendRuntime } from "./adapters/types";
-import { RuntimeManager, runtimeRegistryKey } from "./runtime-manager";
 
-function deferred<T>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  const promise = new Promise<T>((nextResolve) => {
-    resolve = nextResolve;
-  });
+type FakeRuntime = SearchBackendRuntime & {
+  closed: boolean;
+  triggerClose: () => void;
+};
 
-  return { promise, resolve };
+function runtime(id: string): FakeRuntime {
+  let closeHandler: (() => void) | undefined;
+  return {
+    id,
+    closed: false,
+    async close() {
+      this.closed = true;
+    },
+    onClose(handler) {
+      closeHandler = handler;
+      return () => {
+        closeHandler = undefined;
+      };
+    },
+    triggerClose() {
+      closeHandler?.();
+    },
+  };
 }
 
-describe("RuntimeManager", () => {
-  test("starts the same backend/root only once under concurrent demand", async () => {
-    const startGate = deferred<SearchBackendRuntime>();
-    let startCount = 0;
-    const manager = new RuntimeManager();
-
-    const first = manager.withRuntime(
-      {
-        backendId: "fff-node",
-        persistenceRoot: "/repo/project",
-        start: async () => {
-          startCount += 1;
-          return await startGate.promise;
-        },
-      },
-      async (runtime) => runtime.id,
-    );
-
-    const second = manager.withRuntime(
-      {
-        backendId: "fff-node",
-        persistenceRoot: "/repo/project",
-        start: async () => {
-          startCount += 1;
-          return await startGate.promise;
-        },
-      },
-      async (runtime) => runtime.id,
-    );
-
-    expect(startCount).toBe(1);
-    startGate.resolve({
-      id: "shared-runtime",
-      close: async () => {},
-    });
-
-    expect(await first).toBe("shared-runtime");
-    expect(await second).toBe("shared-runtime");
+function pool(overrides: Partial<ConstructorParameters<typeof WorkerPool<FakeRuntime>>[0]> = {}) {
+  return new WorkerPool<FakeRuntime>({
+    maxWorkers: 3,
+    maxNonGitWorkers: 1,
+    sweepIntervalMs: 60_000,
+    restartBackoffMs: 100,
+    ...overrides,
   });
+}
 
-  test("reuses the same runtime after startup completes", async () => {
-    let startCount = 0;
-    const manager = new RuntimeManager();
-
-    const first = await manager.withRuntime(
-      {
-        backendId: "fff-node",
-        persistenceRoot: "/repo/project",
-        start: async () => {
-          startCount += 1;
-          return {
-            id: "runtime-1",
-            close: async () => {},
-          } satisfies SearchBackendRuntime;
-        },
-      },
-      async (runtime) => runtime.id,
-    );
-
-    const second = await manager.withRuntime(
-      {
-        backendId: "fff-node",
-        persistenceRoot: "/repo/project",
-        start: async () => {
-          startCount += 1;
-          return {
-            id: "runtime-2",
-            close: async () => {},
-          } satisfies SearchBackendRuntime;
-        },
-      },
-      async (runtime) => runtime.id,
-    );
-
-    expect(first).toBe("runtime-1");
-    expect(second).toBe("runtime-1");
-    expect(startCount).toBe(1);
-  });
-
-  test("evicts a cached runtime when the runtime reports it closed", async () => {
-    let closeHandler: (() => void) | undefined;
-    let startCount = 0;
-    const manager = new RuntimeManager();
-
-    const first = await manager.withRuntime(
-      {
-        backendId: "fff-node",
-        persistenceRoot: "/repo/project",
-        start: async () => {
-          startCount += 1;
-          return {
-            id: `runtime-${startCount}`,
-            close: async () => {},
-            onClose: (handler: () => void) => {
-              closeHandler = handler;
-              return () => {
-                closeHandler = undefined;
-              };
-            },
-          } as SearchBackendRuntime;
-        },
-      },
-      async (runtime) => runtime.id,
-    );
-    closeHandler?.();
-
-    const second = await manager.withRuntime(
-      {
-        backendId: "fff-node",
-        persistenceRoot: "/repo/project",
-        start: async () => {
-          startCount += 1;
-          return {
-            id: `runtime-${startCount}`,
-            close: async () => {},
-          } satisfies SearchBackendRuntime;
-        },
-      },
-      async (runtime) => runtime.id,
-    );
-
-    expect(first).toBe("runtime-1");
-    expect(second).toBe("runtime-2");
-    expect(startCount).toBe(2);
-  });
-
-  test("coalesces concurrent restarts for the same stale runtime", async () => {
-    const secondStart = deferred<SearchBackendRuntime>();
-    let startCount = 0;
-    let closeCount = 0;
-    let staleRuntime!: SearchBackendRuntime;
-    const manager = new RuntimeManager();
-
-    await manager.withRuntime(
-      {
-        backendId: "fff-node",
-        persistenceRoot: "/repo/project",
-        start: async () => {
-          startCount += 1;
-          return {
-            id: "runtime-1",
-            close: async () => {
-              closeCount += 1;
-            },
-          };
-        },
-      },
-      async (runtime) => {
-        staleRuntime = runtime;
-      },
-    );
-
-    const spec = {
-      backendId: "fff-node" as const,
-      persistenceRoot: "/repo/project",
-      start: async () => {
-        startCount += 1;
-        return await secondStart.promise;
-      },
-    };
-    const firstRestart = manager.restartRuntime(spec, staleRuntime);
-    const secondRestart = manager.restartRuntime(spec, staleRuntime);
-
-    secondStart.resolve({
-      id: "runtime-2",
-      close: async () => {
-        closeCount += 1;
-      },
-    });
-
-    await expect(firstRestart).resolves.toMatchObject({ id: "runtime-2" });
-    await expect(secondRestart).resolves.toMatchObject({ id: "runtime-2" });
-    expect(startCount).toBe(2);
-    expect(closeCount).toBe(1);
-  });
-
-  test("reports runtime diagnostics for health surfaces", async () => {
-    const manager = new RuntimeManager();
-
-    await manager.withRuntime(
-      {
-        backendId: "fff-mcp",
-        persistenceRoot: "/repo/project",
-        start: async () => ({
-          id: "runtime-1",
-          pid: 12345,
-          close: async () => {},
+describe("WorkerPool", () => {
+  test("deduplicates concurrent startup and leases one warm worker", async () => {
+    const workers = pool();
+    let releaseStart!: (value: FakeRuntime) => void;
+    const start = vi.fn(
+      async () =>
+        await new Promise<FakeRuntime>((resolve) => {
+          releaseStart = resolve;
         }),
-      },
-      async () => undefined,
     );
-    manager.recordRuntimeCallStart({
-      backendId: "fff-mcp",
-      persistenceRoot: "/repo/project",
-      at: 1_100,
-    });
-    manager.recordRuntimeCallSuccess({
-      backendId: "fff-mcp",
-      persistenceRoot: "/repo/project",
-      at: 1_200,
-    });
-    manager.recordRuntimeCallError({
-      backendId: "fff-mcp",
-      persistenceRoot: "/repo/project",
-      at: 1_300,
-      error: "SEARCH_FAILED: Not connected",
-    });
 
-    expect(manager.getDiagnostics(() => 1_500)).toEqual([
-      {
-        backendId: "fff-mcp",
-        key: "fff-mcp::/repo/project",
-        lastCallAt: 1_100,
-        lastError: "SEARCH_FAILED: Not connected",
-        lastErrorAt: 1_300,
-        lastSuccessAt: 1_200,
-        persistenceRoot: "/repo/project",
-        pid: 12345,
-        restartCount: 0,
-        runtimeId: "runtime-1",
-        state: "ready",
-        uptimeMs: expect.any(Number),
-      },
-    ]);
+    const firstPromise = workers.acquire({ root: "/a", rootType: "git", ttlMs: 1_000, start });
+    const secondPromise = workers.acquire({ root: "/a", rootType: "git", ttlMs: 1_000, start });
+    await vi.waitFor(() => expect(start).toHaveBeenCalledTimes(1));
+    releaseStart(runtime("a"));
+    const [first, second] = await Promise.all([firstPromise, secondPromise]);
+
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(first.ok && second.ok && first.value.runtime).toBe(second.ok && second.value.runtime);
+    expect(workers.getDiagnostics()[0]).toMatchObject({ state: "ready", activeLeases: 2 });
+    if (first.ok) await first.value.release();
+    if (second.ok) await second.value.release();
+    await workers.closeAll();
   });
 
-  test("evicted runtimes close exactly once", async () => {
-    let closeCount = 0;
-    const manager = new RuntimeManager();
-
-    await manager.withRuntime(
-      {
-        backendId: "fff-node",
-        persistenceRoot: "/repo/project",
-        start: async () => ({
-          id: "runtime-1",
-          close: async () => {
-            closeCount += 1;
-          },
-        }),
-      },
-      async () => undefined,
-    );
-
-    await manager.evictRuntime({
-      backendId: "fff-node",
-      persistenceRoot: "/repo/project",
+  test("never closes an actively leased worker", async () => {
+    const workers = pool({ maxWorkers: 1 });
+    const activeRuntime = runtime("a");
+    const active = await workers.acquire({
+      root: "/a",
+      rootType: "git",
+      ttlMs: 1_000,
+      start: async () => activeRuntime,
     });
-    await manager.evictRuntime({
-      backendId: "fff-node",
-      persistenceRoot: "/repo/project",
-    });
-
-    expect(closeCount).toBe(1);
+    expect(await workers.evict("/a")).toBe(true);
+    expect(activeRuntime.closed).toBe(false);
+    expect(workers.getDiagnostics()[0]).toMatchObject({ state: "draining", activeLeases: 1 });
+    if (active.ok) await active.value.release();
+    expect(activeRuntime.closed).toBe(true);
+    await workers.closeAll();
   });
 
-  test("evicting during startup closes the eventual runtime and forces a fresh start", async () => {
-    const firstStart = deferred<SearchBackendRuntime>();
-    let startCount = 0;
-    let closeCount = 0;
-    const manager = new RuntimeManager();
-
-    const pending = manager.withRuntime(
-      {
-        backendId: "fff-node",
-        persistenceRoot: "/repo/project",
-        start: async () => {
-          startCount += 1;
-          return await firstStart.promise;
-        },
-      },
-      async (runtime) => runtime.id,
-    );
-
-    await manager.evictRuntime({
-      backendId: "fff-node",
-      persistenceRoot: "/repo/project",
+  test("uses idle LRU eviction when capacity is full", async () => {
+    const workers = pool({ maxWorkers: 1 });
+    const firstRuntime = runtime("a");
+    const first = await workers.acquire({
+      root: "/a",
+      rootType: "git",
+      ttlMs: 1_000,
+      start: async () => firstRuntime,
     });
-
-    firstStart.resolve({
-      id: "runtime-1",
-      close: async () => {
-        closeCount += 1;
-      },
+    if (first.ok) await first.value.release();
+    const second = await workers.acquire({
+      root: "/b",
+      rootType: "git",
+      ttlMs: 1_000,
+      start: async () => runtime("b"),
     });
-
-    await expect(pending).rejects.toThrow(
-      "Runtime 'fff-node::/repo/project' was evicted before startup completed",
-    );
-    expect(closeCount).toBe(1);
-
-    const next = await manager.withRuntime(
-      {
-        backendId: "fff-node",
-        persistenceRoot: "/repo/project",
-        start: async () => {
-          startCount += 1;
-          return {
-            id: "runtime-2",
-            close: async () => {
-              closeCount += 1;
-            },
-          } satisfies SearchBackendRuntime;
-        },
-      },
-      async (runtime) => runtime.id,
-    );
-
-    expect(next).toBe("runtime-2");
-    expect(startCount).toBe(2);
+    await vi.waitFor(() => expect(firstRuntime.closed).toBe(true));
+    expect(
+      workers.getDiagnostics().some((entry) => entry.root === "/b" && entry.state === "ready"),
+    ).toBe(true);
+    if (second.ok) await second.value.release();
+    await workers.closeAll();
   });
 
-  test("search execution is not performed under the mutation lock", async () => {
-    let secondStartCount = 0;
-    const manager = new RuntimeManager();
-    const firstExecuteGate = deferred<void>();
-
-    const first = manager.withRuntime(
-      {
-        backendId: "fff-node",
-        persistenceRoot: "/repo/project-a",
-        start: async () => ({
-          id: "runtime-a",
-          close: async () => {},
-        }),
-      },
-      async () => {
-        const second = manager.withRuntime(
-          {
-            backendId: "fff-node",
-            persistenceRoot: "/repo/project-b",
-            start: async () => {
-              secondStartCount += 1;
-              return {
-                id: "runtime-b",
-                close: async () => {},
-              } satisfies SearchBackendRuntime;
-            },
-          },
-          async (runtime) => runtime.id,
-        );
-
-        await Promise.resolve();
-        expect(secondStartCount).toBe(1);
-        firstExecuteGate.resolve();
-        return await second;
-      },
-    );
-
-    await firstExecuteGate.promise;
-    expect(await first).toBe("runtime-b");
+  test("expires idle workers by root-specific TTL", async () => {
+    let now = 0;
+    const workers = pool({ now: () => now });
+    const worker = runtime("a");
+    const lease = await workers.acquire({
+      root: "/a",
+      rootType: "git",
+      ttlMs: 10,
+      start: async () => worker,
+    });
+    if (lease.ok) await lease.value.release();
+    now = 11;
+    await workers.sweep();
+    expect(worker.closed).toBe(true);
+    await workers.closeAll();
   });
 
-  test("retries after startup failure and clears the failed in-flight state", async () => {
-    let startCount = 0;
-    const manager = new RuntimeManager();
+  test("backs off failed startup and preserves failure count on retry", async () => {
+    let now = 0;
+    const workers = pool({ now: () => now, restartBackoffMs: 100 });
+    const start = vi
+      .fn<() => Promise<FakeRuntime>>()
+      .mockRejectedValueOnce(new Error("boom"))
+      .mockResolvedValueOnce(runtime("recovered"));
+    const spec = { root: "/a", rootType: "git" as const, ttlMs: 100, start };
 
-    await expect(
-      manager.withRuntime(
-        {
-          backendId: "fff-node",
-          persistenceRoot: "/repo/project",
-          start: async () => {
-            startCount += 1;
-            throw new Error("boom");
-          },
-        },
-        async (runtime) => runtime.id,
-      ),
-    ).rejects.toThrow("boom");
-
-    const next = await manager.withRuntime(
-      {
-        backendId: "fff-node",
-        persistenceRoot: "/repo/project",
-        start: async () => {
-          startCount += 1;
-          return {
-            id: "runtime-2",
-            close: async () => {},
-          } satisfies SearchBackendRuntime;
-        },
-      },
-      async (runtime) => runtime.id,
-    );
-
-    expect(next).toBe("runtime-2");
-    expect(startCount).toBe(2);
+    expect(await workers.acquire(spec)).toMatchObject({ ok: false });
+    expect(await workers.acquire(spec)).toMatchObject({
+      ok: false,
+      error: { code: "WORKER_UNAVAILABLE", message: expect.stringContaining("backing off") },
+    });
+    expect(start).toHaveBeenCalledTimes(1);
+    now = 101;
+    const recovered = await workers.acquire(spec);
+    expect(recovered.ok).toBe(true);
+    expect(start).toHaveBeenCalledTimes(2);
+    expect(workers.getDiagnostics()[0]?.failureCount).toBe(1);
+    if (recovered.ok) await recovered.value.release();
+    await workers.closeAll();
   });
 
-  test("builds stable runtime registry keys", () => {
-    expect(runtimeRegistryKey("fff-node", "/repo/project")).toBe("fff-node::/repo/project");
+  test("reports a busy worker limit without killing work", async () => {
+    const workers = pool({ maxWorkers: 1 });
+    const first = await workers.acquire({
+      root: "/a",
+      rootType: "git",
+      ttlMs: 100,
+      start: async () => runtime("a"),
+    });
+    expect(
+      await workers.acquire({
+        root: "/b",
+        rootType: "git",
+        ttlMs: 100,
+        start: async () => runtime("b"),
+      }),
+    ).toMatchObject({ ok: false, error: { code: "WORKER_LIMIT_REACHED" } });
+    if (first.ok) await first.value.release();
+    await workers.closeAll();
   });
 });

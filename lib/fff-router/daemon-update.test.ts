@@ -47,7 +47,14 @@ describe("runInteractiveUpdate", () => {
         kind: "outdated",
         currentVersion: "0.7.0",
         latestVersion: "0.7.1",
-        command: ["aube", "add", "-g", "github:unstableneutron/fff-router"],
+        installer: "corepack-pnpm",
+        command: [
+          "corepack",
+          "pnpm@11.19.0",
+          "add",
+          "--global",
+          "github:unstableneutron/fff-router",
+        ],
       }),
       installFffMcpUpdate,
       installFffRouterdUpdate,
@@ -63,7 +70,7 @@ describe("runInteractiveUpdate", () => {
     expect(exitCode).toBe(0);
     expect(prompts).toEqual([
       "Update fff-mcp 0.9.1 -> 0.9.4?",
-      "Update fff-routerd 0.7.0 -> 0.7.1 with aube?",
+      "Update fff-routerd 0.7.0 -> 0.7.1 from GitHub with Corepack/pnpm?",
     ]);
     expect(installFffMcpUpdate).toHaveBeenCalledTimes(1);
     expect(installFffRouterdUpdate).toHaveBeenCalledTimes(1);
@@ -222,10 +229,10 @@ describe("installFffMcpUpdate", () => {
 });
 
 describe("checkFffRouterdUpdate", () => {
-  test("checks the GitHub package version and prepares an aube update command", async () => {
+  test("prefers the Corepack-pinned pnpm package manager", async () => {
     const plan = await checkFffRouterdUpdate({
       currentVersion: "0.7.0",
-      commandExists: async (command) => command === "aube",
+      commandExists: async (command) => command === "corepack",
       getLatestVersion: async () => "0.7.1",
     });
 
@@ -233,7 +240,43 @@ describe("checkFffRouterdUpdate", () => {
       kind: "outdated",
       currentVersion: "0.7.0",
       latestVersion: "0.7.1",
-      command: ["aube", "add", "-g", "github:unstableneutron/fff-router"],
+      installer: "corepack-pnpm",
+      command: ["corepack", "pnpm@11.19.0", "add", "--global", "github:unstableneutron/fff-router"],
     });
+  });
+
+  test("falls back to aube and then a standalone pnpm", async () => {
+    const getLatestVersion = async () => "0.7.1";
+    const aubePlan = await checkFffRouterdUpdate({
+      currentVersion: "0.7.0",
+      commandExists: async (command) => command === "aube",
+      getLatestVersion,
+    });
+    const pnpmPlan = await checkFffRouterdUpdate({
+      currentVersion: "0.7.0",
+      commandExists: async (command) => command === "pnpm",
+      getLatestVersion,
+    });
+
+    expect(aubePlan).toMatchObject({
+      kind: "outdated",
+      installer: "aube",
+      command: ["aube", "add", "--global", "github:unstableneutron/fff-router"],
+    });
+    expect(pnpmPlan).toMatchObject({
+      kind: "outdated",
+      installer: "pnpm",
+      command: ["pnpm", "add", "--global", "github:unstableneutron/fff-router"],
+    });
+  });
+
+  test("does not require a package manager when already current", async () => {
+    const plan = await checkFffRouterdUpdate({
+      currentVersion: "1.0.0",
+      commandExists: async () => false,
+      getLatestVersion: async () => "1.0.0",
+    });
+
+    expect(plan).toEqual({ kind: "current", currentVersion: "1.0.0", latestVersion: "1.0.0" });
   });
 });

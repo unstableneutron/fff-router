@@ -77,7 +77,6 @@ export function deriveRoutingTarget(args: DeriveArgs): Result<RoutingTarget> {
         rootType: "git",
         persistenceRoot: path.normalize(args.gitRoot),
         searchScope: args.realPath,
-        backendMode: "persistent",
         ttlMs: args.config.ttl.gitMs,
       },
     };
@@ -104,7 +103,6 @@ export function deriveRoutingTarget(args: DeriveArgs): Result<RoutingTarget> {
       rootType: "non-git",
       persistenceRoot,
       searchScope: args.realPath,
-      backendMode: "ephemeral-candidate",
       ttlMs: args.config.ttl.nonGitMs,
     },
   };

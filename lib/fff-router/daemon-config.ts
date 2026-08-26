@@ -1,22 +1,20 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
+import { isIP } from "node:net";
 import path from "node:path";
-import {
-  getDefaultFallbackBackend,
-  parseBackend,
-  type BackendSelection,
-  type SupportedBackendId,
-} from "./backend-config";
+import { fileURLToPath } from "node:url";
 import { expandHomePath } from "./home-path";
 import type { RouterConfig } from "./types";
 
 export const DEFAULT_DAEMON_HOST = "127.0.0.1";
-export const DAEMON_PROTOCOL_VERSION = "fff-router-http-daemon-v1";
+export const DAEMON_PROTOCOL_VERSION = "fff-router-v1";
 export const DEFAULT_DAEMON_PORT = 4319;
 export const DEFAULT_DAEMON_MCP_PATH = "/mcp";
-const DEFAULT_BACKEND: SupportedBackendId = "fff-node";
 const DEFAULT_BACKEND_TOOL_TIMEOUT_MS = 30_000;
+const DEFAULT_SWEEP_INTERVAL_MS = 30_000;
+const DEFAULT_RESTART_BACKOFF_MS = 1_000;
+const moduleDir = path.dirname(fileURLToPath(import.meta.url));
 
 export type DaemonConfig = {
   host: string;
@@ -25,7 +23,6 @@ export type DaemonConfig = {
 };
 
 export type DaemonReloadConfig = {
-  backend: BackendSelection;
   router: RouterConfig;
 };
 
@@ -33,22 +30,20 @@ export type DaemonFileConfig = {
   host?: string;
   port?: number;
   mcpPath?: string;
-  backend?: SupportedBackendId;
   allowlist?: string[];
-  promotion?: {
-    windowMs?: number;
-    requiredHits?: number;
-  };
+  warmRoots?: string[];
   ttl?: {
     gitMs?: number;
     nonGitMs?: number;
   };
   limits?: {
-    maxPersistentDaemons?: number;
-    maxPersistentNonGitDaemons?: number;
+    maxWorkers?: number;
+    maxNonGitWorkers?: number;
   };
   runtime?: {
     toolTimeoutMs?: number;
+    sweepIntervalMs?: number;
+    restartBackoffMs?: number;
   };
 };
 
@@ -60,17 +55,17 @@ export type DaemonPolicyConfigPaths = {
 
 export type DaemonPaths = {
   dir: string;
+  authTokenPath: string;
   metadataPath: string;
   lockPath: string;
   stdoutLogPath: string;
   stderrLogPath: string;
-  mcpSocketPath: string;
 };
 
 function packageVersion(): string {
   const candidatePaths = [
-    path.resolve(import.meta.dirname, "../../package.json"),
-    path.resolve(import.meta.dirname, "../../../package.json"),
+    path.resolve(moduleDir, "../../package.json"),
+    path.resolve(moduleDir, "../../../package.json"),
   ];
 
   for (const candidatePath of candidatePaths) {
@@ -87,16 +82,20 @@ function packageVersion(): string {
 }
 
 export const PACKAGE_VERSION = packageVersion();
+// pnpm intentionally omits packageManager from packed manifests. Keep this
+// build-time constant aligned with package.json; package-manifest.test.ts
+// enforces the invariant.
+export const PACKAGE_MANAGER = "pnpm@11.19.0";
 
 function hashFingerprint(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex").slice(0, 16);
 }
 
 function packagedDaemonEntrypointPath(): string {
-  const primaryCandidatePath = path.resolve(import.meta.dirname, "../../dist/bin/fff-routerd.js");
+  const primaryCandidatePath = path.resolve(moduleDir, "../../dist/bin/fff-routerd.js");
   const candidatePaths = [
     primaryCandidatePath,
-    path.resolve(import.meta.dirname, "../../bin/fff-routerd.js"),
+    path.resolve(moduleDir, "../../bin/fff-routerd.js"),
   ];
 
   for (const candidatePath of candidatePaths) {
@@ -139,23 +138,16 @@ export function getDaemonSourceFingerprint(
   });
 }
 
-function configHome(env: NodeJS.ProcessEnv): string {
+function userHome(env: NodeJS.ProcessEnv): string {
   return env.HOME || os.homedir();
 }
 
-function stateHome(env: NodeJS.ProcessEnv): string {
-  return env.XDG_STATE_HOME || path.join(configHome(env), ".local", "state");
+function configHome(env: NodeJS.ProcessEnv): string {
+  return env.XDG_CONFIG_HOME || path.join(userHome(env), ".config");
 }
 
-function mcpSocketPathForStateDir(dir: string): string {
-  const id = hashFingerprint({ dir });
-  if (process.platform === "win32") {
-    return `\\\\.\\pipe\\fff-routerd-${id}`;
-  }
-
-  // Unix domain socket path limits are small on macOS, so keep the bind path
-  // short while deriving a stable per-user/per-env identity from the state dir.
-  return path.join("/tmp", `fff-routerd-${id}.sock`);
+function stateHome(env: NodeJS.ProcessEnv): string {
+  return env.XDG_STATE_HOME || path.join(userHome(env), ".local", "state");
 }
 
 export function getDefaultDaemonConfig(): DaemonConfig {
@@ -169,30 +161,25 @@ export function getDefaultDaemonConfig(): DaemonConfig {
 export function getDefaultRouterConfig(): RouterConfig {
   return {
     allowlistedNonGitPrefixes: [],
-    promotion: {
-      windowMs: 10 * 60 * 1000,
-      requiredHits: 2,
-    },
+    warmRoots: [],
     ttl: {
       gitMs: 60 * 60 * 1000,
       nonGitMs: 15 * 60 * 1000,
     },
     limits: {
-      maxPersistentDaemons: 12,
-      maxPersistentNonGitDaemons: 4,
+      maxWorkers: 12,
+      maxNonGitWorkers: 4,
     },
     runtime: {
       toolTimeoutMs: DEFAULT_BACKEND_TOOL_TIMEOUT_MS,
+      sweepIntervalMs: DEFAULT_SWEEP_INTERVAL_MS,
+      restartBackoffMs: DEFAULT_RESTART_BACKOFF_MS,
     },
   };
 }
 
 export function getDefaultDaemonReloadConfig(): DaemonReloadConfig {
   return {
-    backend: {
-      primaryBackendId: DEFAULT_BACKEND,
-      fallbackBackendId: getDefaultFallbackBackend(DEFAULT_BACKEND),
-    },
     router: getDefaultRouterConfig(),
   };
 }
@@ -201,22 +188,20 @@ export type DefaultDaemonFileConfig = {
   host: string;
   port: number;
   mcpPath: string;
-  backend: SupportedBackendId;
   allowlist: string[];
-  promotion: {
-    windowMs: number;
-    requiredHits: number;
-  };
+  warmRoots: string[];
   ttl: {
     gitMs: number;
     nonGitMs: number;
   };
   limits: {
-    maxPersistentDaemons: number;
-    maxPersistentNonGitDaemons: number;
+    maxWorkers: number;
+    maxNonGitWorkers: number;
   };
   runtime: {
     toolTimeoutMs: number;
+    sweepIntervalMs: number;
+    restartBackoffMs: number;
   };
 };
 
@@ -227,13 +212,12 @@ export function getDefaultDaemonFileConfig(): DefaultDaemonFileConfig {
     host: daemon.host,
     port: daemon.port,
     mcpPath: daemon.mcpPath,
-    backend: reload.backend.primaryBackendId,
     allowlist: [],
-    promotion: { ...reload.router.promotion },
+    warmRoots: [],
     ttl: { ...reload.router.ttl },
     limits: { ...reload.router.limits },
     runtime: {
-      toolTimeoutMs: reload.router.runtime?.toolTimeoutMs ?? DEFAULT_BACKEND_TOOL_TIMEOUT_MS,
+      ...reload.router.runtime,
     },
   };
 }
@@ -246,7 +230,7 @@ export function getDaemonPolicyConfigPaths(
   args: { env?: NodeJS.ProcessEnv } = {},
 ): DaemonPolicyConfigPaths {
   const env = args.env ?? process.env;
-  const dir = path.join(configHome(env), ".config", "fff-routerd");
+  const dir = path.join(configHome(env), "fff-routerd");
   return {
     dir,
     jsonPath: path.join(dir, "config.json"),
@@ -295,6 +279,19 @@ function expectObject(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+function rejectUnknownKeys(
+  value: Record<string, unknown>,
+  allowed: readonly string[],
+  label: string,
+): void {
+  const unknown = Object.keys(value).filter((key) => !allowed.includes(key));
+  if (unknown.length > 0) {
+    throw new Error(
+      `${label} contains unknown field${unknown.length === 1 ? "" : "s"}: ${unknown.join(", ")}`,
+    );
+  }
+}
+
 function readOptionalNumber(value: unknown, label: string): number | undefined {
   if (value == null) {
     return undefined;
@@ -312,6 +309,14 @@ function readOptionalNonNegativeInteger(value: unknown, label: string): number |
   }
   if (!Number.isInteger(parsed) || parsed < 0) {
     throw new Error(`${label} must be a non-negative integer`);
+  }
+  return parsed;
+}
+
+function readOptionalPositiveInteger(value: unknown, label: string): number | undefined {
+  const parsed = readOptionalNonNegativeInteger(value, label);
+  if (parsed === 0) {
+    throw new Error(`${label} must be greater than zero`);
   }
   return parsed;
 }
@@ -344,6 +349,22 @@ function readOptionalMcpPath(value: unknown): string | undefined {
   return parsed;
 }
 
+function readOptionalHost(value: unknown): string | undefined {
+  const host = readOptionalString(value, "host");
+  if (host == null) {
+    return undefined;
+  }
+  const normalized = host.toLowerCase().replace(/^\[|\]$/g, "");
+  if (
+    normalized !== "localhost" &&
+    normalized !== "::1" &&
+    !(isIP(normalized) === 4 && normalized.startsWith("127."))
+  ) {
+    throw new Error("fff-routerd v1 is machine-local; host must be localhost, 127.0.0.0/8, or ::1");
+  }
+  return host;
+}
+
 function readOptionalString(value: unknown, label: string): string | undefined {
   if (value == null) {
     return undefined;
@@ -364,17 +385,7 @@ function readOptionalStringArray(value: unknown, label: string): string[] | unde
   return value;
 }
 
-function readOptionalBackend(value: unknown): SupportedBackendId | undefined {
-  if (value == null) {
-    return undefined;
-  }
-  if (typeof value !== "string") {
-    throw new Error("backend must be a string");
-  }
-  return parseBackend(value);
-}
-
-function expandAllowlistEntries(entries: string[], env: NodeJS.ProcessEnv) {
+function expandPathEntries(entries: string[], env: NodeJS.ProcessEnv): string[] {
   return entries
     .map((prefix) => expandHomePath(prefix, env))
     .map((result) => {
@@ -384,7 +395,19 @@ function expandAllowlistEntries(entries: string[], env: NodeJS.ProcessEnv) {
       return result.value;
     })
     .filter(Boolean)
-    .map((prefix) => ({ prefix, mode: "first-child-root" as const }));
+    .map((entry) => {
+      if (!path.isAbsolute(entry)) {
+        throw new Error(`configured paths must be absolute or home-relative: '${entry}'`);
+      }
+      return path.normalize(entry);
+    });
+}
+
+function expandAllowlistEntries(entries: string[], env: NodeJS.ProcessEnv) {
+  return expandPathEntries(entries, env).map((prefix) => ({
+    prefix,
+    mode: "first-child-root" as const,
+  }));
 }
 
 export function parseJsonWithComments(text: string): unknown {
@@ -500,40 +523,50 @@ function normalizeDaemonFileConfig(
 } {
   const defaults = getDefaultDaemonFileConfig();
   const fileConfig = expectObject(raw, "fff-routerd config");
-  const promotion =
-    fileConfig.promotion == null ? null : expectObject(fileConfig.promotion, "promotion");
+  rejectUnknownKeys(
+    fileConfig,
+    ["host", "port", "mcpPath", "allowlist", "warmRoots", "ttl", "limits", "runtime"],
+    "fff-routerd config",
+  );
   const ttl = fileConfig.ttl == null ? null : expectObject(fileConfig.ttl, "ttl");
   const limits = fileConfig.limits == null ? null : expectObject(fileConfig.limits, "limits");
   const runtime = fileConfig.runtime == null ? null : expectObject(fileConfig.runtime, "runtime");
+  if (ttl) rejectUnknownKeys(ttl, ["gitMs", "nonGitMs"], "ttl");
+  if (limits) rejectUnknownKeys(limits, ["maxWorkers", "maxNonGitWorkers"], "limits");
+  if (runtime) {
+    rejectUnknownKeys(runtime, ["toolTimeoutMs", "sweepIntervalMs", "restartBackoffMs"], "runtime");
+  }
 
-  const normalizedEnv = { ...env, HOME: configHome(env) } as NodeJS.ProcessEnv;
-  const backendId = readOptionalBackend(fileConfig.backend) ?? defaults.backend;
+  const normalizedEnv = { ...env, HOME: userHome(env) } as NodeJS.ProcessEnv;
   const allowlist =
     readOptionalStringArray(fileConfig.allowlist, "allowlist") ?? defaults.allowlist;
-  const host = readOptionalString(fileConfig.host, "host") ?? defaults.host;
+  const warmRoots =
+    readOptionalStringArray(fileConfig.warmRoots, "warmRoots") ?? defaults.warmRoots;
+  const host = readOptionalHost(fileConfig.host) ?? defaults.host;
   const port = readOptionalPort(fileConfig.port) ?? defaults.port;
   const mcpPath = readOptionalMcpPath(fileConfig.mcpPath) ?? defaults.mcpPath;
 
-  const promotionWindowMs =
-    readOptionalNonNegativeInteger(promotion?.windowMs, "promotion.windowMs") ??
-    defaults.promotion.windowMs;
-  const promotionRequiredHits =
-    readOptionalNonNegativeInteger(promotion?.requiredHits, "promotion.requiredHits") ??
-    defaults.promotion.requiredHits;
   const ttlGitMs = readOptionalNonNegativeInteger(ttl?.gitMs, "ttl.gitMs") ?? defaults.ttl.gitMs;
   const ttlNonGitMs =
     readOptionalNonNegativeInteger(ttl?.nonGitMs, "ttl.nonGitMs") ?? defaults.ttl.nonGitMs;
-  const maxPersistentDaemons =
-    readOptionalNonNegativeInteger(limits?.maxPersistentDaemons, "limits.maxPersistentDaemons") ??
-    defaults.limits.maxPersistentDaemons;
-  const maxPersistentNonGitDaemons =
-    readOptionalNonNegativeInteger(
-      limits?.maxPersistentNonGitDaemons,
-      "limits.maxPersistentNonGitDaemons",
-    ) ?? defaults.limits.maxPersistentNonGitDaemons;
+  const maxWorkers =
+    readOptionalPositiveInteger(limits?.maxWorkers, "limits.maxWorkers") ??
+    defaults.limits.maxWorkers;
+  const maxNonGitWorkers =
+    readOptionalPositiveInteger(limits?.maxNonGitWorkers, "limits.maxNonGitWorkers") ??
+    defaults.limits.maxNonGitWorkers;
+  if (maxNonGitWorkers > maxWorkers) {
+    throw new Error("limits.maxNonGitWorkers must not exceed limits.maxWorkers");
+  }
   const toolTimeoutMs =
     readOptionalNonNegativeInteger(runtime?.toolTimeoutMs, "runtime.toolTimeoutMs") ??
     defaults.runtime.toolTimeoutMs;
+  const sweepIntervalMs =
+    readOptionalNonNegativeInteger(runtime?.sweepIntervalMs, "runtime.sweepIntervalMs") ??
+    defaults.runtime.sweepIntervalMs;
+  const restartBackoffMs =
+    readOptionalNonNegativeInteger(runtime?.restartBackoffMs, "runtime.restartBackoffMs") ??
+    defaults.runtime.restartBackoffMs;
 
   return {
     daemon: {
@@ -542,26 +575,21 @@ function normalizeDaemonFileConfig(
       mcpPath,
     },
     reload: {
-      backend: {
-        primaryBackendId: backendId,
-        fallbackBackendId: getDefaultFallbackBackend(backendId),
-      },
       router: {
         allowlistedNonGitPrefixes: expandAllowlistEntries(allowlist, normalizedEnv),
-        promotion: {
-          windowMs: promotionWindowMs,
-          requiredHits: promotionRequiredHits,
-        },
+        warmRoots: expandPathEntries(warmRoots, normalizedEnv),
         ttl: {
           gitMs: ttlGitMs,
           nonGitMs: ttlNonGitMs,
         },
         limits: {
-          maxPersistentDaemons,
-          maxPersistentNonGitDaemons,
+          maxWorkers,
+          maxNonGitWorkers,
         },
         runtime: {
           toolTimeoutMs,
+          sweepIntervalMs,
+          restartBackoffMs,
         },
       },
     },
@@ -639,13 +667,11 @@ export function getDaemonServerFingerprint(
   } = {},
 ): string {
   const daemon = getDaemonConfig({ env: args.env });
-  const paths = getDaemonPaths({ env: args.env });
   return hashFingerprint({
     daemon: {
       ...daemon,
       ...args.daemonConfig,
     },
-    mcpSocketPath: paths.mcpSocketPath,
     protocolVersion: DAEMON_PROTOCOL_VERSION,
     daemonSourceFingerprint: getDaemonSourceFingerprint({ env: args.env }),
   });
@@ -676,10 +702,10 @@ export function getDaemonPaths(args: { env?: NodeJS.ProcessEnv } = {}): DaemonPa
   const dir = path.join(stateHome(env), "fff-routerd");
   return {
     dir,
+    authTokenPath: path.join(dir, "auth-token"),
     metadataPath: path.join(dir, "daemon.json"),
     lockPath: path.join(dir, "startup.lock"),
     stdoutLogPath: path.join(dir, "daemon.stdout.log"),
     stderrLogPath: path.join(dir, "daemon.stderr.log"),
-    mcpSocketPath: mcpSocketPathForStateDir(dir),
   };
 }

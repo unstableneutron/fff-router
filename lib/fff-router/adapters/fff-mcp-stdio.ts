@@ -12,14 +12,20 @@ import type {
   SearchBackendRuntime,
 } from "./types";
 
-type FffMcpRuntime = SearchBackendRuntime & {
+export type FffMcpRuntime = SearchBackendRuntime & {
   callTool: (name: string, args: Record<string, unknown>) => Promise<string>;
 };
 
 type TextMatchRequest = Extract<
   Parameters<SearchBackendAdapter<FffMcpRuntime>["execute"]>[0]["request"],
-  { queryKind: "search_terms" | "grep" }
+  { queryKind: "grep" }
 >;
+type FindFilesRequest = Extract<
+  Parameters<SearchBackendAdapter<FffMcpRuntime>["execute"]>[0]["request"],
+  { queryKind: "find_files" }
+>;
+type FindFileItem = ReturnType<typeof parseFindFilesOutput>["items"][number];
+type EvaluatedFindFilesPage = ReturnType<typeof evaluateFindFilesPage>;
 type TextMatchItem = ReturnType<typeof parseTextMatchOutput>["items"][number];
 type EvaluatedTextMatchPage = ReturnType<typeof evaluateTextMatchPage>;
 
@@ -40,6 +46,7 @@ type FffMcpTransport = {
 type FffMcpTransportParams = ConstructorParameters<typeof StdioClientTransport>[0];
 
 type CreateFffMcpStdioAdapterOptions = {
+  resolveCommand?: () => string;
   createClient?: () => FffMcpClient;
   createTransport?: (params: FffMcpTransportParams) => FffMcpTransport;
   waitForReady?: (
@@ -47,17 +54,6 @@ type CreateFffMcpStdioAdapterOptions = {
   ) => Promise<string>;
   closeTimeoutMs?: number;
 };
-
-function backendUnavailable(message: string): BackendSearchResult {
-  return {
-    ok: false,
-    error: {
-      code: "BACKEND_UNAVAILABLE",
-      backendId: "fff-mcp",
-      message,
-    },
-  };
-}
 
 function searchFailed(message: string): BackendSearchResult {
   return {
@@ -76,10 +72,6 @@ function discoverFffMcpCommand(): string {
     throw new Error(resolution.remediation ?? "fff-mcp is not available");
   }
   return resolution.command;
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function closeBestEffort(
@@ -117,6 +109,7 @@ function normalizeRelative(relativePath: string): string {
 }
 
 const GLOB_META_PATTERN = /[*?[\]{}!]/;
+const UNSAFE_SCOPE_PATH_PATTERN = /[\s,*?[\]{}!]/;
 
 function compileFffMcpGlobConstraint(glob: string): string {
   const normalized = normalizeRelative(glob);
@@ -159,14 +152,14 @@ function encodeWithinEntryToken(
 ): string | null {
   if (entry.fileRestriction) {
     const relativeFile = normalizeRelative(path.relative(persistenceRoot, entry.fileRestriction));
-    if (!relativeFile || relativeFile === ".") {
+    if (!relativeFile || relativeFile === "." || UNSAFE_SCOPE_PATH_PATTERN.test(relativeFile)) {
       return null;
     }
     return `**/${relativeFile}`;
   }
 
   const baseRelative = normalizeRelative(path.relative(persistenceRoot, entry.basePath));
-  if (!baseRelative || baseRelative === ".") {
+  if (!baseRelative || baseRelative === "." || UNSAFE_SCOPE_PATH_PATTERN.test(baseRelative)) {
     return null;
   }
   const withoutTrailingSlash = baseRelative.replace(/\/+$/, "");
@@ -187,12 +180,12 @@ function compileMultiWithinConstraint(
   const tokens: string[] = [];
   for (const entry of entries) {
     const token = encodeWithinEntryToken(entry, persistenceRoot);
-    if (token !== null) {
-      tokens.push(token);
+    if (token === null) {
+      // A root-wide or unencodable path makes a narrower union constraint
+      // incorrect. Let the post-filter enforce the complete request instead.
+      return null;
     }
-  }
-  if (tokens.length === 0) {
-    return null;
+    tokens.push(token);
   }
   if (tokens.length === 1) {
     return tokens[0] ?? null;
@@ -234,19 +227,22 @@ function buildConstraintTokens(request: {
   } else if (request.fileRestriction) {
     // Single-file form — anchored glob. See `encodeWithinEntryToken` for
     // the rationale (bare path tokens are fuzzy hints, not exact pins).
-    const relativeFile = normalizeRelative(
-      path.relative(request.persistenceRoot, request.fileRestriction),
+    const token = encodeWithinEntryToken(
+      {
+        basePath: request.basePath,
+        fileRestriction: request.fileRestriction,
+      },
+      request.persistenceRoot,
     );
-    if (relativeFile && relativeFile !== ".") {
-      tokens.push(`**/${relativeFile}`);
+    if (token !== null) {
+      tokens.push(token);
     }
   } else {
-    // Single-dir form — dir-prefix token with trailing slash.
-    const baseRelative = normalizeRelative(
-      path.relative(request.persistenceRoot, request.basePath),
-    );
-    if (baseRelative && baseRelative !== ".") {
-      tokens.push(baseRelative.endsWith("/") ? baseRelative : `${baseRelative}/`);
+    // Single-dir form — recursive glob. A trailing slash is only a fuzzy hint
+    // in fff-mcp's DSL and can leak sibling paths into the candidate page.
+    const token = encodeWithinEntryToken({ basePath: request.basePath }, request.persistenceRoot);
+    if (token !== null) {
+      tokens.push(token);
     }
   }
 
@@ -270,6 +266,7 @@ function compileFindFilesQuery(request: {
   persistenceRoot: string;
   basePath: string;
   fileRestriction?: string;
+  additionalWithinEntries?: ValidatedWithinEntry[];
   glob?: string;
   extensions: string[];
   excludePaths: string[];
@@ -281,6 +278,7 @@ function compileConstraints(request: {
   persistenceRoot: string;
   basePath: string;
   fileRestriction?: string;
+  additionalWithinEntries?: ValidatedWithinEntry[];
   glob?: string;
   extensions: string[];
   excludePaths: string[];
@@ -293,6 +291,7 @@ function compileGrepQuery(request: {
   persistenceRoot: string;
   basePath: string;
   fileRestriction?: string;
+  additionalWithinEntries?: ValidatedWithinEntry[];
   glob?: string;
   extensions: string[];
   excludePaths: string[];
@@ -801,6 +800,9 @@ async function executeTextMatchWithFilteredCursorDrain(
   let page = evaluateTextMatchPage(request, text);
   const pages = [page];
   const collectedItems: TextMatchItem[] = [...page.filteredItems];
+  const seenItems = new Set(
+    collectedItems.map((item) => `${item.relativePath}\0${item.line}\0${item.text}`),
+  );
   const seenCursors = new Set<string>();
   let repeatedCursor: string | undefined;
   let pageCapHit = false;
@@ -821,10 +823,20 @@ async function executeTextMatchWithFilteredCursorDrain(
     }
 
     seenCursors.add(nextCursor);
-    text = await callToolText(runtime, toolName, { ...baseArguments, cursor: nextCursor });
+    text = await callToolText(runtime, toolName, {
+      ...baseArguments,
+      maxResults: Math.max(1, request.limit - collectedItems.length),
+      cursor: nextCursor,
+    });
     page = evaluateTextMatchPage(request, text);
     pages.push(page);
-    collectedItems.push(...page.filteredItems);
+    for (const item of page.filteredItems) {
+      const key = `${item.relativePath}\0${item.line}\0${item.text}`;
+      if (!seenItems.has(key)) {
+        seenItems.add(key);
+        collectedItems.push(item);
+      }
+    }
     nextCursor = page.parsed.nextCursor ?? extractUnsupportedCursor(text);
   }
 
@@ -860,7 +872,129 @@ function rewriteRenderedFindFilesIfNeeded(
   if (!somethingDropped) {
     return text;
   }
-  return filterRenderedFindFilesText(text, (relativePath) => survivingPaths.has(relativePath));
+  const filtered = filterRenderedFindFilesText(text, (relativePath) =>
+    survivingPaths.has(relativePath),
+  );
+  const body = filtered.split(/\r?\n/).filter((line) => {
+    const trimmed = line.trimEnd();
+    return (
+      trimmed.length > 0 &&
+      parseNextCursor(trimmed) === null &&
+      !/^\d+\/\d+\s+matches(?:\s+shown)?$/.test(trimmed) &&
+      !/^0\s+results/.test(trimmed)
+    );
+  });
+  const label = filteredItems.length === 1 ? "filtered match" : "filtered matches";
+  return [`${filteredItems.length} ${label} shown`, ...body].join("\n");
+}
+
+function evaluateFindFilesPage(request: FindFilesRequest, text: string) {
+  const parsed = parseFindFilesOutput(text, request.persistenceRoot);
+  const filteredItems = filterItems(request, parsed.items).filter(isFindFileItem);
+  return { text, parsed, filteredItems };
+}
+
+function isFindFileItem(item: BackendResultItem): item is FindFileItem {
+  return !("line" in item);
+}
+
+function renderSyntheticFindFilesCompact(items: FindFileItem[]): string {
+  const label = items.length === 1 ? "filtered match" : "filtered matches";
+  return [`${items.length} ${label} shown`, ...items.map((item) => item.relativePath)].join("\n");
+}
+
+function renderDrainedFindFilesCompact(
+  pages: EvaluatedFindFilesPage[],
+  items: FindFileItem[],
+): string {
+  const page = pages[0];
+  if (pages.length === 1 && page) {
+    return rewriteRenderedFindFilesIfNeeded(page.text, page.parsed.items, page.filteredItems);
+  }
+  return renderSyntheticFindFilesCompact(items);
+}
+
+function summarizeDrainedFindFilesPages(
+  pages: EvaluatedFindFilesPage[],
+  items: FindFileItem[],
+): BackendSearchSummary {
+  const page = pages[0];
+  if (pages.length === 1 && page) {
+    return narrowSummaryToSurvivingPaths(page.parsed.summary, page.filteredItems);
+  }
+  return items.length > 0 ? { shownCount: items.length } : {};
+}
+
+async function executeFindFilesWithFilteredCursorDrain(
+  runtime: FffMcpRuntime,
+  request: FindFilesRequest,
+) {
+  const query = compileFindFilesQuery(request);
+  let text = await callToolText(runtime, "find_files", {
+    query,
+    maxResults: request.limit,
+    ...(request.cursor !== null && request.cursor !== undefined ? { cursor: request.cursor } : {}),
+  });
+  let page = evaluateFindFilesPage(request, text);
+  const pages = [page];
+  const collectedItems: FindFileItem[] = [...page.filteredItems];
+  const seenItems = new Set(collectedItems.map((item) => item.relativePath));
+  const seenCursors = new Set<string>();
+  let repeatedCursor: string | undefined;
+  let pageCapHit = false;
+  let nextCursor = page.parsed.nextCursor ?? extractUnsupportedCursor(text);
+  const shouldDrainFilteredPages = request.cursor === null || request.cursor === undefined;
+
+  while (shouldDrainFilteredPages && collectedItems.length < request.limit) {
+    if (nextCursor === null) {
+      break;
+    }
+    if (seenCursors.has(nextCursor)) {
+      repeatedCursor = nextCursor;
+      break;
+    }
+    if (pages.length >= MAX_FILTERED_CURSOR_PAGES) {
+      pageCapHit = true;
+      break;
+    }
+
+    seenCursors.add(nextCursor);
+    text = await callToolText(runtime, "find_files", {
+      query,
+      maxResults: Math.max(1, request.limit - collectedItems.length),
+      cursor: nextCursor,
+    });
+    page = evaluateFindFilesPage(request, text);
+    pages.push(page);
+    for (const item of page.filteredItems) {
+      if (!seenItems.has(item.relativePath)) {
+        seenItems.add(item.relativePath);
+        collectedItems.push(item);
+      }
+    }
+    nextCursor = page.parsed.nextCursor ?? extractUnsupportedCursor(text);
+  }
+
+  const items = collectedItems.slice(0, request.limit);
+  const filteredOutCount = pages.reduce(
+    (count, drainedPage) =>
+      count + Math.max(0, drainedPage.parsed.items.length - drainedPage.filteredItems.length),
+    0,
+  );
+  return {
+    items,
+    nextCursor,
+    renderedCompact: renderDrainedFindFilesCompact(pages, items),
+    summary: summarizeDrainedFindFilesPages(pages, items),
+    diagnostics: {
+      cursorDrain: {
+        pagesFetched: pages.length,
+        filteredOutCount,
+        ...(repeatedCursor ? { repeatedCursor } : {}),
+        pageCapHit,
+      },
+    },
+  };
 }
 
 /**
@@ -893,31 +1027,11 @@ async function callToolText(
   return await runtime.callTool(name, args);
 }
 
-/**
- * Default readiness-poll deadline. Measured cold-start times for stock
- * fff-mcp: ~0.5s for a typical personal repo (~30k files), ~5.5s for a
- * large monorepo (~617k files). 30s gives ~5× headroom on the worst
- * case we've observed while still failing fast when the backend is
- * genuinely broken. Callers can tighten or extend this via
- * `FFF_ROUTER_FFF_MCP_READY_TIMEOUT_MS` or by passing `deadlineMs`
- * explicitly.
- */
+/** Current fff-mcp blocks tool calls until its initial scan is complete. */
 export const DEFAULT_FFF_MCP_READY_TIMEOUT_MS = 30_000;
-const FFF_MCP_READY_INITIAL_DELAY_MS = 100;
-const FFF_MCP_READY_MAX_DELAY_MS = 2_000;
-const FFF_MCP_READY_BACKOFF_FACTOR = 1.5;
 
 export interface WaitForFffMcpReadyOptions {
-  /** Total budget (in ms) before we give up and throw. */
   deadlineMs?: number;
-  /** Initial delay between polls; backs off exponentially. */
-  initialDelayMs?: number;
-  /** Upper bound for the exponential backoff between polls. */
-  maxDelayMs?: number;
-  /** Injectable `setTimeout`-style delay for tests. */
-  delay?: (ms: number) => Promise<void>;
-  /** Injectable wall-clock for tests. */
-  now?: () => number;
 }
 
 function readEnvReadyTimeoutMs(): number {
@@ -932,66 +1046,32 @@ function readEnvReadyTimeoutMs(): number {
   return parsed;
 }
 
-/**
- * Poll fff-mcp until its corpus has finished indexing or the deadline
- * elapses. Returns the last probe text on success so callers can log or
- * forward it. On timeout, throws an error that includes the last observed
- * indexed count (if any) and how long we waited, to make "too slow" vs
- * "never started" debuggable from a single log line.
- *
- * Cold-start readiness is inferred from stock fff-mcp's `(N indexed)`
- * preamble on `find_files` output: `(0 indexed)` means the indexer has
- * not surfaced any files yet, anything else means it is queryable.
- */
 export async function waitForFffMcpReady(
   callTool: (name: string, args: Record<string, unknown>) => Promise<string>,
-  optionsOrDelay: WaitForFffMcpReadyOptions | ((ms: number) => Promise<void>) = {},
+  options: WaitForFffMcpReadyOptions = {},
 ): Promise<string> {
-  // Back-compat: the previous signature accepted a bare delay function.
-  const options: WaitForFffMcpReadyOptions =
-    typeof optionsOrDelay === "function" ? { delay: optionsOrDelay } : optionsOrDelay;
-
-  const delay = options.delay ?? sleep;
-  const now = options.now ?? Date.now;
   const deadlineMs = options.deadlineMs ?? readEnvReadyTimeoutMs();
-  const initialDelayMs = options.initialDelayMs ?? FFF_MCP_READY_INITIAL_DELAY_MS;
-  const maxDelayMs = options.maxDelayMs ?? FFF_MCP_READY_MAX_DELAY_MS;
-
-  const started = now();
-  const deadlineAt = started + deadlineMs;
-  let nextDelay = initialDelayMs;
-  let lastIndexedCount: number | null = null;
-
-  // Always run at least one probe so a tiny `deadlineMs` still gets a
-  // shot at observing a hot cache.
-  while (true) {
-    const text = await callTool("find_files", { query: "a", maxResults: 1 });
-    const indexedMatch = text.match(/\((\d+)\s+indexed\)/i);
-    if (!indexedMatch || Number(indexedMatch[1]) > 0) {
-      return text;
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      callTool("find_files", { query: "a", maxResults: 1 }),
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(
+          () =>
+            reject(
+              new Error(
+                `fff-mcp readiness probe exceeded ${deadlineMs}ms. Raise FFF_ROUTER_FFF_MCP_READY_TIMEOUT_MS if this repository is large.`,
+              ),
+            ),
+          deadlineMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
     }
-    lastIndexedCount = Number(indexedMatch[1]);
-
-    const remaining = deadlineAt - now();
-    if (remaining <= 0) {
-      break;
-    }
-
-    const waitMs = Math.min(nextDelay, remaining, maxDelayMs);
-    await delay(waitMs);
-    nextDelay = Math.min(Math.ceil(nextDelay * FFF_MCP_READY_BACKOFF_FACTOR), maxDelayMs);
   }
-
-  const waitedMs = now() - started;
-  const indexedSuffix =
-    lastIndexedCount === null ? "" : " (last probe reported " + lastIndexedCount + " indexed)";
-  throw new Error(
-    "fff-mcp did not finish indexing within " +
-      waitedMs +
-      "ms" +
-      indexedSuffix +
-      ". Raise FFF_ROUTER_FFF_MCP_READY_TIMEOUT_MS if this repository is large.",
-  );
 }
 
 export function createFffMcpStdioAdapter(
@@ -999,11 +1079,10 @@ export function createFffMcpStdioAdapter(
 ): SearchBackendAdapter<FffMcpRuntime> {
   return {
     backendId: "fff-mcp",
-    supportedQueryKinds: ["find_files", "search_terms", "grep"],
     async startRuntime(args) {
       const transportParams = {
-        command: discoverFffMcpCommand(),
-        args: [args.persistenceRoot],
+        command: (options.resolveCommand ?? discoverFffMcpCommand)(),
+        args: [args.persistenceRoot, "--idle-timeout-secs", "0", "--no-update-check"],
         cwd: args.persistenceRoot,
         env: inheritedStringEnv(),
         stderr: "pipe",
@@ -1017,7 +1096,14 @@ export function createFffMcpStdioAdapter(
           { name: "fff-router-fff-mcp", version: "1.0.0" },
           { capabilities: {} },
         ) as unknown as FffMcpClient);
-      await client.connect(transport);
+      try {
+        await client.connect(transport);
+      } catch (error) {
+        const closeTimeoutMs = options.closeTimeoutMs ?? 500;
+        await closeBestEffort(() => client.close(), closeTimeoutMs);
+        await closeBestEffort(() => transport.close(), closeTimeoutMs);
+        throw error;
+      }
 
       let closed = false;
       const closeHandlers = new Set<() => void>();
@@ -1069,9 +1155,8 @@ export function createFffMcpStdioAdapter(
       // Warmup can be slow on large monorepos; any error here must tear
       // down the spawned child, otherwise it keeps running unsupervised
       // while the caller retries (leaking one fff-mcp per attempt).
-      // RuntimeManager.getOrStartRuntime's catch branch deletes its map
-      // entry but has no runtime handle to close, so the cleanup has to
-      // happen here before we rethrow.
+      // The pool has no runtime handle until startup completes, so cleanup
+      // must happen here before a failed startup is rethrown.
       try {
         await (options.waitForReady ?? waitForFffMcpReady)(runtime.callTool.bind(runtime));
       } catch (error) {
@@ -1081,58 +1166,15 @@ export function createFffMcpStdioAdapter(
       return runtime;
     },
     async execute(args) {
-      if (!args.runtime) {
-        return backendUnavailable("fff-mcp runtime is not available");
-      }
-
       try {
         switch (args.request.queryKind) {
           case "find_files": {
-            const text = await callToolText(args.runtime, "find_files", {
-              query: compileFindFilesQuery(args.request),
-              maxResults: args.request.limit,
-              ...(args.request.cursor !== null && args.request.cursor !== undefined
-                ? { cursor: args.request.cursor }
-                : {}),
-            });
-            const parsed = parseFindFilesOutput(text, args.request.persistenceRoot);
-            const filteredItems = filterItems(args.request, parsed.items);
+            const value = await executeFindFilesWithFilteredCursorDrain(args.runtime, args.request);
             return {
               ok: true,
               value: {
                 backendId: "fff-mcp",
                 queryKind: "find_files",
-                items: filteredItems,
-                nextCursor: parsed.nextCursor,
-                renderedCompact: rewriteRenderedFindFilesIfNeeded(
-                  text,
-                  parsed.items,
-                  filteredItems,
-                ),
-                summary: narrowSummaryToSurvivingPaths(parsed.summary, filteredItems),
-              },
-            };
-          }
-          case "search_terms": {
-            const value = await executeTextMatchWithFilteredCursorDrain(
-              args.runtime,
-              "multi_grep",
-              {
-                patterns: args.request.terms,
-                constraints: compileConstraints(args.request),
-                maxResults: args.request.limit,
-                context: args.request.contextLines,
-                ...(args.request.cursor !== null && args.request.cursor !== undefined
-                  ? { cursor: args.request.cursor }
-                  : {}),
-              },
-              args.request,
-            );
-            return {
-              ok: true,
-              value: {
-                backendId: "fff-mcp",
-                queryKind: "search_terms",
                 ...value,
               },
             };

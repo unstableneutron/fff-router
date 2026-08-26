@@ -78,6 +78,11 @@ export function matchesExcludePaths(excludePaths: string[], relativePath: string
   const normalized = normalizeRelativePath(relativePath);
 
   return !excludePaths.some((excludePath) => {
+    if (/[*?[\]{}!]/.test(excludePath)) {
+      return picomatch(excludePath, { dot: true, basename: !excludePath.includes("/") })(
+        normalized,
+      );
+    }
     return normalized === excludePath || normalized.startsWith(`${excludePath}/`);
   });
 }

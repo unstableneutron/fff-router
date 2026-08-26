@@ -1,55 +1,25 @@
-import { readFileSync } from "node:fs";
-import path from "node:path";
+import { readFile } from "node:fs/promises";
 import { describe, expect, test } from "vitest";
+import { PACKAGE_MANAGER } from "./daemon-config";
 
-type PackageJson = {
-  private?: boolean;
-  bin?: Record<string, string>;
-  exports?: Record<string, unknown>;
-  types?: string;
-  scripts?: Record<string, string>;
-  files?: string[];
-  devDependencies?: Record<string, string>;
-  peerDependencies?: Record<string, string>;
-};
-
-function readPackageJson(): PackageJson {
-  const packageJsonPath = path.resolve(import.meta.dirname, "../../package.json");
-  return JSON.parse(readFileSync(packageJsonPath, "utf8")) as PackageJson;
-}
-
-describe("package manifest", () => {
-  test("publishes a built JS package surface without generated type metadata", () => {
-    const packageJson = readPackageJson();
-
-    expect(packageJson.private).not.toBe(true);
-    expect(packageJson.types).toBeUndefined();
-    expect(packageJson.files).toEqual(["dist", "README.md"]);
-    expect(packageJson.exports).toEqual({
-      ".": "./dist/lib/fff-router/index.js",
-      "./package.json": "./package.json",
-    });
-    expect(packageJson.peerDependencies ?? {}).not.toHaveProperty("typescript");
-  });
-
-  test("ships built JS CLI entrypoints plus dedicated build scripts", () => {
-    const packageJson = readPackageJson();
-
-    expect(packageJson.bin).toEqual({
-      "fff-find-files": "./dist/bin/fff-find-files.js",
-      "fff-grep": "./dist/bin/fff-grep.js",
+describe("published package contract", () => {
+  test("is a breaking v1 package with one CLI and typed SDK entrypoints", async () => {
+    const manifest = JSON.parse(
+      await readFile(new URL("../../package.json", import.meta.url), "utf8"),
+    );
+    expect(manifest.version).toBe("1.0.0");
+    expect(manifest.packageManager).toBe("pnpm@11.19.0");
+    expect(PACKAGE_MANAGER).toBe(manifest.packageManager);
+    expect(manifest.engines).toEqual({ node: ">=22.0.0" });
+    expect(manifest.bin).toEqual({
+      fff: "./dist/bin/fff.js",
       "fff-routerd": "./dist/bin/fff-routerd.js",
     });
-    expect(packageJson.scripts).toMatchObject({
-      build: "node scripts/build-package.mjs",
-      "build:package": "node scripts/build-package.mjs",
-      "build:standalone": "bun run scripts/build-standalone.ts",
-      "check:dist": "node scripts/build-package.mjs && git diff --exit-code -- dist",
-      prepack: "node scripts/build-package.mjs",
-    });
-    expect(packageJson.scripts).not.toHaveProperty("prepare");
-    expect(packageJson.devDependencies).toMatchObject({
-      esbuild: expect.any(String),
-    });
+    expect(manifest.exports["./client"]).toHaveProperty("types");
+    expect(manifest.exports["./protocol"]).toHaveProperty("types");
+    expect(manifest.exports["./server"]).toHaveProperty("types");
+    expect(manifest.scripts).not.toHaveProperty("prepare");
+    expect(manifest.dependencies).not.toHaveProperty("@ff-labs/fff-node");
+    expect(manifest.dependencies).not.toHaveProperty("@sinclair/typebox");
   });
 });

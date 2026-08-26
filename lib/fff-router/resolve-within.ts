@@ -2,14 +2,14 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expandHomePath } from "./home-path";
 import type {
-  PublicError,
   ResolvedWithinFromCaller,
   Result,
+  RouterError,
   ValidatedWithin,
   ValidatedWithinEntry,
 } from "./types";
 
-function invalid(message: string): Result<never, PublicError> {
+function invalid(message: string): Result<never, RouterError> {
   return {
     ok: false,
     error: {
@@ -19,7 +19,7 @@ function invalid(message: string): Result<never, PublicError> {
   };
 }
 
-function withinNotFound(within: string): Result<never, PublicError> {
+function withinNotFound(within: string): Result<never, RouterError> {
   return {
     ok: false,
     error: {
@@ -29,7 +29,7 @@ function withinNotFound(within: string): Result<never, PublicError> {
   };
 }
 
-function internalError(message: string): Result<never, PublicError> {
+function internalError(message: string): Result<never, RouterError> {
   return {
     ok: false,
     error: {
@@ -39,7 +39,7 @@ function internalError(message: string): Result<never, PublicError> {
   };
 }
 
-function validateAbsolutePath(candidate: string, field: string): Result<string, PublicError> {
+function validateAbsolutePath(candidate: string, field: string): Result<string, RouterError> {
   const trimmed = candidate.trim();
   if (trimmed === "") {
     return invalid(`${field} must be a non-empty path`);
@@ -54,7 +54,7 @@ function validateAbsolutePath(candidate: string, field: string): Result<string, 
 
 function resolveStatType(
   stats: Awaited<ReturnType<typeof fs.stat>>,
-): Result<"file" | "directory", PublicError> {
+): Result<"file" | "directory", RouterError> {
   if (stats.isDirectory()) {
     return { ok: true, value: "directory" };
   }
@@ -70,7 +70,7 @@ export async function resolveWithinFromCaller(args: {
   callerCwd: string;
   within?: string | null;
   env?: NodeJS.ProcessEnv;
-}): Promise<Result<ResolvedWithinFromCaller, PublicError>> {
+}): Promise<Result<ResolvedWithinFromCaller, RouterError>> {
   const env = args.env ?? process.env;
   const callerCwd = validateAbsolutePath(args.callerCwd, "callerCwd");
   if (!callerCwd.ok) {
@@ -101,7 +101,7 @@ export async function resolveWithinFromCaller(args: {
 
 async function validateResolvedWithinEntry(
   candidate: string,
-): Promise<Result<ValidatedWithinEntry, PublicError>> {
+): Promise<Result<ValidatedWithinEntry, RouterError>> {
   const within = validateAbsolutePath(candidate, "within");
   if (!within.ok) {
     return within;
@@ -164,7 +164,7 @@ async function validateResolvedWithinEntry(
  */
 export async function validateResolvedWithinPaths(args: {
   withinPaths: string[];
-}): Promise<Result<ValidatedWithin, PublicError>> {
+}): Promise<Result<ValidatedWithin, RouterError>> {
   if (args.withinPaths.length === 0) {
     return invalid("withinPaths must contain at least one entry");
   }
@@ -199,6 +199,6 @@ export async function validateResolvedWithinPaths(args: {
  */
 export async function validateResolvedWithin(args: {
   within: string;
-}): Promise<Result<ValidatedWithin, PublicError>> {
+}): Promise<Result<ValidatedWithin, RouterError>> {
   return validateResolvedWithinPaths({ withinPaths: [args.within] });
 }

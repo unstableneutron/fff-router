@@ -1,14 +1,4 @@
-// lib/fff-router/http-client.ts
-import path7 from "node:path";
-import { Client as Client2 } from "@modelcontextprotocol/sdk/client/index.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-
-// lib/fff-router/daemon-autostart.ts
-import { spawn as spawnChildProcess } from "node:child_process";
-import { appendFileSync, chmodSync, closeSync, existsSync as existsSync3, mkdirSync as mkdirSync2, openSync } from "node:fs";
-import { chmod as chmod2, mkdir as mkdir3, open, readFile as readFile3, rm as rm2, stat } from "node:fs/promises";
-import path6 from "node:path";
-import { fileURLToPath as fileURLToPath2 } from "node:url";
+#!/usr/bin/env node
 
 // lib/fff-router/daemon-config.ts
 import { createHash } from "node:crypto";
@@ -91,6 +81,7 @@ function packageVersion() {
   throw new Error("Unable to determine fff-router package version");
 }
 var PACKAGE_VERSION = packageVersion();
+var PACKAGE_MANAGER = "pnpm@11.19.0";
 function hashFingerprint(value) {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex").slice(0, 16);
 }
@@ -561,6 +552,13 @@ function getDaemonPaths(args = {}) {
   };
 }
 
+// lib/fff-router/daemon-autostart.ts
+import { spawn as spawnChildProcess } from "node:child_process";
+import { appendFileSync, chmodSync, closeSync, existsSync as existsSync3, mkdirSync as mkdirSync2, openSync } from "node:fs";
+import { chmod as chmod2, mkdir as mkdir3, open, readFile as readFile3, rm as rm2, stat } from "node:fs/promises";
+import path6 from "node:path";
+import { fileURLToPath as fileURLToPath2 } from "node:url";
+
 // lib/fff-router/http-daemon.ts
 import { mkdir as mkdir2, readFile as readFile2, rename, rm, writeFile as writeFile2 } from "node:fs/promises";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
@@ -573,8 +571,17 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import picomatch from "picomatch";
 
 // lib/fff-router/tool-resolution.ts
+import { spawn } from "node:child_process";
 import { constants as fsConstants, accessSync, existsSync as existsSync2 } from "node:fs";
+import os2 from "node:os";
 import path3 from "node:path";
+var TOOL_ENV_VARS = {
+  "fff-mcp": "FFF_ROUTER_FFF_MCP_BIN"
+};
+function managedInstallPath(env) {
+  const installDir = env.FFF_MCP_INSTALL_DIR || path3.join(env.HOME || os2.homedir(), ".local", "bin");
+  return path3.join(installDir, process.platform === "win32" ? "fff-mcp.exe" : "fff-mcp");
+}
 function isExecutable(pathValue) {
   try {
     accessSync(pathValue, fsConstants.X_OK);
@@ -603,6 +610,129 @@ function resolveExecutableOnPath(command, env = process.env) {
     }
   }
   return null;
+}
+function remediation(tool, envVar) {
+  return `Install ${tool} or set ${envVar} to an executable path.`;
+}
+function resolveToolCommand(tool, deps = {}) {
+  const env = deps.env ?? process.env;
+  const envVar = TOOL_ENV_VARS[tool];
+  const executableCheck = deps.isExecutable ?? isExecutable;
+  const override = env[envVar];
+  if (override) {
+    const executable = executableCheck(override);
+    return {
+      tool,
+      command: override,
+      source: "env",
+      envVar,
+      executable,
+      ...!executable ? { remediation: remediation(tool, envVar) } : {}
+    };
+  }
+  const pathCommand = (deps.resolveExecutableOnPath ?? ((command) => resolveExecutableOnPath(command, env)))(tool);
+  if (pathCommand) {
+    return {
+      tool,
+      command: pathCommand,
+      source: "path",
+      envVar,
+      executable: executableCheck(pathCommand),
+      ...!executableCheck(pathCommand) ? { remediation: remediation(tool, envVar) } : {}
+    };
+  }
+  const managedCommand = managedInstallPath(env);
+  if (existsSync2(managedCommand)) {
+    const executable = executableCheck(managedCommand);
+    return {
+      tool,
+      command: managedCommand,
+      source: "managed",
+      envVar,
+      executable,
+      ...!executable ? { remediation: remediation(tool, envVar) } : {}
+    };
+  }
+  return {
+    tool,
+    command: null,
+    source: "missing",
+    envVar,
+    executable: false,
+    remediation: remediation(tool, envVar)
+  };
+}
+function readStream(stream) {
+  if (!stream) {
+    return Promise.resolve("");
+  }
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    stream.on("data", (chunk) => {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
+    });
+    stream.once("error", reject);
+    stream.once("end", () => {
+      resolve(Buffer.concat(chunks).toString("utf8"));
+    });
+  });
+}
+async function runVersion(command, options) {
+  try {
+    const proc = spawn(command, ["--version"], {
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    let timedOut = false;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      proc.kill("SIGKILL");
+    }, options.timeoutMs);
+    const [stdout, stderr] = await Promise.all([
+      readStream(proc.stdout),
+      readStream(proc.stderr),
+      new Promise((resolve, reject) => {
+        proc.once("error", reject);
+        proc.once("close", resolve);
+      })
+    ]);
+    clearTimeout(timeout);
+    if (timedOut) {
+      return void 0;
+    }
+    return (stdout || stderr).trim().split(/\r?\n/)[0] || void 0;
+  } catch {
+    return void 0;
+  }
+}
+async function runVersionWithTimeout(run, command, timeoutMs) {
+  let timeout;
+  try {
+    return await Promise.race([
+      run(command, { timeoutMs }),
+      new Promise((resolve) => {
+        timeout = setTimeout(() => resolve(void 0), timeoutMs);
+      })
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
+async function getToolDiagnostic(tool, deps = {}) {
+  const resolution = resolveToolCommand(tool, deps);
+  if (!resolution.command || !resolution.executable) {
+    return resolution;
+  }
+  const version = (await runVersionWithTimeout(
+    deps.runVersion ?? runVersion,
+    resolution.command,
+    deps.versionTimeoutMs ?? 1e3
+  ))?.trim();
+  return {
+    ...resolution,
+    ...version ? { version: version.split(/\r?\n/)[0] } : {}
+  };
 }
 
 // lib/fff-router/mcp-server.ts
@@ -861,6 +991,106 @@ var MCP_TOOLS = [
     inputSchema: adminWithinSchema
   }
 ];
+function formatResult(result) {
+  if (result.displayText) {
+    return result.displayText;
+  }
+  if (result.tool === "find_files") {
+    return result.items.length > 0 ? result.items.map((item) => item.path).join("\n") : "0 results.";
+  }
+  return result.items.length > 0 ? result.items.map((item) => `${item.path}
+  ${item.line}: ${item.text}`).join("\n--\n") : "0 matches.";
+}
+function errorResponse(code, message) {
+  return {
+    isError: true,
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify({ ok: false, code, message })
+      }
+    ]
+  };
+}
+function successResponse(text, structuredContent) {
+  return {
+    isError: false,
+    content: [{ type: "text", text }],
+    structuredContent
+  };
+}
+function normalizeAdminWithin(input) {
+  const parsed = adminWithinSchema.parse(input);
+  const values = Array.isArray(parsed.within) ? parsed.within : [parsed.within];
+  return values.map((value) => path5.normalize(value));
+}
+function listMcpTools() {
+  return MCP_TOOLS.map((tool) => ({
+    name: tool.name,
+    description: tool.description,
+    inputSchema: z2.toJSONSchema(tool.inputSchema)
+  }));
+}
+async function executeMcpTool(args) {
+  try {
+    switch (args.name) {
+      case "find_files":
+      case "grep": {
+        const normalized = normalizePublicToolInput(args.name, args.input, args.env);
+        if (!normalized.ok) {
+          return errorResponse(normalized.error.code, normalized.error.message);
+        }
+        const result = await args.service.execute(normalized.value);
+        if (!result.ok) {
+          return errorResponse(result.error.code, result.error.message);
+        }
+        return successResponse(
+          formatResult(result.value),
+          result.value
+        );
+      }
+      case "router_status": {
+        const status = args.service.status();
+        return successResponse(
+          JSON.stringify(status, null, 2),
+          status
+        );
+      }
+      case "router_warm": {
+        const result = await args.service.warm(normalizeAdminWithin(args.input));
+        if (!result.ok) {
+          return errorResponse(result.error.code, result.error.message);
+        }
+        const payload = { workers: result.value };
+        return successResponse(
+          JSON.stringify(payload, null, 2),
+          payload
+        );
+      }
+      case "router_evict": {
+        const result = await args.service.evict(normalizeAdminWithin(args.input));
+        if (!result.ok) {
+          return errorResponse(result.error.code, result.error.message);
+        }
+        return successResponse(
+          JSON.stringify(result.value, null, 2),
+          result.value
+        );
+      }
+    }
+  } catch (caught) {
+    if (caught instanceof z2.ZodError) {
+      return errorResponse(
+        "INVALID_REQUEST",
+        caught.issues.map((issue) => issue.message).join("; ")
+      );
+    }
+    return errorResponse(
+      "INTERNAL_ERROR",
+      caught instanceof Error ? caught.message : String(caught)
+    );
+  }
+}
 var MCP_INPUT_SCHEMAS = {
   find_files: findFilesInputSchema,
   grep: grepInputSchema,
@@ -868,6 +1098,53 @@ var MCP_INPUT_SCHEMAS = {
   router_warm: adminWithinSchema,
   router_evict: adminWithinSchema
 };
+
+// lib/fff-router/mcp-server.ts
+function createMcpServer(args) {
+  if (!args.service && !args.handler) {
+    throw new Error("createMcpServer requires a RouterService or MCP tool handler");
+  }
+  async function callTool(name, input) {
+    if (args.handler) {
+      return await args.handler(name, input);
+    }
+    return await executeMcpTool({
+      service: args.service,
+      name,
+      input,
+      env: args.env
+    });
+  }
+  function toSdkServer() {
+    const server = new McpServer({
+      name: "fff-router",
+      version: PACKAGE_VERSION
+    });
+    for (const tool of MCP_TOOLS) {
+      server.registerTool(
+        tool.name,
+        {
+          description: tool.description,
+          inputSchema: MCP_INPUT_SCHEMAS[tool.name].shape
+        },
+        async (input) => await callTool(tool.name, input)
+      );
+    }
+    return server;
+  }
+  return {
+    listTools: async () => listMcpTools(),
+    callTool,
+    toSdkServer,
+    async connectStdio(options = {}) {
+      const transport = new StdioServerTransport();
+      transport.onclose = options.onClose;
+      const server = toSdkServer();
+      await server.connect(transport);
+      return { server, transport };
+    }
+  };
+}
 
 // lib/fff-router/local-auth.ts
 import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
@@ -1244,6 +1521,15 @@ async function waitForDaemonReady(env) {
   }
   throw await formatDaemonStartupError(lastError, env);
 }
+async function readDaemonLogs(env) {
+  const paths = getDaemonPaths({ env });
+  return {
+    stdoutPath: paths.stdoutLogPath,
+    stderrPath: paths.stderrLogPath,
+    stdout: await readLogTail(paths.stdoutLogPath),
+    stderr: await readLogTail(paths.stderrLogPath)
+  };
+}
 async function signalProcess(pid, signal) {
   if (!Number.isFinite(pid) || pid <= 0 || pid === process.pid) {
     return;
@@ -1356,7 +1642,539 @@ async function readRunningDaemonMetadata(env) {
   return await readDaemonMetadata(paths.metadataPath);
 }
 
+// lib/fff-router/fff-mcp-installer.ts
+function detectFffMcpTarget(platform = process.platform, arch = process.arch) {
+  switch (platform) {
+    case "linux":
+      switch (arch) {
+        case "x64":
+          return "x86_64-unknown-linux-musl";
+        case "arm64":
+          return "aarch64-unknown-linux-musl";
+        default:
+          throw new Error(`Unsupported architecture: ${arch}`);
+      }
+    case "darwin":
+      switch (arch) {
+        case "x64":
+          return "x86_64-apple-darwin";
+        case "arm64":
+          return "aarch64-apple-darwin";
+        default:
+          throw new Error(`Unsupported architecture: ${arch}`);
+      }
+    case "win32":
+      switch (arch) {
+        case "x64":
+          return "x86_64-pc-windows-msvc";
+        case "arm64":
+          return "aarch64-pc-windows-msvc";
+        default:
+          throw new Error(`Unsupported architecture: ${arch}`);
+      }
+    default:
+      throw new Error(`Unsupported OS: ${platform}`);
+  }
+}
+async function getDoctorFffMcpStatus(env = process.env) {
+  const diagnostic = await getToolDiagnostic("fff-mcp", { env });
+  if (!diagnostic.command) {
+    return {
+      found: false,
+      source: "missing",
+      executable: false,
+      envVar: diagnostic.envVar,
+      ...diagnostic.remediation ? { remediation: diagnostic.remediation } : {}
+    };
+  }
+  return {
+    found: true,
+    path: diagnostic.command,
+    source: diagnostic.source === "env" ? "env" : diagnostic.source === "managed" ? "managed" : "path",
+    executable: diagnostic.executable,
+    envVar: diagnostic.envVar,
+    ...diagnostic.version ? { version: diagnostic.version } : {},
+    ...diagnostic.remediation ? { remediation: diagnostic.remediation } : {}
+  };
+}
+
+// lib/fff-router/daemon-cli.ts
+function isProcessAlive2(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+async function fetchHealth(env) {
+  try {
+    const config = getDaemonConfig({ env });
+    const response = await fetch(new URL("/health", getDaemonOriginFromConfig(config)), {
+      headers: bearerHeaders(await readDaemonAuthToken(env))
+    });
+    if (!response.ok) {
+      return null;
+    }
+    const payload = await response.json();
+    return payload.ok && payload.metadata ? { metadata: payload.metadata, workers: payload.workers ?? [] } : null;
+  } catch {
+    return null;
+  }
+}
+async function getDaemonStatus(env = process.env) {
+  const health = await fetchHealth(env);
+  return health ? { running: true, metadata: health.metadata, workers: health.workers } : { running: false, metadata: null };
+}
+async function reloadDaemon(env = process.env, options = {}) {
+  const status = await getDaemonStatus(env);
+  if (!status.metadata) {
+    return false;
+  }
+  try {
+    process.kill(status.metadata.pid, options.clearRuntimes ? "SIGUSR2" : "SIGHUP");
+    return true;
+  } catch (caught) {
+    if (typeof caught === "object" && caught && "code" in caught && caught.code === "ESRCH") {
+      return false;
+    }
+    throw caught;
+  }
+}
+function sleep2(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+async function stopDaemon(env = process.env) {
+  const status = await getDaemonStatus(env);
+  if (!status.metadata) {
+    return false;
+  }
+  try {
+    process.kill(status.metadata.pid, "SIGTERM");
+  } catch (caught) {
+    if (typeof caught === "object" && caught && "code" in caught && caught.code === "ESRCH") {
+      return false;
+    }
+    throw caught;
+  }
+  for (const delay of [25, 50, 100, 200, 400, 800]) {
+    if (!isProcessAlive2(status.metadata.pid)) {
+      return true;
+    }
+    await sleep2(delay);
+  }
+  if (isProcessAlive2(status.metadata.pid)) {
+    process.kill(status.metadata.pid, "SIGKILL");
+  }
+  return true;
+}
+async function getDoctorReport(env = process.env) {
+  const status = await getDaemonStatus(env);
+  const policyPaths = getDaemonPolicyConfigPaths({ env });
+  const daemonPaths = getDaemonPaths({ env });
+  return {
+    ...status,
+    endpoint: getDaemonEndpoint({ env }),
+    configPath: policyPaths.jsonPath,
+    stateDir: daemonPaths.dir,
+    daemonConfig: getDaemonConfig({ env }),
+    fffMcp: await getDoctorFffMcpStatus(env),
+    daemon: resolveDaemonLaunchCommand(env)
+  };
+}
+
+// lib/fff-router/daemon-update.ts
+import { createHash as createHash2 } from "node:crypto";
+import { spawn as spawn2 } from "node:child_process";
+import { access, chmod as chmod3, mkdir as mkdir4, rename as rename2, rm as rm3, writeFile as writeFile3 } from "node:fs/promises";
+import { constants as fsConstants2 } from "node:fs";
+import os3 from "node:os";
+import path7 from "node:path";
+import { createInterface } from "node:readline/promises";
+import { stdin as processStdin, stdout as processStdout } from "node:process";
+import { promisify } from "node:util";
+import { execFile } from "node:child_process";
+var execFileAsync = promisify(execFile);
+var FFF_MCP_REPO = "dmtrKovalenko/fff";
+var FFF_ROUTER_GITHUB_PACKAGE_JSON = "https://raw.githubusercontent.com/unstableneutron/fff-router/main/package.json";
+var FFF_ROUTER_GITHUB_SPEC = "github:unstableneutron/fff-router";
+function defaultInstallDir(env) {
+  return env.FFF_MCP_INSTALL_DIR || path7.join(env.HOME || os3.homedir(), ".local", "bin");
+}
+function fffMcpBinaryPath(env, target) {
+  return path7.join(defaultInstallDir(env), target.includes("windows") ? "fff-mcp.exe" : "fff-mcp");
+}
+function releaseFilename(target) {
+  const extension2 = target.includes("windows") ? ".exe" : "";
+  return `fff-mcp-${target}${extension2}`;
+}
+function stripLeadingV(version) {
+  return version.replace(/^v/i, "");
+}
+function compareVersions(left, right) {
+  const leftParts = stripLeadingV(left).split(/[.-]/).map((part) => Number(part));
+  const rightParts = stripLeadingV(right).split(/[.-]/).map((part) => Number(part));
+  const length = Math.max(leftParts.length, rightParts.length);
+  for (let index = 0; index < length; index += 1) {
+    const leftValue = Number.isFinite(leftParts[index]) ? leftParts[index] : 0;
+    const rightValue = Number.isFinite(rightParts[index]) ? rightParts[index] : 0;
+    if (leftValue < rightValue) {
+      return -1;
+    }
+    if (leftValue > rightValue) {
+      return 1;
+    }
+  }
+  return 0;
+}
+function parseFffMcpVersion(text) {
+  const match = text.match(/fff-mcp\s+([0-9]+(?:\.[0-9]+){1,3})/i) ?? text.match(/([0-9]+(?:\.[0-9]+){1,3})/);
+  return match?.[1] ?? null;
+}
+async function readInstalledFffMcpVersion(binaryPath) {
+  try {
+    const { stdout, stderr } = await execFileAsync(binaryPath, ["--version"], { timeout: 5e3 });
+    return parseFffMcpVersion(`${stdout}
+${stderr}`);
+  } catch {
+    return null;
+  }
+}
+async function fetchJson(url) {
+  const response = await fetch(url, {
+    headers: {
+      accept: "application/vnd.github+json, application/json",
+      "user-agent": "fff-routerd-update"
+    }
+  });
+  if (!response.ok) {
+    throw new Error(`GET ${url} failed with status ${response.status}`);
+  }
+  return await response.json();
+}
+async function fetchText(url) {
+  const response = await fetch(url, {
+    headers: { "user-agent": "fff-routerd-update" }
+  });
+  if (!response.ok) {
+    throw new Error(`GET ${url} failed with status ${response.status}`);
+  }
+  return await response.text();
+}
+function isReleaseAsset(value) {
+  return typeof value === "object" && value !== null && "name" in value && typeof value.name === "string" && "browser_download_url" in value && typeof value.browser_download_url === "string";
+}
+function isStableReleaseTag(tag) {
+  return /^v?\d+\.\d+\.\d+$/.test(tag);
+}
+function selectLatestFffMcpRelease(releases, target) {
+  if (!Array.isArray(releases)) {
+    throw new Error("GitHub releases response was not an array");
+  }
+  const filename = releaseFilename(target);
+  for (const release of releases) {
+    if (typeof release !== "object" || release === null) {
+      continue;
+    }
+    const releaseRecord = release;
+    const tag = typeof releaseRecord.tag_name === "string" ? releaseRecord.tag_name : null;
+    if (!tag || releaseRecord.prerelease === true || !isStableReleaseTag(tag)) {
+      continue;
+    }
+    const assets = Array.isArray(releaseRecord.assets) ? releaseRecord.assets : [];
+    const asset = assets.find(
+      (candidate) => isReleaseAsset(candidate) && candidate.name === filename
+    );
+    if (!isReleaseAsset(asset)) {
+      continue;
+    }
+    const checksumAsset = assets.find(
+      (candidate) => isReleaseAsset(candidate) && candidate.name === `${filename}.sha256`
+    );
+    return {
+      tag,
+      version: stripLeadingV(tag),
+      assetUrl: asset.browser_download_url,
+      checksumUrl: isReleaseAsset(checksumAsset) ? checksumAsset.browser_download_url : `${asset.browser_download_url}.sha256`
+    };
+  }
+  throw new Error(`No fff-mcp release contains ${filename}`);
+}
+async function getLatestFffMcpRelease(target) {
+  const releases = await fetchJson(`https://api.github.com/repos/${FFF_MCP_REPO}/releases`);
+  if (!Array.isArray(releases)) {
+    throw new Error("GitHub releases response was not an array");
+  }
+  return selectLatestFffMcpRelease(releases, target);
+}
+async function checkFffMcpUpdate(args = {}) {
+  const env = args.env ?? process.env;
+  let target;
+  let binaryPath;
+  try {
+    target = args.target ?? detectFffMcpTarget();
+    binaryPath = fffMcpBinaryPath(env, target);
+    const [currentVersion, latest] = await Promise.all([
+      (args.readInstalledVersion ?? readInstalledFffMcpVersion)(binaryPath),
+      (args.getLatestRelease ?? getLatestFffMcpRelease)(target)
+    ]);
+    const common = {
+      binaryPath,
+      target,
+      latestVersion: latest.version,
+      latestTag: latest.tag
+    };
+    if (!currentVersion) {
+      return {
+        kind: "missing",
+        ...common,
+        currentVersion: null,
+        assetUrl: latest.assetUrl,
+        checksumUrl: latest.checksumUrl
+      };
+    }
+    if (compareVersions(currentVersion, latest.version) >= 0) {
+      return { kind: "current", ...common, currentVersion };
+    }
+    return {
+      kind: "outdated",
+      ...common,
+      currentVersion,
+      assetUrl: latest.assetUrl,
+      checksumUrl: latest.checksumUrl
+    };
+  } catch (error) {
+    target = args.target ?? "unknown";
+    binaryPath = fffMcpBinaryPath(env, target);
+    return {
+      kind: "unavailable",
+      binaryPath,
+      message: error instanceof Error ? error.message : String(error)
+    };
+  }
+}
+async function downloadToFile(url, destinationPath) {
+  const response = await fetch(url, { headers: { "user-agent": "fff-routerd-update" } });
+  if (!response.ok) {
+    throw new Error(`GET ${url} failed with status ${response.status}`);
+  }
+  await writeFile3(destinationPath, Buffer.from(await response.arrayBuffer()));
+}
+function extractSha256(text) {
+  const match = text.match(/[a-f0-9]{64}/i);
+  if (!match) {
+    throw new Error("checksum response did not contain a SHA256 digest");
+  }
+  return match[0].toLowerCase();
+}
+async function sha256File(filePath) {
+  const { readFile: readFile4 } = await import("node:fs/promises");
+  return createHash2("sha256").update(await readFile4(filePath)).digest("hex");
+}
+async function installFffMcpUpdate(plan, deps = {}) {
+  const directory = path7.dirname(plan.binaryPath);
+  const tempPath = path7.join(directory, `.fff-mcp.${process.pid}.${Date.now()}.download`);
+  await mkdir4(directory, { recursive: true });
+  let installed = false;
+  try {
+    await (deps.downloadToFile ?? downloadToFile)(plan.assetUrl, tempPath);
+    const expectedDigest = extractSha256(await (deps.fetchText ?? fetchText)(plan.checksumUrl));
+    const actualDigest = await sha256File(tempPath);
+    if (actualDigest !== expectedDigest) {
+      throw new Error(`fff-mcp checksum mismatch: expected ${expectedDigest}, got ${actualDigest}`);
+    }
+    await chmod3(tempPath, 493);
+    await rename2(tempPath, plan.binaryPath);
+    installed = true;
+    await writeFile3(
+      path7.join(directory, ".fff-mcp-install.json"),
+      `${JSON.stringify(
+        {
+          tag: plan.latestTag,
+          target: plan.target,
+          version: plan.latestVersion,
+          installedAt: Date.now()
+        },
+        null,
+        2
+      )}
+`
+    );
+    return plan.binaryPath;
+  } finally {
+    if (!installed) {
+      await rm3(tempPath, { force: true }).catch(() => {
+      });
+    }
+  }
+}
+function commandExtensions2(env) {
+  if (process.platform !== "win32") {
+    return [""];
+  }
+  return env.PATHEXT?.split(";").filter(Boolean) ?? [".EXE", ".CMD", ".BAT", ".COM"];
+}
+async function commandExists(command, env = process.env) {
+  const directories = (env.PATH || process.env.PATH || "").split(path7.delimiter).filter(Boolean);
+  for (const directory of directories) {
+    for (const extension2 of commandExtensions2(env)) {
+      const candidate = path7.join(directory, extension2 ? `${command}${extension2}` : command);
+      try {
+        await access(candidate, fsConstants2.X_OK);
+        return true;
+      } catch {
+      }
+    }
+  }
+  return false;
+}
+async function getLatestFffRouterdVersion() {
+  const parsed = await fetchJson(FFF_ROUTER_GITHUB_PACKAGE_JSON);
+  if (typeof parsed !== "object" || parsed === null || !("version" in parsed) || typeof parsed.version !== "string") {
+    throw new Error("fff-router package.json did not contain a version");
+  }
+  return parsed.version;
+}
+async function checkFffRouterdUpdate(args = {}) {
+  const currentVersion = args.currentVersion ?? PACKAGE_VERSION;
+  try {
+    const latestVersion = await (args.getLatestVersion ?? getLatestFffRouterdVersion)();
+    if (compareVersions(currentVersion, latestVersion) >= 0) {
+      return { kind: "current", currentVersion, latestVersion };
+    }
+    const hasCommand = args.commandExists ?? commandExists;
+    let installer = null;
+    let command = null;
+    if (await hasCommand("corepack")) {
+      installer = "corepack-pnpm";
+      command = ["corepack", PACKAGE_MANAGER, "add", "--global", FFF_ROUTER_GITHUB_SPEC];
+    } else if (await hasCommand("aube")) {
+      installer = "aube";
+      command = ["aube", "add", "--global", FFF_ROUTER_GITHUB_SPEC];
+    } else if (await hasCommand("pnpm")) {
+      installer = "pnpm";
+      command = ["pnpm", "add", "--global", FFF_ROUTER_GITHUB_SPEC];
+    }
+    if (!installer || !command) {
+      return {
+        kind: "unavailable",
+        currentVersion,
+        message: `No supported package manager found; install Corepack, pnpm, or aube, then run: corepack ${PACKAGE_MANAGER} add --global ${FFF_ROUTER_GITHUB_SPEC}`
+      };
+    }
+    return {
+      kind: "outdated",
+      currentVersion,
+      latestVersion,
+      installer,
+      command
+    };
+  } catch (error) {
+    return {
+      kind: "unavailable",
+      currentVersion,
+      message: error instanceof Error ? error.message : String(error)
+    };
+  }
+}
+async function installFffRouterdUpdate(plan) {
+  await new Promise((resolve, reject) => {
+    const child = spawn2(plan.command[0], plan.command.slice(1), { stdio: "inherit" });
+    child.once("error", reject);
+    child.once("exit", (code) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      reject(new Error(`${plan.command.join(" ")} exited with code ${code ?? "null"}`));
+    });
+  });
+}
+async function defaultConfirm(question) {
+  const rl = createInterface({ input: processStdin, output: processStdout });
+  try {
+    const answer = await rl.question(`${question} [y/N] `);
+    return /^(y|yes)$/i.test(answer.trim());
+  } finally {
+    rl.close();
+  }
+}
+function installerDisplayName(installer) {
+  return installer === "corepack-pnpm" ? "Corepack/pnpm" : installer;
+}
+async function runInteractiveUpdate(options = {}) {
+  const env = options.env ?? process.env;
+  const writeStdout = options.writeStdout ?? ((text) => process.stdout.write(text));
+  const writeStderr = options.writeStderr ?? ((text) => process.stderr.write(text));
+  const confirm = options.confirm ?? defaultConfirm;
+  const checkMcp = options.checkFffMcpUpdate ?? (() => checkFffMcpUpdate({ env }));
+  const checkRouterd = options.checkFffRouterdUpdate ?? (() => checkFffRouterdUpdate());
+  const applyMcp = options.installFffMcpUpdate ?? installFffMcpUpdate;
+  const applyRouterd = options.installFffRouterdUpdate ?? installFffRouterdUpdate;
+  const stopDaemon2 = options.stopDaemon ?? (async () => false);
+  let updatedSomething = false;
+  const mcp = await checkMcp();
+  switch (mcp.kind) {
+    case "current":
+      writeStdout(`fff-mcp is already up to date (${mcp.currentVersion}).
+`);
+      break;
+    case "unavailable":
+      writeStderr(`Could not check fff-mcp at ${mcp.binaryPath}: ${mcp.message}
+`);
+      break;
+    case "missing":
+    case "outdated": {
+      const label = mcp.currentVersion ?? "not installed";
+      if (await confirm(`Update fff-mcp ${label} -> ${mcp.latestVersion}?`)) {
+        const installedPath = await applyMcp(mcp);
+        writeStdout(`Updated fff-mcp to ${mcp.latestVersion} at ${installedPath}.
+`);
+        updatedSomething = true;
+      } else {
+        writeStdout("Skipped fff-mcp update.\n");
+      }
+      break;
+    }
+  }
+  const routerd = await checkRouterd();
+  switch (routerd.kind) {
+    case "current":
+      writeStdout(`fff-routerd is already up to date (${routerd.currentVersion}).
+`);
+      break;
+    case "unavailable":
+      writeStderr(`Could not check fff-routerd: ${routerd.message}
+`);
+      break;
+    case "outdated":
+      if (await confirm(
+        `Update fff-routerd ${routerd.currentVersion} -> ${routerd.latestVersion} from GitHub with ${installerDisplayName(routerd.installer)}?`
+      )) {
+        await applyRouterd(routerd);
+        writeStdout(`Updated fff-routerd to ${routerd.latestVersion}.
+`);
+        updatedSomething = true;
+      } else {
+        writeStdout("Skipped fff-routerd update.\n");
+      }
+      break;
+  }
+  if (updatedSomething) {
+    const stopped = await stopDaemon2();
+    if (stopped) {
+      writeStdout("Stopped fff-routerd; it will restart on the next request.\n");
+    } else {
+      writeStdout("fff-routerd was not running; it will start on the next request.\n");
+    }
+  }
+  return 0;
+}
+
 // lib/fff-router/http-client.ts
+import path8 from "node:path";
+import { Client as Client2 } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 function clientError(message) {
   return {
     ok: false,
@@ -1408,7 +2226,7 @@ function resolveWithin(within2, cwd, env) {
     if (!expanded.ok) {
       throw new Error(expanded.error.message);
     }
-    return path7.isAbsolute(expanded.value) ? path7.normalize(expanded.value) : path7.resolve(cwd, expanded.value);
+    return path8.isAbsolute(expanded.value) ? path8.normalize(expanded.value) : path8.resolve(cwd, expanded.value);
   });
 }
 var RouterClient = class {
@@ -1424,7 +2242,7 @@ var RouterClient = class {
   }
   constructor(options = {}) {
     this.env = options.env ?? process.env;
-    this.cwd = path7.resolve(options.cwd ?? process.cwd());
+    this.cwd = path8.resolve(options.cwd ?? process.cwd());
     this.autoStart = options.autoStart !== false;
   }
   async connect() {
@@ -1553,53 +2371,454 @@ async function connectRouter(options = {}) {
   }
   return client;
 }
-var CLIENTS_KEY = "__fffRouterClientsV1__";
-function globalClients() {
-  const global = globalThis;
-  return global[CLIENTS_KEY] ??= /* @__PURE__ */ new Map();
+
+// lib/fff-router/mcp-bridge.ts
+function asArguments(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    return {};
+  }
+  return input;
 }
-async function getRouterClient(options = {}) {
+async function runMcpHttpBridge(options = {}) {
   const env = options.env ?? process.env;
-  const key = `${getDaemonEndpoint({ env })}::${getDaemonPaths({ env }).authTokenPath}::${path7.resolve(options.cwd ?? process.cwd())}::${options.autoStart !== false}`;
-  const clients = globalClients();
-  let client = clients.get(key);
-  if (!client) {
-    client = connectRouter(options).catch((caught) => {
-      clients.delete(key);
-      throw caught;
+  const client = await (options.connectClient?.() ?? connectRouter({ env }));
+  const handler = async (name, input) => await client.callMcpTool(name, asArguments(input));
+  const onClose = () => {
+    void client.close();
+  };
+  try {
+    if (options.connectStdio) {
+      await options.connectStdio(handler, onClose);
+      return;
+    }
+    await createMcpServer({ handler, env }).connectStdio({ onClose });
+  } catch (caught) {
+    await client.close().catch(() => {
     });
-    clients.set(key, client);
+    throw caught;
   }
-  const resolved = await client;
-  if (resolved.isClosed) {
-    clients.delete(key);
-    return await getRouterClient(options);
-  }
-  return resolved;
 }
-export {
-  MAX_CONTEXT_LINES,
-  MAX_FILTERS,
-  MAX_PATTERNS,
-  MAX_QUERY_LENGTH,
-  MAX_RESULTS,
-  MAX_WITHIN_PATHS,
-  PUBLIC_TOOL_DEFINITIONS,
-  RouterClient,
-  connectRouter,
-  evictResultSchema,
-  fileHitSchema,
-  findFilesInputSchema,
-  findFilesResultSchema,
-  getRouterClient,
-  grepInputSchema,
-  grepResultSchema,
-  normalizePublicToolInput,
-  publicToolResultSchema,
-  readRecommendationSchema,
-  routerStatusSchema,
-  searchResultStatsSchema,
-  textHitSchema,
-  warmResultSchema,
-  workerDiagnosticSchema
+
+// lib/fff-router/cli.ts
+var UsageError = class extends Error {
 };
+var HelpRequested = class extends Error {
+};
+var HELP = `fff ${PACKAGE_VERSION} \u2014 shared warm repository search
+
+Usage:
+  fff find <query...> [options]
+  fff grep <pattern...> [options]
+  fff warm <path...> [--json]
+  fff evict <path...> [--json]
+  fff status [--json]
+  fff doctor [--json]
+  fff setup
+  fff update
+  fff mcp
+  fff daemon <start|stop|restart|reload|logs>
+
+Search options:
+  -w, --within <path>       Search scope; repeat for multiple paths
+  -g, --glob <glob>         Include files matching a relative glob
+  -e, --extension <ext>     Include extension; repeat or comma-separate
+  -x, --exclude <path>      Exclude a relative path or glob; repeatable
+  -n, --limit <count>       Return 1-50 results
+      --cursor <cursor>     Continue a previous search page
+      --json                Emit structured JSON
+
+Grep options:
+      --literal             Literal matching (default)
+      --regex               Regular-expression matching
+  -C, --context <lines>     Include 0-5 surrounding lines
+
+Examples:
+  fff find router --within .
+  fff grep ActorAuth actor_auth -w . -e ts -e rs
+  fff grep 'plan(Request)?' --regex -w src --json
+  fff warm ~/src/project-a ~/src/project-b
+
+Install directly from GitHub:
+  corepack ${PACKAGE_MANAGER} add --global github:unstableneutron/fff-router
+  fff setup
+`;
+function takeValue(argv, index, option) {
+  const value = argv[index + 1];
+  if (!value || value.startsWith("-")) {
+    throw new UsageError(`${option} requires a value`);
+  }
+  return value;
+}
+function parseInteger(value, option) {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed)) {
+    throw new UsageError(`${option} must be an integer`);
+  }
+  return parsed;
+}
+function parseSearchArguments(argv) {
+  const parsed = {
+    positionals: [],
+    within: [],
+    extensions: [],
+    excludePaths: [],
+    literal: true,
+    json: false
+  };
+  for (let index = 0; index < argv.length; index += 1) {
+    const token = argv[index];
+    if (token === "--") {
+      parsed.positionals.push(...argv.slice(index + 1));
+      break;
+    }
+    switch (token) {
+      case "-w":
+      case "--within":
+        parsed.within.push(takeValue(argv, index, token));
+        index += 1;
+        break;
+      case "-g":
+      case "--glob":
+        parsed.glob = takeValue(argv, index, token);
+        index += 1;
+        break;
+      case "-e":
+      case "--extension":
+        parsed.extensions.push(
+          ...takeValue(argv, index, token).split(",").map((entry) => entry.trim()).filter(Boolean)
+        );
+        index += 1;
+        break;
+      case "-x":
+      case "--exclude":
+        parsed.excludePaths.push(takeValue(argv, index, token));
+        index += 1;
+        break;
+      case "-n":
+      case "--limit":
+        parsed.limit = parseInteger(takeValue(argv, index, token), token);
+        index += 1;
+        break;
+      case "--cursor":
+        parsed.cursor = takeValue(argv, index, token);
+        index += 1;
+        break;
+      case "-C":
+      case "--context":
+        parsed.contextLines = parseInteger(takeValue(argv, index, token), token);
+        index += 1;
+        break;
+      case "--literal":
+        parsed.literal = true;
+        break;
+      case "--regex":
+        parsed.literal = false;
+        break;
+      case "--json":
+        parsed.json = true;
+        break;
+      case "-h":
+      case "--help":
+        throw new HelpRequested(HELP);
+      default:
+        if (token.startsWith("-")) {
+          throw new UsageError(`unknown option: ${token}`);
+        }
+        parsed.positionals.push(token);
+    }
+  }
+  return parsed;
+}
+function commonSearchInput(parsed) {
+  return {
+    ...parsed.within.length > 0 ? { within: parsed.within } : {},
+    ...parsed.glob ? { glob: parsed.glob } : {},
+    ...parsed.extensions.length > 0 ? { extensions: parsed.extensions } : {},
+    ...parsed.excludePaths.length > 0 ? { excludePaths: parsed.excludePaths } : {},
+    ...parsed.limit !== void 0 ? { limit: parsed.limit } : {},
+    ...parsed.cursor ? { cursor: parsed.cursor } : {}
+  };
+}
+function printJson(value) {
+  process.stdout.write(`${JSON.stringify(value, null, 2)}
+`);
+}
+function printSearchResult(result, json) {
+  if (json) {
+    printJson(result);
+    return;
+  }
+  process.stdout.write(`${result.displayText ?? JSON.stringify(result.items, null, 2)}
+`);
+}
+function throwRouterError(error) {
+  throw new Error(`${error.code}: ${error.message}`);
+}
+async function withCliClient(env, callback) {
+  const client = new RouterClient({ env });
+  try {
+    return await callback(client);
+  } finally {
+    await client.close();
+  }
+}
+async function runFind(argv, env) {
+  const parsed = parseSearchArguments(argv);
+  if (parsed.positionals.length === 0) {
+    throw new UsageError("find requires a query");
+  }
+  const result = await withCliClient(
+    env,
+    async (client) => await client.findFiles({
+      query: parsed.positionals.join(" "),
+      ...commonSearchInput(parsed)
+    })
+  );
+  if (!result.ok) {
+    throwRouterError(result.error);
+  }
+  printSearchResult(result.value, parsed.json);
+  return 0;
+}
+async function runGrep(argv, env) {
+  const parsed = parseSearchArguments(argv);
+  if (parsed.positionals.length === 0) {
+    throw new UsageError("grep requires at least one pattern");
+  }
+  const result = await withCliClient(
+    env,
+    async (client) => await client.grep({
+      patterns: parsed.positionals,
+      literal: parsed.literal,
+      ...parsed.contextLines !== void 0 ? { contextLines: parsed.contextLines } : {},
+      ...commonSearchInput(parsed)
+    })
+  );
+  if (!result.ok) {
+    throwRouterError(result.error);
+  }
+  printSearchResult(result.value, parsed.json);
+  return 0;
+}
+function parsePaths(argv) {
+  let json = false;
+  const paths = [];
+  let positionalOnly = false;
+  for (const entry of argv) {
+    if (!positionalOnly && entry === "--") {
+      positionalOnly = true;
+    } else if (!positionalOnly && (entry === "--help" || entry === "-h")) {
+      throw new HelpRequested(HELP);
+    } else if (!positionalOnly && entry === "--json") {
+      json = true;
+    } else if (!positionalOnly && entry.startsWith("-")) {
+      throw new UsageError(`unknown option: ${entry}`);
+    } else {
+      paths.push(entry);
+    }
+  }
+  if (paths.length === 0) {
+    throw new UsageError("at least one path is required");
+  }
+  return { paths, json };
+}
+function parseJsonOnly(argv, command) {
+  let json = false;
+  for (const entry of argv) {
+    if (entry === "--json") {
+      json = true;
+    } else if (entry === "--help" || entry === "-h") {
+      throw new HelpRequested(HELP);
+    } else {
+      throw new UsageError(`${command} does not accept '${entry}'`);
+    }
+  }
+  return json;
+}
+function requireNoArguments(argv, command) {
+  for (const entry of argv) {
+    if (entry === "--help" || entry === "-h") {
+      throw new HelpRequested(HELP);
+    }
+    throw new UsageError(`${command} does not accept '${entry}'`);
+  }
+}
+async function runWarm(argv, env) {
+  const parsed = parsePaths(argv);
+  const result = await withCliClient(env, async (client) => await client.warm(parsed.paths));
+  if (!result.ok) {
+    throwRouterError(result.error);
+  }
+  if (parsed.json) {
+    printJson(result.value);
+  } else {
+    for (const worker of result.value.workers) {
+      process.stdout.write(
+        `warmed ${worker.root} (generation ${worker.generation}${worker.pid ? `, pid ${worker.pid}` : ""})
+`
+      );
+    }
+  }
+  return 0;
+}
+async function runEvict(argv, env) {
+  const parsed = parsePaths(argv);
+  const result = await withCliClient(env, async (client) => await client.evict(parsed.paths));
+  if (!result.ok) {
+    throwRouterError(result.error);
+  }
+  if (parsed.json) {
+    printJson(result.value);
+  } else if (result.value.evicted.length === 0) {
+    process.stdout.write("no matching workers\n");
+  } else {
+    for (const root of result.value.evicted) {
+      process.stdout.write(`evicted ${root}
+`);
+    }
+  }
+  return 0;
+}
+async function runStatus(argv, env) {
+  const json = parseJsonOnly(argv, "status");
+  const status = await getDaemonStatus(env);
+  if (json) {
+    printJson(status);
+    return status.running ? 0 : 1;
+  }
+  if (!status.running) {
+    process.stdout.write("fff-routerd is not running\n");
+    return 1;
+  }
+  process.stdout.write(
+    `fff-routerd ${status.metadata?.packageVersion ?? "unknown"} running (pid ${status.metadata?.pid})
+`
+  );
+  const workers = status.workers ?? [];
+  process.stdout.write(`${workers.length} worker${workers.length === 1 ? "" : "s"}
+`);
+  for (const worker of workers) {
+    process.stdout.write(
+      `  ${worker.state.padEnd(8)} ${worker.root} (leases ${worker.activeLeases}, generation ${worker.generation})
+`
+    );
+  }
+  return 0;
+}
+async function runSetup(env) {
+  const check = await checkFffMcpUpdate({ env });
+  if (check.kind === "unavailable") {
+    throw new Error(check.message);
+  }
+  if (check.kind === "missing" || check.kind === "outdated") {
+    const installed = await installFffMcpUpdate(check);
+    process.stdout.write(`installed fff-mcp ${check.latestVersion} at ${installed}
+`);
+  } else {
+    process.stdout.write(`fff-mcp ${check.currentVersion} is installed
+`);
+  }
+  await ensureDaemonRunning(env);
+  process.stdout.write("fff-routerd is ready\n");
+  return 0;
+}
+async function runDaemon(argv, env) {
+  if (argv.some((entry) => entry === "--help" || entry === "-h")) {
+    throw new HelpRequested(HELP);
+  }
+  if (argv.length !== 1) {
+    throw new UsageError("daemon requires exactly one action");
+  }
+  const command = argv[0];
+  switch (command) {
+    case "start":
+      await ensureDaemonRunning(env);
+      process.stdout.write("fff-routerd is running\n");
+      return 0;
+    case "stop":
+      process.stdout.write(
+        await stopDaemon(env) ? "stopped fff-routerd\n" : "fff-routerd is not running\n"
+      );
+      return 0;
+    case "restart":
+      await stopDaemon(env);
+      await ensureDaemonRunning(env);
+      process.stdout.write("restarted fff-routerd\n");
+      return 0;
+    case "reload":
+      if (!await reloadDaemon(env)) {
+        throw new Error("fff-routerd is not running");
+      }
+      process.stdout.write("reloaded fff-routerd\n");
+      return 0;
+    case "logs": {
+      const logs = await readDaemonLogs(env);
+      printJson(logs);
+      return 0;
+    }
+    default:
+      throw new UsageError("daemon requires start, stop, restart, reload, or logs");
+  }
+}
+async function main(argv, env = process.env) {
+  const [command, ...rest] = argv;
+  try {
+    switch (command) {
+      case void 0:
+      case "help":
+      case "--help":
+      case "-h":
+        process.stdout.write(HELP);
+        return 0;
+      case "--version":
+      case "-V":
+        process.stdout.write(`${PACKAGE_VERSION}
+`);
+        return 0;
+      case "find":
+        return await runFind(rest, env);
+      case "grep":
+        return await runGrep(rest, env);
+      case "warm":
+        return await runWarm(rest, env);
+      case "evict":
+        return await runEvict(rest, env);
+      case "status":
+        return await runStatus(rest, env);
+      case "doctor":
+        parseJsonOnly(rest, "doctor");
+        printJson(await getDoctorReport(env));
+        return 0;
+      case "setup":
+        requireNoArguments(rest, "setup");
+        return await runSetup(env);
+      case "update":
+        requireNoArguments(rest, "update");
+        return await runInteractiveUpdate({
+          env,
+          stopDaemon: async () => await stopDaemon(env)
+        });
+      case "mcp":
+        requireNoArguments(rest, "mcp");
+        await runMcpHttpBridge({ env });
+        return 0;
+      case "daemon":
+        return await runDaemon(rest, env);
+      default:
+        throw new UsageError(`unknown command: ${command}
+
+${HELP}`);
+    }
+  } catch (caught) {
+    const message = caught instanceof Error ? caught.message : String(caught);
+    const stream = caught instanceof HelpRequested ? process.stdout : process.stderr;
+    stream.write(`${message.endsWith("\n") ? message : `${message}
+`}`);
+    return caught instanceof HelpRequested ? 0 : caught instanceof UsageError ? 2 : 1;
+  }
+}
+
+// bin/fff.ts
+main(process.argv.slice(2), process.env).then((exitCode) => {
+  process.exitCode = exitCode;
+});

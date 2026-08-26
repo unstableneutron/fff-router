@@ -1,32 +1,26 @@
+import { execFile } from "node:child_process";
 import { chmod, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { build } from "esbuild";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const distDir = path.join(rootDir, "dist");
+const execFileAsync = promisify(execFile);
 const packageEntrypoints = [
   "lib/fff-router/index.ts",
+  "lib/fff-router/server.ts",
   "lib/fff-router/public-api.ts",
   "lib/fff-router/daemon-autostart.ts",
   "lib/fff-router/http-client.ts",
   "lib/fff-router/resolve-within.ts",
   "lib/fff-router/types.ts",
-  "bin/fff-find-files.ts",
-  "bin/fff-grep.ts",
+  "bin/fff.ts",
   "bin/fff-routerd.ts",
 ];
-const externalPackages = [
-  "@ff-labs/fff-node",
-  "@modelcontextprotocol/sdk",
-  "@sinclair/typebox",
-  "zod",
-];
-const executableOutputs = [
-  "dist/bin/fff-find-files.js",
-  "dist/bin/fff-grep.js",
-  "dist/bin/fff-routerd.js",
-];
+const externalPackages = ["@modelcontextprotocol/sdk", "picomatch", "zod"];
+const executableOutputs = ["dist/bin/fff.js", "dist/bin/fff-routerd.js"];
 
 function externalPatterns() {
   return externalPackages.flatMap((pkg) => [pkg, `${pkg}/*`]);
@@ -55,9 +49,16 @@ await build({
   absWorkingDir: rootDir,
   bundle: true,
   platform: "node",
-  target: "node20.6",
+  target: "node22",
   format: "esm",
   external: externalPatterns(),
   logLevel: "info",
 });
+await execFileAsync(process.execPath, [
+  path.join(rootDir, "node_modules", "typescript", "bin", "tsc"),
+  "--project",
+  path.join(rootDir, "tsconfig.build.json"),
+  "--outDir",
+  distDir,
+]);
 await markExecutables();

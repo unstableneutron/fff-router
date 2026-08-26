@@ -1,7 +1,8 @@
 import { spawn as spawnChildProcess } from "node:child_process";
-import { createWriteStream, existsSync, mkdirSync } from "node:fs";
-import { mkdir, open, readFile, rm } from "node:fs/promises";
+import { appendFileSync, chmodSync, closeSync, existsSync, mkdirSync, openSync } from "node:fs";
+import { chmod, mkdir, open, readFile, rm, stat } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   DAEMON_PROTOCOL_VERSION,
   PACKAGE_VERSION,
@@ -12,10 +13,13 @@ import {
   getDaemonPaths,
 } from "./daemon-config";
 import { readDaemonMetadata, type DaemonMetadata } from "./http-daemon";
+import { bearerHeaders, readDaemonAuthToken } from "./local-auth";
 import { resolveExecutableOnPath as defaultResolveExecutableOnPath } from "./tool-resolution";
 
 type DaemonHealthMismatchKind = "protocol" | "version" | "server" | "reload";
 type VersionCompatibility = "same" | "running-newer";
+const moduleDir = path.dirname(fileURLToPath(import.meta.url));
+const STARTUP_LOCK_TIMEOUT_MS = 15_000;
 
 class DaemonHealthMismatchError extends Error {
   constructor(
@@ -28,10 +32,10 @@ class DaemonHealthMismatchError extends Error {
 }
 
 function packagedDaemonEntrypointPath(): string {
-  const primaryCandidatePath = path.resolve(import.meta.dirname, "../../dist/bin/fff-routerd.js");
+  const primaryCandidatePath = path.resolve(moduleDir, "../../dist/bin/fff-routerd.js");
   const candidatePaths = [
     primaryCandidatePath,
-    path.resolve(import.meta.dirname, "../../bin/fff-routerd.js"),
+    path.resolve(moduleDir, "../../bin/fff-routerd.js"),
   ];
 
   for (const candidatePath of candidatePaths) {
@@ -89,7 +93,9 @@ export function resolveDaemonLaunchCommand(
 
 async function fetchHealthMetadata(env?: NodeJS.ProcessEnv): Promise<Partial<DaemonMetadata>> {
   const config = getDaemonConfig({ env });
-  const response = await fetch(new URL(`/health`, getDaemonOriginFromConfig(config)));
+  const response = await fetch(new URL(`/health`, getDaemonOriginFromConfig(config)), {
+    headers: bearerHeaders(await readDaemonAuthToken(env)),
+  });
   if (!response.ok) {
     throw new Error(`daemon healthcheck failed with status ${response.status}`);
   }
@@ -240,15 +246,50 @@ export async function checkDaemonHealth(env?: NodeJS.ProcessEnv): Promise<void> 
   }
 }
 
+export function shouldReclaimStartupLock(args: {
+  contents: string;
+  mtimeMs: number;
+  now?: number;
+  isAlive?: (pid: number) => boolean;
+}): boolean {
+  const now = args.now ?? Date.now();
+  let pid = 0;
+  let createdAt = args.mtimeMs;
+  try {
+    const parsed = JSON.parse(args.contents) as unknown;
+    if (typeof parsed === "number") {
+      pid = parsed;
+    } else if (parsed && typeof parsed === "object") {
+      const record = parsed as { pid?: unknown; createdAt?: unknown };
+      pid = typeof record.pid === "number" ? record.pid : 0;
+      createdAt = typeof record.createdAt === "number" ? record.createdAt : args.mtimeMs;
+    }
+  } catch {
+    // v0 locks contained only a PID. Their mtime is the lease timestamp.
+    pid = Number.parseInt(args.contents.trim(), 10);
+  }
+
+  if (!Number.isFinite(pid) || pid <= 0) {
+    return true;
+  }
+  if (!Number.isFinite(createdAt) || now - createdAt >= STARTUP_LOCK_TIMEOUT_MS) {
+    return true;
+  }
+  return !(args.isAlive ?? isProcessAlive)(pid);
+}
+
 async function withStartupLock<T>(callback: () => Promise<T>, env?: NodeJS.ProcessEnv): Promise<T> {
   const paths = getDaemonPaths({ env });
-  await mkdir(paths.dir, { recursive: true });
+  await mkdir(paths.dir, { recursive: true, mode: 0o700 });
+  if (process.platform !== "win32") {
+    await chmod(paths.dir, 0o700);
+  }
   const startedAt = Date.now();
 
   while (true) {
     try {
       const handle = await open(paths.lockPath, "wx");
-      await handle.writeFile(String(process.pid));
+      await handle.writeFile(JSON.stringify({ pid: process.pid, createdAt: Date.now() }));
       try {
         return await callback();
       } finally {
@@ -260,16 +301,19 @@ async function withStartupLock<T>(callback: () => Promise<T>, env?: NodeJS.Proce
         throw error;
       }
 
-      const lockOwner = Number.parseInt(
-        (await readFile(paths.lockPath, "utf8").catch(() => "0")).trim(),
-        10,
-      );
-      if (!Number.isFinite(lockOwner) || lockOwner <= 0 || !isProcessAlive(lockOwner)) {
+      const [contents, lockStat] = await Promise.all([
+        readFile(paths.lockPath, "utf8").catch(() => ""),
+        stat(paths.lockPath).catch(() => null),
+      ]);
+      if (
+        !lockStat ||
+        shouldReclaimStartupLock({ contents, mtimeMs: lockStat.mtimeMs, now: Date.now() })
+      ) {
         await rm(paths.lockPath, { force: true }).catch(() => {});
         continue;
       }
 
-      if (Date.now() - startedAt > 15_000) {
+      if (Date.now() - startedAt > STARTUP_LOCK_TIMEOUT_MS) {
         throw new Error("timed out while waiting for the daemon startup lock");
       }
 
@@ -363,23 +407,31 @@ function spawnDaemon(
 ): { unref: () => void; source: "env" | "path" | "packaged" } {
   const launchCommand = resolveDaemonLaunchCommand(env ?? process.env, options);
   const paths = getDaemonPaths({ env });
-  mkdirSync(paths.dir, { recursive: true });
-  const child = spawnChildProcess(launchCommand.command, launchCommand.args, {
-    env: env ?? process.env,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  const stdoutLog = createWriteStream(paths.stdoutLogPath, { flags: "a" });
-  const stderrLog = createWriteStream(paths.stderrLogPath, { flags: "a" });
-  child.stdout?.pipe(stdoutLog);
-  child.stderr?.pipe(stderrLog);
+  mkdirSync(paths.dir, { recursive: true, mode: 0o700 });
+  if (process.platform !== "win32") {
+    chmodSync(paths.dir, 0o700);
+  }
+  const stdoutFd = openSync(paths.stdoutLogPath, "a", 0o600);
+  const stderrFd = openSync(paths.stderrLogPath, "a", 0o600);
+  let child: ReturnType<typeof spawnChildProcess>;
+  try {
+    child = spawnChildProcess(launchCommand.command, launchCommand.args, {
+      env: env ?? process.env,
+      detached: true,
+      stdio: ["ignore", stdoutFd, stderrFd],
+    });
+  } finally {
+    closeSync(stdoutFd);
+    closeSync(stderrFd);
+  }
   child.once("error", (error) => {
-    stderrLog.write(`fff-routerd spawn failed: ${error.message}\n`);
-    stdoutLog.end();
-    stderrLog.end();
-  });
-  child.once("close", () => {
-    stdoutLog.end();
-    stderrLog.end();
+    try {
+      appendFileSync(paths.stderrLogPath, `fff-routerd spawn failed: ${error.message}\n`, {
+        mode: 0o600,
+      });
+    } catch {
+      // A logging failure cannot make the caller retain the detached child.
+    }
   });
   return {
     unref: () => child.unref(),
