@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
-import { access, chmod, mkdir, rename, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -8,14 +8,14 @@ import { createInterface } from "node:readline/promises";
 import { stdin as processStdin, stdout as processStdout } from "node:process";
 import { promisify } from "node:util";
 import { execFile } from "node:child_process";
-import { PACKAGE_VERSION } from "./daemon-config";
+import { PACKAGE_MANAGER, PACKAGE_VERSION } from "./daemon-config";
 import { detectFffMcpTarget } from "./fff-mcp-installer";
 
 const execFileAsync = promisify(execFile);
-const FFF_MCP_REPO = "dmtrKovalenko/fff.nvim";
+const FFF_MCP_REPO = "dmtrKovalenko/fff";
 const FFF_ROUTER_GITHUB_PACKAGE_JSON =
   "https://raw.githubusercontent.com/unstableneutron/fff-router/main/package.json";
-const FFF_ROUTER_AUBE_SPEC = "github:unstableneutron/fff-router";
+const FFF_ROUTER_GITHUB_SPEC = "github:unstableneutron/fff-router";
 
 type FffMcpRelease = {
   tag: string;
@@ -52,6 +52,7 @@ export type FffRouterdUpdateCheck =
       kind: "outdated";
       currentVersion: string;
       latestVersion: string;
+      installer: "corepack-pnpm" | "aube" | "pnpm";
       command: string[];
     }
   | { kind: "current"; currentVersion: string; latestVersion: string }
@@ -302,30 +303,38 @@ export async function installFffMcpUpdate(
   const directory = path.dirname(plan.binaryPath);
   const tempPath = path.join(directory, `.fff-mcp.${process.pid}.${Date.now()}.download`);
   await mkdir(directory, { recursive: true });
-  await (deps.downloadToFile ?? downloadToFile)(plan.assetUrl, tempPath);
+  let installed = false;
+  try {
+    await (deps.downloadToFile ?? downloadToFile)(plan.assetUrl, tempPath);
 
-  const expectedDigest = extractSha256(await (deps.fetchText ?? fetchText)(plan.checksumUrl));
-  const actualDigest = await sha256File(tempPath);
-  if (actualDigest !== expectedDigest) {
-    throw new Error(`fff-mcp checksum mismatch: expected ${expectedDigest}, got ${actualDigest}`);
+    const expectedDigest = extractSha256(await (deps.fetchText ?? fetchText)(plan.checksumUrl));
+    const actualDigest = await sha256File(tempPath);
+    if (actualDigest !== expectedDigest) {
+      throw new Error(`fff-mcp checksum mismatch: expected ${expectedDigest}, got ${actualDigest}`);
+    }
+
+    await chmod(tempPath, 0o755);
+    await rename(tempPath, plan.binaryPath);
+    installed = true;
+    await writeFile(
+      path.join(directory, ".fff-mcp-install.json"),
+      `${JSON.stringify(
+        {
+          tag: plan.latestTag,
+          target: plan.target,
+          version: plan.latestVersion,
+          installedAt: Date.now(),
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    return plan.binaryPath;
+  } finally {
+    if (!installed) {
+      await rm(tempPath, { force: true }).catch(() => {});
+    }
   }
-
-  await chmod(tempPath, 0o755);
-  await rename(tempPath, plan.binaryPath);
-  await writeFile(
-    path.join(directory, ".fff-mcp-install.json"),
-    `${JSON.stringify(
-      {
-        tag: plan.latestTag,
-        target: plan.target,
-        version: plan.latestVersion,
-        installedAt: Date.now(),
-      },
-      null,
-      2,
-    )}\n`,
-  );
-  return plan.binaryPath;
 }
 
 function commandExtensions(env: NodeJS.ProcessEnv): string[] {
@@ -376,23 +385,38 @@ export async function checkFffRouterdUpdate(
 ): Promise<FffRouterdUpdateCheck> {
   const currentVersion = args.currentVersion ?? PACKAGE_VERSION;
   try {
-    if (!(await (args.commandExists ?? commandExists)("aube"))) {
-      return {
-        kind: "unavailable",
-        currentVersion,
-        message:
-          "aube is not available on PATH; install with: aube add -g github:unstableneutron/fff-router",
-      };
-    }
     const latestVersion = await (args.getLatestVersion ?? getLatestFffRouterdVersion)();
     if (compareVersions(currentVersion, latestVersion) >= 0) {
       return { kind: "current", currentVersion, latestVersion };
     }
+
+    const hasCommand = args.commandExists ?? commandExists;
+    let installer: Extract<FffRouterdUpdateCheck, { kind: "outdated" }>["installer"] | null = null;
+    let command: string[] | null = null;
+    if (await hasCommand("corepack")) {
+      installer = "corepack-pnpm";
+      command = ["corepack", PACKAGE_MANAGER, "add", "--global", FFF_ROUTER_GITHUB_SPEC];
+    } else if (await hasCommand("aube")) {
+      installer = "aube";
+      command = ["aube", "add", "--global", FFF_ROUTER_GITHUB_SPEC];
+    } else if (await hasCommand("pnpm")) {
+      installer = "pnpm";
+      command = ["pnpm", "add", "--global", FFF_ROUTER_GITHUB_SPEC];
+    }
+    if (!installer || !command) {
+      return {
+        kind: "unavailable",
+        currentVersion,
+        message: `No supported package manager found; install Corepack, pnpm, or aube, then run: corepack ${PACKAGE_MANAGER} add --global ${FFF_ROUTER_GITHUB_SPEC}`,
+      };
+    }
+
     return {
       kind: "outdated",
       currentVersion,
       latestVersion,
-      command: ["aube", "add", "-g", FFF_ROUTER_AUBE_SPEC],
+      installer,
+      command,
     };
   } catch (error) {
     return {
@@ -427,6 +451,12 @@ async function defaultConfirm(question: string): Promise<boolean> {
   } finally {
     rl.close();
   }
+}
+
+function installerDisplayName(
+  installer: Extract<FffRouterdUpdateCheck, { kind: "outdated" }>["installer"],
+): string {
+  return installer === "corepack-pnpm" ? "Corepack/pnpm" : installer;
 }
 
 export async function runInteractiveUpdate(
@@ -476,7 +506,7 @@ export async function runInteractiveUpdate(
     case "outdated":
       if (
         await confirm(
-          `Update fff-routerd ${routerd.currentVersion} -> ${routerd.latestVersion} with aube?`,
+          `Update fff-routerd ${routerd.currentVersion} -> ${routerd.latestVersion} from GitHub with ${installerDisplayName(routerd.installer)}?`,
         )
       ) {
         await applyRouterd(routerd);

@@ -3,7 +3,6 @@ import { filterItems } from "./common";
 import type { FindFilesBackendRequest } from "./types";
 
 const request: FindFilesBackendRequest = {
-  backendId: "rg",
   persistenceRoot: "/repo",
   queryKind: "find_files",
   within: "/repo/src",
@@ -12,6 +11,7 @@ const request: FindFilesBackendRequest = {
   extensions: ["ts"],
   excludePaths: ["src/generated"],
   limit: 20,
+  cursor: null,
   query: "router",
 };
 

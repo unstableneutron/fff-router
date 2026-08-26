@@ -1,362 +1,288 @@
 # fff-router
 
-`fff-router` is a shared FFF-backed search service.
+`fff-router` is a machine-local routing layer for [FFF](https://github.com/dmtrKovalenko/fff). One per-user `fff-routerd` daemon owns a bounded pool of warm `fff-mcp` child processes—one process and index per repository root—and shares those workers across CLIs, MCP clients, Prime Agent extensions, and Pi extensions.
 
-It exposes exactly two public tools:
+Version 1 deliberately supports one backend: upstream `fff-mcp`. There is no embedded `fff-node`, `rg` fallback, backend selector, or legacy wrapper API.
 
-- `fff_find_files`
-- `fff_grep`
+## Install from GitHub
 
-## Current architecture
+Node.js 22 or newer is required. Corepack pins the repository to pnpm 11.19.0; aube can also consume the committed pnpm lockfile for development workflows.
 
-The primary architecture is now:
-
-- one machine-local HTTP MCP daemon: `fff-routerd`
-- one shared in-process runtime map inside that daemon
-- thin CLI wrappers that call the daemon over MCP HTTP
-
-This means machine-wide warm reuse comes from the long-lived daemon process itself.
-
-## Public contract
-
-Common public fields:
-
-- `within`
-- `glob`
-- `extensions`
-- `exclude_paths`
-- `limit`
-- `cursor`
-- `output_mode`
-
-Matching order:
-
-```text
-within ∩ glob ∩ extensions - exclude_paths
+```sh
+corepack pnpm@11.19.0 add --global github:unstableneutron/fff-router
+fff setup
 ```
 
-Where:
+If pnpm's global home is not configured yet, run `corepack pnpm@11.19.0 setup` once and start a new shell before installing. In a disposable or non-interactive shell, configure it without editing a shell profile:
 
-- `within` is the hard scope boundary
-- `glob` is an optional include filter relative to `within`
-- `extensions` is optional suffix filtering
-- `exclude_paths` excludes relative descendants; simple wildcard entries such as
-  `bazel-*` are expanded against the resolved `within` path into existing
-  literal descendants before backend execution
+```sh
+export PNPM_HOME="${XDG_DATA_HOME:-$HOME/.local/share}/pnpm"
+export PATH="$PNPM_HOME/bin:$PATH"
+corepack pnpm@11.19.0 add --global github:unstableneutron/fff-router
+fff setup
+```
 
-Supported output modes:
+With aube already installed, `aube add --global github:unstableneutron/fff-router` is the supported alternative. `fff update` uses the same priority: Corepack/pnpm, aube, then a standalone pnpm.
 
-- `compact` (default)
-- `json`
+`fff setup` downloads the latest compatible upstream `fff-mcp` release, verifies its SHA-256 checksum, installs it under `~/.local/bin` by default, and starts `fff-routerd`. The router discovers that managed binary even if `~/.local/bin` is not on `PATH`.
 
-Pagination:
+To use an existing binary instead:
 
-- request `cursor` is omitted or `null` on the first page
-- when the selected backend returns an opaque cursor, responses include
-  `next_cursor: "<cursor>"`
-- pass that value back as `cursor` to continue the same search
-- cursor continuation is currently supported for the `fff-mcp` backend; other
-  backends reject non-null cursors instead of silently restarting from page one
+```sh
+export FFF_ROUTER_FFF_MCP_BIN=/absolute/path/to/fff-mcp
+fff doctor
+```
 
-## `within` semantics
+## CLI
 
-`within` is resolved client-side.
+```sh
+# Fuzzy file/path search
+fff find router --within .
+fff find coordinator -w packages/api -e ts -e tsx --json
 
-Clients should:
+# Literal content search (the default)
+fff grep createRouterService -w . -C 2
 
-- default omitted `within` to the caller cwd
-- resolve relative `within` against the caller cwd
-- expand `~/...`, `$HOME/...`, and `${HOME}/...` before absolute-path validation or relative resolution
-- send the resolved absolute value to the daemon
+# Explicit regular expression search
+fff grep 'create(Router|Worker)' --regex -w lib --json
 
-Server-side behavior:
+# Prewarm one worker/index per discovered repository root
+fff warm ~/src/project-a ~/src/project-b
 
-- validate and canonicalize the absolute `within`
-- if `within` is a file:
-  - `base_path` becomes the file’s parent directory
-  - the coordinator applies an implicit single-file restriction internally
+# Inspect and manage the shared pool
+fff status
+fff evict ~/src/project-a
+fff doctor
 
-## Backend selection
+# Daemon lifecycle
+fff daemon start
+fff daemon reload
+fff daemon restart
+fff daemon stop
+fff daemon logs
+```
 
-The daemon keeps the public API stable while letting you choose the backend through:
+Run `fff --help` for all options. Human output preserves upstream FFF's compact rendering where possible. `--json` always emits the normalized v1 schema.
 
-- `~/.config/fff-routerd/config.json`
-- `~/.config/fff-routerd/config.jsonc`
+### Exit codes
 
-If both files exist, `config.json` wins.
-If neither file exists, `fff-routerd` creates `config.json` with defaults on first run.
+| Code | Meaning                                    |
+| ---: | ------------------------------------------ |
+|  `0` | Success                                    |
+|  `1` | Runtime, daemon, worker, or search failure |
+|  `2` | Invalid CLI usage                          |
 
-Comments are accepted in **either** extension.
+## TypeScript SDK
 
-Example:
+Install the package in a Prime Agent or Pi extension and import the high-level client:
 
-```jsonc
-{
-  // comments are allowed in config.json and config.jsonc
-  "host": "127.0.0.1",
-  "port": 4319,
-  "mcpPath": "/mcp",
-  "backend": "fff-node",
-  "allowlist": ["~/.config", "$HOME/.local/share", "$HOME/src"],
-  "promotion": { "windowMs": 600000, "requiredHits": 2 },
-  "ttl": { "gitMs": 3600000, "nonGitMs": 900000 },
-  "limits": { "maxPersistentDaemons": 12, "maxPersistentNonGitDaemons": 4 },
+```ts
+import { getRouterClient } from "fff-router";
+
+const fff = await getRouterClient({ cwd: process.cwd() });
+
+const files = await fff.findFiles({
+  query: "router",
+  within: ".",
+  extensions: ["ts"],
+  limit: 20,
+});
+
+if (!files.ok) {
+  throw new Error(`${files.error.code}: ${files.error.message}`);
+}
+
+for (const hit of files.value.items) {
+  console.log(hit.absolutePath);
 }
 ```
 
-## Non-git allowlist
+The SDK resolves relative and home-relative `within` paths in the caller process before sending an absolute wire request. `getRouterClient()` keeps a process-global connection singleton, so multiple extension modules do not create duplicate HTTP clients or daemons.
 
-Use the `allowlist` array in the config file.
+Available package exports:
 
-Each prefix is matched recursively for allowlisting. Non-git routing still derives the persistence root using the first child under the matched prefix, while Git repositories under an allowlisted path still take precedence.
+| Export                | Intended use                                                       |
+| --------------------- | ------------------------------------------------------------------ |
+| `fff-router`          | High-level client, normalized request/result types, and schemas    |
+| `fff-router/client`   | `RouterClient`, `connectRouter`, and client input types            |
+| `fff-router/protocol` | Canonical Zod v4 input/output schemas and request normalization    |
+| `fff-router/server`   | Daemon, worker pool, adapter, and service primitives for embedding |
 
-Current default:
+An embedding can run the same server implementation directly:
 
-- `fff-node`
+```ts
+import { startHttpDaemon } from "fff-router/server";
 
-Current fallback matrix:
-
-- `fff-node -> rg`
-- `fff-mcp -> rg`
-- `rg -> no fallback`
-
-Fallback happens only on backend failure, not on zero results.
-
-### Backend notes
-
-- `fff-node` — direct in-process `@ff-labs/fff-node` runtime owned by `fff-routerd`
-- `rg` — direct `rg` / `fd` execution, now also available as an explicit primary backend
-- `fff-mcp` — stock upstream `fff-mcp` integration over stdio MCP; the agent
-  profile preserves upstream compact text, read recommendations, and opaque
-  cursor continuation while structured mode keeps the normalized
-  `fff_find_files` / `fff_grep` contract
-
-## Runtime reuse model
-
-The daemon owns the shared runtime state.
-
-That shared state is still keyed by the routed `persistenceRoot`, so:
-
-- same root => same warm runtime reused
-- different root => different runtime entry
-
-Routing and lifecycle policy still come from:
-
-- `lib/fff-router/routing.ts`
-- `lib/fff-router/lifecycle.ts`
-- `lib/fff-router/runtime-manager.ts`
-- `lib/fff-router/coordinator.ts`
-
-## Repo layout
-
-### Core modules
-
-- `lib/fff-router/public-api.ts` — public tool schemas and input normalization
-- `lib/fff-router/resolve-within.ts` — client/server `within` helpers
-- `lib/fff-router/routing.ts` — persistence root derivation
-- `lib/fff-router/lifecycle.ts` — lifecycle planning and eviction policy
-- `lib/fff-router/runtime-manager.ts` — shared runtime registry and startup dedupe
-- `lib/fff-router/backend-config.ts` — backend selection and fallback defaults
-- `lib/fff-router/adapters/fff-node.ts` — direct `@ff-labs/fff-node` adapter
-- `lib/fff-router/adapters/fff-mcp-stdio.ts` — experimental stock `fff-mcp` adapter
-- `lib/fff-router/adapters/rg.ts` — `rg` / `fd` adapter
-- `lib/fff-router/coordinator.ts` — top-level search coordinator
-- `lib/fff-router/mcp-tools.ts` — MCP tool definitions and execution bridge
-- `lib/fff-router/mcp-server.ts` — MCP server assembly
-- `lib/fff-router/http-daemon.ts` — HTTP daemon host
-- `lib/fff-router/http-client.ts` — HTTP MCP client helper for wrappers/proxies
-- `lib/fff-router/daemon-autostart.ts` — daemon health and auto-start helper
-
-### Entrypoints
-
-- `bin/fff-routerd.ts` — HTTP MCP daemon + small ops CLI
-- `bin/fff-find-files.ts` — HTTP MCP wrapper
-- `bin/fff-grep.ts` — HTTP MCP wrapper
-
-## Install
-
-```bash
-bun install
+const daemon = await startHttpDaemon();
+// await daemon.close();
 ```
 
-## Verify
+## MCP hosts
 
-```bash
-bun run test
-bun run check
+`fff mcp` is a stdio bridge to the already shared daemon. Configure it as one MCP server instead of launching one upstream `fff-mcp` per repository or host session:
+
+```json
+{
+  "mcpServers": {
+    "fff": {
+      "command": "fff",
+      "args": ["mcp"]
+    }
+  }
+}
 ```
 
-## Docker validation
+The MCP tools are:
 
-A container-oriented end-to-end validator lives at:
+- `find_files`
+- `grep`
+- `router_status`
+- `router_warm`
+- `router_evict`
 
-```bash
-scripts/docker-validate-wrappers.sh
+Search tools require absolute `within` paths on the MCP wire. SDK and CLI callers may use relative paths because they have a well-defined caller working directory.
+
+## Normalized v1 schema
+
+Zod v4 is the single input-schema source for the SDK normalization and MCP JSON Schema. Public names are camelCase, while MCP tool names retain upstream-compatible snake case.
+
+```ts
+type FindFilesInput = {
+  query: string;
+  within: string | string[];
+  glob?: string;
+  extensions?: string[];
+  excludePaths?: string[];
+  limit?: number; // 1..50
+  cursor?: string | null;
+};
+
+type GrepInput = {
+  patterns: string[]; // 1..20, OR semantics
+  literal?: boolean; // true by default
+  contextLines?: number; // 0..5
+  within: string | string[];
+  glob?: string;
+  extensions?: string[];
+  excludePaths?: string[];
+  limit?: number;
+  cursor?: string | null;
+};
 ```
 
-Run it from a Dockerized checkout rooted at `/workspace` with an isolated container `node_modules` volume:
+A successful result has one stable shape. The SDK validates daemon responses with the exported Zod schemas before returning them to callers:
 
-```bash
-docker run --rm \
-  -v "$PWD":/workspace \
-  -v /workspace/node_modules \
-  -w /workspace \
-  oven/bun:1 \
-  bash -lc 'bun install && bash scripts/docker-validate-wrappers.sh'
+```ts
+type SearchResult = {
+  tool: "find_files" | "grep";
+  root: string;
+  backend: "fff-mcp";
+  items: Array<{
+    path: string; // relative to root
+    absolutePath: string;
+    line?: number;
+    text?: string;
+    column?: number;
+    contextBefore?: string[];
+    contextAfter?: string[];
+    isDefinition?: boolean;
+    definitionBody?: string[];
+  }>;
+  nextCursor: string | null;
+  stats: {
+    resultCount: number;
+    upstreamShownCount?: number;
+    upstreamTotalCount?: number;
+    coldStart: boolean;
+    workerId: string;
+    workerGeneration: number;
+  };
+  readRecommendation?: {
+    path: string;
+    absolutePath: string;
+    reason?: string;
+  };
+  displayText?: string;
+};
 ```
 
-## `fff-routerd`
+`resultCount` is the number of normalized items actually returned. The optional
+`upstream*` counts preserve `fff-mcp`'s pre-filter summary and may therefore be larger.
 
-Default bind:
+Router cursors wrap upstream cursors and bind them to the repository, complete search request, and worker generation. A cursor cannot be reused with a different query or root, and it expires clearly if its worker restarts. This prevents upstream's worker-local cursor IDs from silently restarting at page one.
 
-- host: `127.0.0.1`
-- port: `4319`
-- MCP path: `/mcp`
+There is no public `caseSensitive` option: upstream `fff-mcp` owns its smart-case behavior, and the router does not advertise a switch it cannot faithfully implement.
 
-All daemon configuration comes from `~/.config/fff-routerd/config.json` or `config.jsonc`.
+## Process and index model
 
-Reload behavior:
-
-- editing `config.json` or `config.jsonc` auto-reloads in place
-- sending `SIGHUP` also reloads the file in place
-- changing `host`, `port`, or `mcpPath` requires a daemon restart
-- changing backend / allowlist / promotion / TTL / limit fields reloads in place
-- invalid config file edits cause reload to fail until the file is fixed
-
-Run in the foreground:
-
-```bash
-bun run bin/fff-routerd.ts
-# or, after install:
-fff-routerd
+```mermaid
+flowchart TD
+  C["CLI / SDK / MCP clients"] --> D["one fff-routerd"]
+  D --> A["fff-mcp: repo A"]
+  D --> B["fff-mcp: repo B"]
+  D --> N["fff-mcp: allowed non-Git root"]
 ```
 
-Useful commands:
+- Git-backed requests route to the discovered Git root.
+- Non-Git requests are denied unless they are under a configured allowlist; each first child below an allowlist entry becomes an isolated worker root.
+- Concurrent cold requests for one root share the same startup promise.
+- Every call holds a worker lease. TTL, LRU, explicit eviction, reload, and capacity enforcement drain a busy worker and close it only after its final lease releases.
+- Unexpected exits and startup failures are diagnosed and restarted with backoff.
+- A stale transport or timed-out first-page call gets one fresh-worker retry. Cursor calls are not replayed across workers.
 
-```bash
-fff-routerd status
-fff-routerd reload
-fff-routerd stop
-fff-routerd doctor
-fff-routerd install-fff-mcp
-fff-routerd update
-fff-routerd mcp
+The adapter intentionally retains a bounded parser for upstream `fff-mcp`'s compact text output because the upstream project is outside this repository's control. Parsing, path filtering, and compact-text rewriting live together in `adapters/fff-mcp-stdio.ts`; everything above the adapter uses normalized structured objects.
+
+## Configuration
+
+The daemon creates `~/.config/fff-routerd/config.json` on first use, or
+`$XDG_CONFIG_HOME/fff-routerd/config.json` when `XDG_CONFIG_HOME` is set:
+
+```json
+{
+  "host": "127.0.0.1",
+  "port": 4319,
+  "mcpPath": "/mcp",
+  "allowlist": [],
+  "warmRoots": [],
+  "ttl": {
+    "gitMs": 3600000,
+    "nonGitMs": 900000
+  },
+  "limits": {
+    "maxWorkers": 12,
+    "maxNonGitWorkers": 4
+  },
+  "runtime": {
+    "toolTimeoutMs": 30000,
+    "sweepIntervalMs": 30000,
+    "restartBackoffMs": 1000
+  }
+}
 ```
 
-`fff-routerd update` checks the standard `fff-mcp` install path
-(`$FFF_MCP_INSTALL_DIR/fff-mcp`, or `~/.local/bin/fff-mcp`) and the current
-`fff-routerd` GitHub package version. It prompts before applying each update.
-Accepted updates stop the shared daemon afterward so the next request restarts
-with fresh binaries.
+`config.jsonc` is also accepted when `config.json` does not exist. Unknown fields—including the removed `backend` field—are rejected. Sending `SIGHUP` or running `fff daemon reload` applies reloadable worker policy. `SIGUSR2` reloads configuration and drains all workers.
 
-`fff-routerd mcp` runs an agent-friendly stdio MCP server for clients that only
-launch MCP servers as child processes. It exposes `find_files`, `grep`, and
-`multi_grep` with fff-mcp-style inputs and plain text outputs, while executing
-searches through the shared `fff-routerd` daemon over HTTP. It does not create a
-separate search runtime pool. When the daemon is configured with
-`"backend": "fff-mcp"`, this profile preserves native compact output for all
-three tools, including `→ Read ...` recommendations, definition/context output,
-zero-result fallback text, and returned cursor strings.
+The HTTP daemon is intentionally machine-local and refuses non-loopback bind addresses. MCP requests also require a random bearer capability stored in the per-user state directory with mode `0600`; unauthenticated health checks reveal only daemon compatibility metadata, not worker roots. `fff mcp` is a stateless stdio facade over that same authenticated loopback endpoint, so it does not require a Unix socket or named pipe. Do not treat routing policy as an OS sandbox: the daemon can search files readable by its user inside permitted roots.
 
-To expose the structured extension-oriented tools instead (`fff_find_files` and
-`fff_grep` with JSON result envelopes), use:
+## Breaking changes from 0.x
 
-```bash
-fff-routerd mcp --profile structured
-# or:
-fff-routerd mcp --structured
+- Removed `@ff-labs/fff-node` and the `rg`/`fd` adapter path.
+- Removed backend and fallback configuration.
+- Removed `fff-find-files` and `fff-grep`; use `fff find` and `fff grep`.
+- Removed legacy `fff_*` public tool names and compatibility output modes.
+- Removed `search_terms`; use literal `grep` with multiple patterns.
+- Removed the ineffective explicit case-sensitivity option.
+- Replaced snake_case result fields with one camelCase structured schema.
+- Replaced split lifecycle/runtime registries with one lease-safe `WorkerPool`.
+
+## Development
+
+```sh
+corepack pnpm install --frozen-lockfile
+corepack pnpm test
+corepack pnpm run check
+corepack pnpm run build
+corepack pnpm pack
 ```
 
-## CLI wrappers
-
-The wrappers are thin clients.
-
-They:
-
-- default omitted `within` to the wrapper caller cwd
-- resolve relative `within` against the wrapper caller cwd
-- expand `~/...`, `$HOME/...`, and `${HOME}/...` before resolution
-- auto-start the daemon if it is missing
-- call the daemon over MCP HTTP
-
-They do **not** own search policy or backend management.
-
-They are intentionally daemon-first. There is no standalone execution mode.
-
-### Help
-
-```bash
-bun run bin/fff-find-files.ts --help
-bun run bin/fff-grep.ts --help
-```
-
-### Example usage
-
-```bash
-bun run bin/fff-find-files.ts 'openssl header' --within /opt/homebrew/lib --glob '**/*.h' --exclude-path pkgconfig
-bun run bin/fff-grep.ts ActorAuth actor_auth PopulatedActorAuth --within src --extension rs --exclude-path tests
-bun run bin/fff-grep.ts 'plan(Request)?' 'build(Request)?' --within ~/src --glob 'src/**/*.ts' --exclude-path dist --case-sensitive
-```
-
-## HTTP MCP endpoint
-
-The canonical MCP endpoint is:
-
-- `http://127.0.0.1:4319/mcp`
-
-The daemon also exposes a local stdio-framed MCP Unix socket for lightweight
-stdio bridges. Its path is derived from the daemon state directory and kept
-under `/tmp` to avoid Unix socket path-length limits.
-
-Other local agents and future extensions should talk to that same endpoint if they want shared warm reuse.
-
-Clients that need a stdio MCP command can use:
-
-```toml
-[mcp_servers.fff]
-command = "fff-routerd"
-args = ["mcp"]
-enabled_tools = ["find_files", "grep", "multi_grep"]
-```
-
-Clients that need the structured tool names can opt in with:
-
-```toml
-[mcp_servers.fff]
-command = "fff-routerd"
-args = ["mcp", "--profile", "structured"]
-enabled_tools = ["fff_find_files", "fff_grep"]
-```
-
-## Pi integration direction
-
-The long-term intended integration is:
-
-- Pi / extensions / wrappers talk directly to the same HTTP MCP daemon
-
-If you want the optional upstream `fff-mcp` binary for the experimental `fff-mcp` backend, install it explicitly with:
-
-```bash
-fff-routerd install-fff-mcp
-```
-
-To update `fff-mcp` and `fff-routerd` interactively:
-
-```bash
-fff-routerd update
-```
-
-To inspect whether it is installed and where the daemon is reading config/state from:
-
-```bash
-fff-routerd doctor
-```
-
-That keeps one shared runtime pool for the whole machine instead of creating per-client warm state.
-
-## Current tool names
-
-The public names remain locked:
-
-- `fff_find_files`
-- `fff_grep`
+`pnpm run build` bundles the two executables and public JavaScript entrypoints, then emits TypeScript declarations for every exported SDK surface.

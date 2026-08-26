@@ -1,115 +1,42 @@
+import { chmod, mkdtemp, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, test } from "vitest";
-import { getToolDiagnostic, resolveToolCommand } from "./tool-resolution";
+import { resolveToolCommand } from "./tool-resolution";
 
-describe("resolveToolCommand", () => {
-  test("honors fff-mcp, rg, and fd env overrides", () => {
-    const env = {
-      FFF_ROUTER_FFF_MCP_BIN: "/opt/bin/fff-mcp",
-      FFF_ROUTER_RG_BIN: "/opt/bin/rg",
-      FFF_ROUTER_FD_BIN: "/opt/bin/fd",
-    } as NodeJS.ProcessEnv;
-
-    expect(resolveToolCommand("fff-mcp", { env }).command).toBe("/opt/bin/fff-mcp");
-    expect(resolveToolCommand("rg", { env }).command).toBe("/opt/bin/rg");
-    expect(resolveToolCommand("fd", { env }).command).toBe("/opt/bin/fd");
-  });
-
-  test("checks override executable bit once", () => {
-    let checks = 0;
-
-    const result = resolveToolCommand("rg", {
-      env: { FFF_ROUTER_RG_BIN: "/opt/bin/rg" } as NodeJS.ProcessEnv,
-      isExecutable: () => {
-        checks += 1;
-        return false;
-      },
-    });
-
-    expect(checks).toBe(1);
-    expect(result).toMatchObject({
-      command: "/opt/bin/rg",
-      executable: false,
-      remediation: expect.stringContaining("FFF_ROUTER_RG_BIN"),
-    });
-  });
-
-  test("falls back to PATH when no override is set", () => {
+describe("fff-mcp command resolution", () => {
+  test("prefers the explicit override", () => {
     expect(
-      resolveToolCommand("rg", {
-        env: { PATH: "/bin" } as NodeJS.ProcessEnv,
-        resolveExecutableOnPath: (command) => (command === "rg" ? "/bin/rg" : null),
+      resolveToolCommand("fff-mcp", {
+        env: { FFF_ROUTER_FFF_MCP_BIN: "/custom/fff-mcp" },
         isExecutable: () => true,
       }),
-    ).toMatchObject({
-      tool: "rg",
-      command: "/bin/rg",
-      source: "path",
-      executable: true,
-    });
+    ).toMatchObject({ command: "/custom/fff-mcp", source: "env", executable: true });
   });
 
-  test("reports missing tools with remediation", () => {
+  test("uses PATH before the managed install", () => {
     expect(
-      resolveToolCommand("fd", {
-        env: { PATH: "/bin" } as NodeJS.ProcessEnv,
+      resolveToolCommand("fff-mcp", {
+        env: { HOME: "/home/test" },
+        resolveExecutableOnPath: () => "/usr/bin/fff-mcp",
+        isExecutable: () => true,
+      }),
+    ).toMatchObject({ command: "/usr/bin/fff-mcp", source: "path" });
+  });
+
+  test("discovers the setup-managed binary even when ~/.local/bin is not on PATH", async () => {
+    const home = await mkdtemp(path.join(os.tmpdir(), "fff-router-tool-"));
+    const binary = path.join(home, ".local", "bin", "fff-mcp");
+    await import("node:fs/promises").then(({ mkdir }) =>
+      mkdir(path.dirname(binary), { recursive: true }),
+    );
+    await writeFile(binary, "#!/bin/sh\n");
+    await chmod(binary, 0o755);
+    expect(
+      resolveToolCommand("fff-mcp", {
+        env: { HOME: home, PATH: "" },
         resolveExecutableOnPath: () => null,
       }),
-    ).toMatchObject({
-      tool: "fd",
-      command: null,
-      source: "missing",
-      executable: false,
-      remediation: expect.stringContaining("FFF_ROUTER_FD_BIN"),
-    });
-  });
-});
-
-describe("getToolDiagnostic", () => {
-  test("includes version output for resolved executable tools", async () => {
-    await expect(
-      getToolDiagnostic("rg", {
-        env: { PATH: "/bin" } as NodeJS.ProcessEnv,
-        resolveExecutableOnPath: () => "/bin/rg",
-        isExecutable: () => true,
-        runVersion: async (command) => `${command} 14.1.0\n`,
-      }),
-    ).resolves.toMatchObject({
-      tool: "rg",
-      command: "/bin/rg",
-      source: "path",
-      executable: true,
-      version: "/bin/rg 14.1.0",
-    });
-  });
-
-  test("omits version when version probe times out", async () => {
-    await expect(
-      getToolDiagnostic("rg", {
-        env: { PATH: "/bin" } as NodeJS.ProcessEnv,
-        resolveExecutableOnPath: () => "/bin/rg",
-        isExecutable: () => true,
-        versionTimeoutMs: 1,
-        runVersion: async (_command, options) => {
-          await new Promise((resolve) => setTimeout(resolve, options.timeoutMs + 10));
-          return "/bin/rg 14.1.0\n";
-        },
-      }),
-    ).resolves.toMatchObject({
-      tool: "rg",
-      command: "/bin/rg",
-      executable: true,
-    });
-    await expect(
-      getToolDiagnostic("rg", {
-        env: { PATH: "/bin" } as NodeJS.ProcessEnv,
-        resolveExecutableOnPath: () => "/bin/rg",
-        isExecutable: () => true,
-        versionTimeoutMs: 1,
-        runVersion: async (_command, options) => {
-          await new Promise((resolve) => setTimeout(resolve, options.timeoutMs + 10));
-          return "/bin/rg 14.1.0\n";
-        },
-      }),
-    ).resolves.not.toHaveProperty("version");
+    ).toMatchObject({ command: binary, source: "managed", executable: true });
   });
 });

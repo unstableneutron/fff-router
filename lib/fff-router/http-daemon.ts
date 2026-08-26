@@ -1,10 +1,9 @@
 import { watch, type FSWatcher } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { createServer as createNetServer, type Server as NetServer, type Socket } from "node:net";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { createFffMcpStdioAdapter } from "./adapters/fff-mcp-stdio";
-import { createFffNodeAdapter } from "./adapters/fff-node";
-import { createRgAdapter } from "./adapters/rg";
+import { isIP } from "node:net";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { createFffMcpStdioAdapter, type FffMcpRuntime } from "./adapters/fff-mcp-stdio";
 import {
   DAEMON_PROTOCOL_VERSION,
   PACKAGE_VERSION,
@@ -19,24 +18,30 @@ import {
   getDaemonSourceFingerprint,
   loadDaemonReloadConfig,
 } from "./daemon-config";
+import { createRouterService, type RouterConfigRef } from "./coordinator";
 import { createMcpServer } from "./mcp-server";
-import { RuntimeManager } from "./runtime-manager";
-import {
-  createCoordinatorRuntimeConfigRef,
-  createSearchCoordinator,
-  type CoordinatorRuntimeConfig,
-  type CoordinatorRuntimeConfigRef,
-} from "./coordinator";
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import type { SearchCoordinator } from "./types";
+import { ensureDaemonAuthToken, isAuthorized } from "./local-auth";
+import { WorkerPool } from "./runtime-manager";
+import type { RouterService } from "./types";
+
+const MAX_REQUEST_BODY_BYTES = 1024 * 1024;
+
+function assertLocalHost(host: string): void {
+  const normalized = host.toLowerCase().replace(/^\[|\]$/g, "");
+  if (
+    normalized !== "localhost" &&
+    normalized !== "::1" &&
+    !(isIP(normalized) === 4 && normalized.startsWith("127."))
+  ) {
+    throw new Error("fff-routerd only binds to a local loopback address");
+  }
+}
 
 export type DaemonMetadata = {
   pid: number;
   host: string;
   port: number;
   mcpPath: string;
-  mcpSocketPath?: string;
   protocolVersion: string;
   packageVersion: string;
   daemonSourceFingerprint?: string;
@@ -46,12 +51,12 @@ export type DaemonMetadata = {
 };
 
 export type StartHttpDaemonArgs = Partial<DaemonConfig> & {
-  coordinator?: SearchCoordinator;
-  createCoordinator?: (args: {
-    liveConfigRef: CoordinatorRuntimeConfigRef;
-    runtimeManager: RuntimeManager;
-  }) => SearchCoordinator;
-  liveConfigRef?: CoordinatorRuntimeConfigRef;
+  service?: RouterService;
+  createService?: (args: {
+    configRef: RouterConfigRef;
+    workerPool: WorkerPool<FffMcpRuntime>;
+  }) => RouterService;
+  configRef?: RouterConfigRef;
   loadReloadConfig?: (args?: { env?: NodeJS.ProcessEnv }) => DaemonReloadConfig;
   env?: NodeJS.ProcessEnv;
   watchConfig?: boolean;
@@ -64,52 +69,51 @@ type DaemonReloadOptions = {
 
 async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
+  let size = 0;
   for await (const chunk of req) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    size += buffer.byteLength;
+    if (size > MAX_REQUEST_BODY_BYTES) {
+      throw new Error(`request body exceeds ${MAX_REQUEST_BODY_BYTES} bytes`);
+    }
+    chunks.push(buffer);
   }
-
-  if (chunks.length === 0) {
-    return undefined;
-  }
-
-  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  return chunks.length === 0 ? undefined : JSON.parse(Buffer.concat(chunks).toString("utf8"));
 }
 
-export async function readDaemonMetadata(path: string): Promise<DaemonMetadata | null> {
+export async function readDaemonMetadata(pathValue: string): Promise<DaemonMetadata | null> {
   try {
-    return JSON.parse(await readFile(path, "utf8")) as DaemonMetadata;
+    return JSON.parse(await readFile(pathValue, "utf8")) as DaemonMetadata;
   } catch {
     return null;
   }
 }
 
-async function writeDaemonMetadata(path: string, metadata: DaemonMetadata): Promise<void> {
-  await writeFile(path, `${JSON.stringify(metadata, null, 2)}\n`);
+async function writeDaemonMetadata(pathValue: string, metadata: DaemonMetadata): Promise<void> {
+  const temporaryPath = `${pathValue}.${process.pid}.tmp`;
+  await writeFile(temporaryPath, `${JSON.stringify(metadata, null, 2)}\n`, {
+    mode: 0o600,
+  });
+  await rename(temporaryPath, pathValue);
 }
 
-function toCoordinatorRuntimeConfig(reloadConfig: DaemonReloadConfig): CoordinatorRuntimeConfig {
+function poolOptions(config: DaemonReloadConfig["router"]) {
   return {
-    config: reloadConfig.router,
-    primaryBackendId: reloadConfig.backend.primaryBackendId,
-    fallbackBackendId: reloadConfig.backend.fallbackBackendId,
+    maxWorkers: config.limits.maxWorkers,
+    maxNonGitWorkers: config.limits.maxNonGitWorkers,
+    sweepIntervalMs: config.runtime.sweepIntervalMs,
+    restartBackoffMs: config.runtime.restartBackoffMs,
   };
 }
 
-function createDefaultCoordinator(args: {
-  liveConfigRef: CoordinatorRuntimeConfigRef;
-  runtimeManager: RuntimeManager;
-}): SearchCoordinator {
-  return createSearchCoordinator({
-    config: args.liveConfigRef.current.config,
-    adapters: {
-      "fff-node": createFffNodeAdapter(),
-      "fff-mcp": createFffMcpStdioAdapter(),
-      rg: createRgAdapter(),
-    },
-    primaryBackendId: args.liveConfigRef.current.primaryBackendId,
-    fallbackBackendId: args.liveConfigRef.current.fallbackBackendId,
-    liveConfigRef: args.liveConfigRef,
-    runtimeManager: args.runtimeManager,
+function createDefaultService(args: {
+  configRef: RouterConfigRef;
+  workerPool: WorkerPool<FffMcpRuntime>;
+}): RouterService {
+  return createRouterService({
+    configRef: args.configRef,
+    adapter: createFffMcpStdioAdapter(),
+    workerPool: args.workerPool,
   });
 }
 
@@ -129,7 +133,6 @@ function buildMetadata(args: {
     host: args.config.host,
     port: args.port,
     mcpPath: args.config.mcpPath,
-    mcpSocketPath: getDaemonPaths({ env: args.env }).mcpSocketPath,
     protocolVersion: DAEMON_PROTOCOL_VERSION,
     packageVersion: PACKAGE_VERSION,
     daemonSourceFingerprint: getDaemonSourceFingerprint({ env: args.env }),
@@ -154,26 +157,34 @@ export async function startHttpDaemon(args: StartHttpDaemonArgs = {}) {
     port: args.port ?? baseConfig.port,
     mcpPath: args.mcpPath ?? baseConfig.mcpPath,
   };
+  assertLocalHost(config.host);
   const loadReloadConfig = args.loadReloadConfig ?? loadDaemonReloadConfig;
   const initialReloadConfig = loadReloadConfig({ env });
-  const liveConfigRef =
-    args.liveConfigRef ??
-    createCoordinatorRuntimeConfigRef(toCoordinatorRuntimeConfig(initialReloadConfig));
-  let runtimeManager = new RuntimeManager();
-  let currentCoordinator =
-    args.coordinator ??
-    args.createCoordinator?.({ liveConfigRef, runtimeManager }) ??
-    createDefaultCoordinator({ liveConfigRef, runtimeManager });
+  const configRef = args.configRef ?? { current: initialReloadConfig.router };
+  const workerPool = new WorkerPool<FffMcpRuntime>(poolOptions(initialReloadConfig.router));
+  const service =
+    args.service ??
+    args.createService?.({ configRef, workerPool }) ??
+    createDefaultService({ configRef, workerPool });
   const paths = getDaemonPaths({ env });
   const policyConfigPaths = getDaemonPolicyConfigPaths({ env });
   const startedAt = Date.now();
   let metadata: DaemonMetadata | null = null;
-  let mcpSocketServer: NetServer | null = null;
-  const mcpSockets = new Set<Socket>();
   let watcher: FSWatcher | null = null;
   let watcherReloadTimer: ReturnType<typeof setTimeout> | null = null;
   let reloadChain = Promise.resolve();
   let closing = false;
+
+  const warmConfiguredRoots = (roots: string[]) => {
+    if (roots.length === 0) {
+      return;
+    }
+    void service.warm(roots).then((result) => {
+      if (!result.ok) {
+        console.error("fff-routerd warm roots failed:", result.error.message);
+      }
+    });
+  };
 
   const reload = async (override?: DaemonReloadOptions) => {
     const nextReload = reloadChain.then(async () => {
@@ -181,7 +192,6 @@ export async function startHttpDaemon(args: StartHttpDaemonArgs = {}) {
         throw new Error("fff-routerd is closing");
       }
       const nextConfig = override?.loadConfig ? override.loadConfig() : loadReloadConfig({ env });
-      const nextRuntimeConfig = toCoordinatorRuntimeConfig(nextConfig);
       const nextMetadata = buildMetadata({
         env,
         config,
@@ -189,107 +199,59 @@ export async function startHttpDaemon(args: StartHttpDaemonArgs = {}) {
         reloadConfig: nextConfig,
         startedAt,
       });
-      const backendChanged =
-        liveConfigRef.current.primaryBackendId !== nextRuntimeConfig.primaryBackendId;
-      const shouldClearRuntimes = override?.clearRuntimes === true;
 
-      await writeDaemonMetadata(paths.metadataPath, nextMetadata);
-      liveConfigRef.current = nextRuntimeConfig;
-
-      if ((backendChanged || shouldClearRuntimes) && !args.coordinator) {
-        const previousRuntimeManager = runtimeManager;
-        runtimeManager = new RuntimeManager();
-        currentCoordinator =
-          args.createCoordinator?.({ liveConfigRef, runtimeManager }) ??
-          createDefaultCoordinator({ liveConfigRef, runtimeManager });
-        await previousRuntimeManager.closeAll();
-      } else if (shouldClearRuntimes) {
-        await runtimeManager.closeAll();
+      configRef.current = nextConfig.router;
+      workerPool.updateOptions(poolOptions(nextConfig.router), nextConfig.router.ttl);
+      if (override?.clearRuntimes) {
+        await workerPool.evictAll();
       }
-
+      await writeDaemonMetadata(paths.metadataPath, nextMetadata);
       metadata = nextMetadata;
+      warmConfiguredRoots(nextConfig.router.warmRoots);
     });
     reloadChain = nextReload.catch(() => {});
     return await nextReload;
   };
 
-  await mkdir(paths.dir, { recursive: true });
-  await mkdir(policyConfigPaths.dir, { recursive: true });
-
-  await rm(paths.mcpSocketPath, { force: true });
-  mcpSocketServer = createNetServer((socket) => {
-    mcpSockets.add(socket);
-    const transport = new StdioServerTransport(socket, socket);
-    const mcpServer = createMcpServer({ coordinator: currentCoordinator }).toSdkServer();
-    let cleanedUp = false;
-    const cleanup = () => {
-      if (cleanedUp) {
-        return;
-      }
-      cleanedUp = true;
-      mcpSockets.delete(socket);
-      void transport.close();
-      void mcpServer.close();
-      socket.destroy();
-    };
-
-    socket.once("close", cleanup);
-    socket.once("error", cleanup);
-    void mcpServer.connect(transport).catch(() => {
-      cleanup();
-    });
-  });
-
-  const closeMcpSocketServer = async () => {
-    for (const socket of mcpSockets) {
-      socket.destroy();
-    }
-    mcpSockets.clear();
-    await new Promise<void>((resolve) => {
-      if (!mcpSocketServer?.listening) {
-        resolve();
-        return;
-      }
-      mcpSocketServer.close(() => resolve());
-    });
-    await rm(paths.mcpSocketPath, { force: true }).catch(() => {});
-  };
-
-  await new Promise<void>((resolve, reject) => {
-    mcpSocketServer!.once("error", reject);
-    mcpSocketServer!.listen(paths.mcpSocketPath, () => {
-      mcpSocketServer!.off("error", reject);
-      resolve();
-    });
-  });
+  await mkdir(paths.dir, { recursive: true, mode: 0o700 });
+  await mkdir(policyConfigPaths.dir, { recursive: true, mode: 0o700 });
+  const authToken = await ensureDaemonAuthToken(env);
 
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     const url = new URL(
       req.url || "/",
-      req.headers.host
-        ? `http://${req.headers.host}`
-        : getDaemonOriginFromConfig({
-            host: config.host,
-            port: metadata?.port ?? config.port,
-            mcpPath: config.mcpPath,
-          }),
+      req.headers.host ? `http://${req.headers.host}` : getDaemonOriginFromConfig(config),
     );
 
     if (url.pathname === "/health") {
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ ok: true, metadata, runtimes: runtimeManager.getDiagnostics() }));
+      const authorized = isAuthorized(req.headers.authorization, authToken);
+      res.end(
+        JSON.stringify({
+          ok: true,
+          metadata,
+          ...(authorized ? service.status() : {}),
+        }),
+      );
       return;
     }
-
     if (url.pathname !== config.mcpPath) {
       res.writeHead(404).end("Not found");
+      return;
+    }
+    if (!isAuthorized(req.headers.authorization, authToken)) {
+      res.writeHead(401, {
+        "content-type": "application/json",
+        "www-authenticate": 'Bearer realm="fff-routerd"',
+      });
+      res.end(JSON.stringify({ error: "unauthorized" }));
       return;
     }
 
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
     });
-    const mcpServer = createMcpServer({ coordinator: currentCoordinator }).toSdkServer();
+    const mcpServer = createMcpServer({ service, env }).toSdkServer();
     let cleanedUp = false;
     const cleanup = () => {
       if (cleanedUp) {
@@ -309,7 +271,7 @@ export async function startHttpDaemon(args: StartHttpDaemonArgs = {}) {
       if (res.writableEnded || res.destroyed) {
         cleanup();
       }
-    } catch (error) {
+    } catch (caught) {
       if (!res.headersSent) {
         res.writeHead(500, { "content-type": "application/json" });
         res.end(
@@ -317,7 +279,7 @@ export async function startHttpDaemon(args: StartHttpDaemonArgs = {}) {
             jsonrpc: "2.0",
             error: {
               code: -32603,
-              message: error instanceof Error ? error.message : String(error),
+              message: caught instanceof Error ? caught.message : String(caught),
             },
             id: null,
           }),
@@ -329,9 +291,9 @@ export async function startHttpDaemon(args: StartHttpDaemonArgs = {}) {
 
   try {
     await new Promise<void>((resolve, reject) => {
-      const onError = (error: Error) => {
+      const onError = (caught: Error) => {
         server.off("listening", onListening);
-        reject(error);
+        reject(caught);
       };
       const onListening = () => {
         server.off("error", onError);
@@ -340,9 +302,10 @@ export async function startHttpDaemon(args: StartHttpDaemonArgs = {}) {
       server.once("error", onError);
       server.listen(config.port, config.host, onListening);
     });
-  } catch (error) {
-    await closeMcpSocketServer();
-    throw error;
+  } catch (caught) {
+    await service.close();
+    await workerPool.closeAll();
+    throw caught;
   }
 
   const address = server.address();
@@ -355,36 +318,25 @@ export async function startHttpDaemon(args: StartHttpDaemonArgs = {}) {
     startedAt,
   });
   await writeDaemonMetadata(paths.metadataPath, metadata);
+  warmConfiguredRoots(initialReloadConfig.router.warmRoots);
 
   if (args.watchConfig !== false) {
     watcher = watch(policyConfigPaths.dir, (_eventType, filename) => {
-      if (closing) {
+      if (closing || !shouldReloadForWatchEvent(filename?.toString())) {
         return;
       }
-      if (!shouldReloadForWatchEvent(filename?.toString())) {
-        return;
-      }
-
       if (watcherReloadTimer) {
         clearTimeout(watcherReloadTimer);
       }
       watcherReloadTimer = setTimeout(() => {
         watcherReloadTimer = null;
-        void reload().catch((error) => {
-          console.error("fff-routerd watcher reload failed:", error);
-          setTimeout(() => {
-            if (closing) {
-              return;
-            }
-            void reload().catch((retryError) => {
-              console.error("fff-routerd watcher reload retry failed:", retryError);
-            });
-          }, 100);
+        void reload().catch((caught) => {
+          console.error("fff-routerd config reload failed:", caught);
         });
-      }, 25);
+      }, 50);
     });
-    watcher.on("error", (error) => {
-      console.error("fff-routerd config watcher error:", error);
+    watcher.on("error", (caught) => {
+      console.error("fff-routerd config watcher error:", caught);
     });
   }
 
@@ -406,13 +358,12 @@ export async function startHttpDaemon(args: StartHttpDaemonArgs = {}) {
       closing = true;
       if (watcherReloadTimer) {
         clearTimeout(watcherReloadTimer);
-        watcherReloadTimer = null;
       }
       watcher?.close();
       await reloadChain.catch(() => {});
       await new Promise<void>((resolve) => server.close(() => resolve()));
-      await closeMcpSocketServer();
-      await runtimeManager.closeAll().catch(() => {});
+      await service.close().catch(() => {});
+      await workerPool.closeAll().catch(() => {});
       await rm(paths.metadataPath, { force: true }).catch(() => {});
     },
   };

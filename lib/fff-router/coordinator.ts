@@ -1,102 +1,78 @@
 import path from "node:path";
-import { normalizeRelativePath } from "./adapters/common";
 import type {
   BackendSearchRequest,
   BackendSearchResult,
   SearchBackendAdapter,
 } from "./adapters/types";
-import { planRoutingLifecycle } from "./lifecycle";
+import type { FffMcpRuntime } from "./adapters/fff-mcp-stdio";
+import { normalizeRelativePath } from "./adapters/common";
+import { decodeCursor, encodeCursor } from "./cursor";
 import { resolveSearchPath } from "./resolve-path";
 import { validateResolvedWithinPaths } from "./resolve-within";
-import type { RuntimeManager } from "./runtime-manager";
+import { deriveRoutingTarget } from "./routing";
+import type { WorkerLease, WorkerPool } from "./runtime-manager";
 import type {
-  DaemonRegistryState,
   PublicToolRequest,
   PublicToolResult,
+  Result,
   RouterConfig,
-  RoutingLifecyclePlan,
-  SearchBackendId,
-  SearchCoordinator,
-  SearchCoordinatorResult,
-  SearchQueryKind,
+  RouterError,
+  RouterService,
+  RouterStatus,
+  RoutingTarget,
   ValidatedWithin,
+  WorkerDiagnostic,
 } from "./types";
 
-export type CoordinatorRuntimeConfig = {
-  config: RouterConfig;
-  primaryBackendId: SearchBackendId;
-  fallbackBackendId: SearchBackendId | null;
-};
+export type RouterConfigRef = { current: RouterConfig };
 
-export type CoordinatorRuntimeConfigRef = {
-  current: CoordinatorRuntimeConfig;
-};
-
-type CoordinatorDeps = {
-  config: RouterConfig;
-  adapters: Partial<Record<SearchBackendId, SearchBackendAdapter<any>>>;
-  primaryBackendId: SearchBackendId;
-  fallbackBackendId: SearchBackendId | null;
-  runtimeManager: RuntimeManager<any>;
-  liveConfigRef?: CoordinatorRuntimeConfigRef;
+export type RouterServiceDeps = {
+  configRef: RouterConfigRef;
+  adapter: SearchBackendAdapter<FffMcpRuntime>;
+  workerPool: WorkerPool<FffMcpRuntime>;
   validateWithin?: typeof validateResolvedWithinPaths;
-  resolveRoutingPath?: typeof resolveSearchPath;
-  planLifecycle?: typeof planRoutingLifecycle;
-  now?: () => number;
-  writeDiagnostic?: (event: {
-    backendId: SearchBackendId;
-    queryKind: SearchQueryKind;
-    diagnostics: Record<string, unknown>;
-  }) => void;
+  resolvePath?: typeof resolveSearchPath;
+  writeDiagnostic?: (event: Record<string, unknown>) => void;
 };
 
-const DEFAULT_BACKEND_TOOL_TIMEOUT_MS = 30_000;
-
-class BackendCallTimeoutError extends Error {
-  constructor(
-    readonly backendId: SearchBackendId,
-    readonly timeoutMs: number,
-  ) {
-    super(`${backendId} backend call timed out after ${timeoutMs}ms`);
+class WorkerCallTimeoutError extends Error {
+  constructor(readonly timeoutMs: number) {
+    super(`fff-mcp call timed out after ${timeoutMs}ms`);
   }
 }
 
-export function createCoordinatorRuntimeConfigRef(
-  config: CoordinatorRuntimeConfig,
-): CoordinatorRuntimeConfigRef {
-  return { current: config };
+function error(code: RouterError["code"], message: string, retryable?: boolean): Result<never> {
+  return {
+    ok: false,
+    error: { code, message, ...(retryable !== undefined ? { retryable } : {}) },
+  };
 }
 
-function invalid(message: string): SearchCoordinatorResult {
-  return { ok: false, error: { code: "INVALID_REQUEST", message } };
+function isStaleWorkerMessage(message: string): boolean {
+  return (
+    /\b(Not connected|EPIPE|ECONNRESET|EOF)\b/i.test(message) ||
+    /\b(transport|stdio|stream)\b.*\b(closed|ended|destroyed|disconnected)\b/i.test(message)
+  );
 }
 
-function internalError(message: string): SearchCoordinatorResult {
-  return { ok: false, error: { code: "INTERNAL_ERROR", message } };
-}
-
-function normalizeCoordinatorPath(relativePath: string): string {
-  const normalized = normalizeRelativePath(relativePath);
-  return normalized === "" ? "." : normalized;
-}
-
-function queryKindForRequest(request: PublicToolRequest): SearchQueryKind {
-  switch (request.tool) {
-    case "fff_find_files":
-      return "find_files";
-    case "fff_search_terms":
-      return "search_terms";
-    case "fff_grep":
-      return "grep";
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return await promise;
   }
-}
-
-function defaultWriteDiagnostic(event: {
-  backendId: SearchBackendId;
-  queryKind: SearchQueryKind;
-  diagnostics: Record<string, unknown>;
-}): void {
-  console.error(JSON.stringify({ event: "fff-router.backend_diagnostics", ...event }));
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new WorkerCallTimeoutError(timeoutMs)), timeoutMs);
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
 }
 
 function translateExcludePaths(
@@ -107,741 +83,443 @@ function translateExcludePaths(
   const baseRelative = normalizeRelativePath(
     path.relative(persistenceRoot, validatedWithin.basePath),
   );
-
-  return excludePaths.map((excludePath) => {
-    if (!baseRelative || baseRelative === ".") {
-      return excludePath;
-    }
-
-    return normalizeRelativePath(path.join(baseRelative, excludePath));
-  });
+  if (!baseRelative || baseRelative === ".") {
+    return excludePaths;
+  }
+  return excludePaths.map((excludePath) =>
+    normalizeRelativePath(path.join(baseRelative, excludePath)),
+  );
 }
 
 function buildBackendRequest(args: {
   request: PublicToolRequest;
   validatedWithin: ValidatedWithin;
-  persistenceRoot: string;
-  backendId: SearchBackendId;
+  target: RoutingTarget;
+  upstreamCursor: string | null;
 }): BackendSearchRequest {
   const base = {
-    backendId: args.backendId,
-    persistenceRoot: args.persistenceRoot,
+    persistenceRoot: args.target.persistenceRoot,
     within: args.validatedWithin.resolvedWithin,
     basePath: args.validatedWithin.basePath,
     fileRestriction: args.validatedWithin.fileRestriction,
     additionalWithinEntries: args.validatedWithin.additionalEntries ?? [],
-    ...(args.request.glob !== undefined ? { glob: args.request.glob } : {}),
+    ...(args.request.glob ? { glob: args.request.glob } : {}),
     extensions: args.request.extensions,
     excludePaths: translateExcludePaths(
       args.validatedWithin,
-      args.persistenceRoot,
+      args.target.persistenceRoot,
       args.request.excludePaths,
     ),
     limit: args.request.limit,
-    cursor: args.request.cursor,
+    cursor: args.upstreamCursor,
   };
 
-  switch (args.request.tool) {
-    case "fff_find_files":
-      return { ...base, queryKind: "find_files", query: args.request.query };
-    case "fff_search_terms":
-      return {
-        ...base,
-        queryKind: "search_terms",
-        terms: args.request.terms,
-        contextLines: args.request.contextLines,
-      };
-    case "fff_grep":
-      return {
+  return args.request.tool === "find_files"
+    ? { ...base, queryKind: "find_files", query: args.request.query }
+    : {
         ...base,
         queryKind: "grep",
         patterns: args.request.patterns,
         literal: args.request.literal,
-        caseSensitive: args.request.caseSensitive,
         contextLines: args.request.contextLines,
       };
-  }
 }
 
-function isStaleRuntimeErrorMessage(message: string): boolean {
-  return (
-    /\b(Not connected|EPIPE|ECONNRESET|EOF)\b/i.test(message) ||
-    /\b(transport|stdio|stream)\b.*\b(closed|ended|destroyed|disconnected)\b/i.test(message)
-  );
-}
-
-async function withBackendCallTimeout<T>(
-  promise: Promise<T>,
-  args: {
-    backendId: SearchBackendId;
-    timeoutMs: number;
-  },
-): Promise<T> {
-  if (!Number.isFinite(args.timeoutMs) || args.timeoutMs <= 0) {
-    return await promise;
-  }
-
-  let timeout: ReturnType<typeof setTimeout> | null = null;
-  const timeoutPromise = new Promise<never>((_resolve, reject) => {
-    timeout = setTimeout(() => {
-      reject(new BackendCallTimeoutError(args.backendId, args.timeoutMs));
-    }, args.timeoutMs);
-    timeout.unref?.();
-  });
-
-  try {
-    return await Promise.race([promise, timeoutPromise]);
-  } finally {
-    if (timeout) {
-      clearTimeout(timeout);
-    }
-  }
-}
-
-function shapePublicResult(args: {
+function toPublicResult(args: {
   request: PublicToolRequest;
-  basePath: string;
-  persistenceRoot: string;
-  backendUsed: SearchBackendId;
-  fallbackApplied: boolean;
-  nextCursor: string | null;
-  items: Array<Record<string, unknown>>;
-  renderedCompact?: string;
-  summary?: {
-    shownCount?: number;
-    totalCount?: number;
-    readRecommendation?: {
-      relativePath: string;
-      reason?: string;
-    };
-  };
+  target: RoutingTarget;
+  lease: WorkerLease<FffMcpRuntime>;
+  result: Extract<BackendSearchResult, { ok: true }>["value"];
 }): PublicToolResult {
-  if (args.request.outputMode === "json") {
-    const readRecommendation = args.summary?.readRecommendation
-      ? (() => {
-          const absolutePath = path.join(
-            args.persistenceRoot,
-            args.summary!.readRecommendation!.relativePath,
-          );
-          return {
-            path: normalizeCoordinatorPath(path.relative(args.basePath, absolutePath)),
-            absolute_path: absolutePath,
-            ...(args.summary?.readRecommendation?.reason
-              ? { reason: args.summary.readRecommendation.reason }
-              : {}),
-          };
-        })()
-      : undefined;
+  const nextCursor = args.result.nextCursor
+    ? encodeCursor({
+        root: args.target.persistenceRoot,
+        generation: args.lease.generation,
+        request: args.request,
+        upstreamCursor: args.result.nextCursor,
+      })
+    : null;
+  const recommendation = args.result.summary?.readRecommendation;
+  const readRecommendation = recommendation
+    ? {
+        path: recommendation.relativePath,
+        absolutePath: path.join(args.target.persistenceRoot, recommendation.relativePath),
+        ...(recommendation.reason ? { reason: recommendation.reason } : {}),
+      }
+    : undefined;
+  const displayText = args.result.renderedCompact
+    ? args.result.renderedCompact
+        .split(/\r?\n/)
+        .filter((line) => !/^cursor:\s*/.test(line.trim()))
+        .concat(nextCursor ? [`cursor: ${nextCursor}`] : [])
+        .join("\n")
+    : undefined;
+  const common = {
+    root: args.target.persistenceRoot,
+    backend: "fff-mcp" as const,
+    nextCursor,
+    stats: {
+      resultCount: args.result.items.length,
+      ...(args.result.summary?.shownCount !== undefined
+        ? { upstreamShownCount: args.result.summary.shownCount }
+        : {}),
+      ...(args.result.summary?.totalCount !== undefined
+        ? { upstreamTotalCount: args.result.summary.totalCount }
+        : {}),
+      coldStart: args.lease.coldStart,
+      workerId: args.lease.runtime.id,
+      workerGeneration: args.lease.generation,
+    },
+    ...(readRecommendation ? { readRecommendation } : {}),
+    ...(displayText ? { displayText } : {}),
+  };
 
+  if (args.request.tool === "find_files") {
     return {
-      mode: "json",
-      base_path: args.basePath,
-      next_cursor: args.nextCursor,
-      backend_used: args.backendUsed,
-      fallback_applied: args.fallbackApplied,
-      ...(args.fallbackApplied ? { fallback_reason: "backend_error" as const } : {}),
-      stats: {
-        result_count: args.items.length,
-        ...(typeof args.summary?.shownCount === "number"
-          ? { shown_count: args.summary.shownCount }
-          : {}),
-        ...(typeof args.summary?.totalCount === "number"
-          ? { total_count: args.summary.totalCount }
-          : {}),
-      },
-      ...(readRecommendation ? { read_recommendation: readRecommendation } : {}),
-      items: args.items,
+      tool: "find_files",
+      ...common,
+      items: args.result.items.map((item) => ({
+        path: normalizeRelativePath(path.relative(args.target.persistenceRoot, item.path)),
+        absolutePath: item.path,
+      })),
     };
   }
 
-  if (
-    args.backendUsed === "fff-mcp" &&
-    typeof args.renderedCompact === "string" &&
-    args.renderedCompact.length > 0
-  ) {
-    return {
-      mode: "compact",
-      base_path: args.basePath,
-      next_cursor: args.nextCursor,
-      text: args.renderedCompact,
-    };
-  }
-
-  switch (args.request.tool) {
-    case "fff_find_files":
+  return {
+    tool: "grep",
+    ...common,
+    items: args.result.items.map((item) => {
+      if (!("line" in item)) {
+        throw new Error("fff-mcp returned a file item for grep");
+      }
       return {
-        mode: "compact",
-        base_path: args.basePath,
-        next_cursor: args.nextCursor,
-        items: args.items.map((item) => ({ path: String(item.path) })),
-      };
-    case "fff_search_terms":
-    case "fff_grep":
-      return {
-        mode: "compact",
-        base_path: args.basePath,
-        next_cursor: args.nextCursor,
-        items: args.items.map((item) => ({
-          path: String(item.path),
-          line: Number(item.line),
-          text: String(item.text),
-        })),
-      };
-  }
-}
-
-function normalizeBackendItems(
-  basePath: string,
-  items: Array<Record<string, unknown>>,
-): Array<Record<string, unknown>> {
-  return items.map((item) => {
-    const absolutePath = String(item.path);
-    const normalized = {
-      ...item,
-      path: normalizeCoordinatorPath(path.relative(basePath, absolutePath)),
-    };
-
-    if (typeof item.line === "number") {
-      return {
-        path: normalized.path,
-        absolute_path: absolutePath,
+        path: normalizeRelativePath(path.relative(args.target.persistenceRoot, item.path)),
+        absolutePath: item.path,
         line: item.line,
         text: item.text,
-        ...(typeof item.column === "number" ? { column: item.column } : {}),
-        ...(Array.isArray(item.contextBefore) ? { context_before: item.contextBefore } : {}),
-        ...(Array.isArray(item.contextAfter) ? { context_after: item.contextAfter } : {}),
-        ...(item.isDefinition === true ? { is_definition: true } : {}),
-        ...(Array.isArray(item.definitionBody) ? { definition_body: item.definitionBody } : {}),
+        ...(item.column !== undefined ? { column: item.column } : {}),
+        ...(item.contextBefore ? { contextBefore: item.contextBefore } : {}),
+        ...(item.contextAfter ? { contextAfter: item.contextAfter } : {}),
+        ...(item.isDefinition ? { isDefinition: true } : {}),
+        ...(item.definitionBody ? { definitionBody: item.definitionBody } : {}),
       };
-    }
-
-    return {
-      path: normalized.path,
-      absolute_path: absolutePath,
-    };
-  });
+    }),
+  };
 }
 
-export class SearchCoordinatorImpl implements SearchCoordinator {
-  private lifecycleState: DaemonRegistryState = {
-    daemons: {},
-    nonGitRecentHits: {},
-    now: 0,
-  };
-  private planningLocked = false;
-  private planningWaiters: Array<() => void> = [];
+export class RouterServiceImpl implements RouterService {
   private readonly validateWithin;
-  private readonly resolveRoutingPath;
-  private readonly planLifecycle;
-  private readonly now;
+  private readonly resolvePath;
   private readonly writeDiagnostic;
 
-  constructor(private readonly deps: CoordinatorDeps) {
+  constructor(private readonly deps: RouterServiceDeps) {
     this.validateWithin = deps.validateWithin ?? validateResolvedWithinPaths;
-    this.resolveRoutingPath = deps.resolveRoutingPath ?? resolveSearchPath;
-    this.planLifecycle = deps.planLifecycle ?? planRoutingLifecycle;
-    this.now = deps.now ?? Date.now;
-    this.writeDiagnostic = deps.writeDiagnostic ?? defaultWriteDiagnostic;
+    this.resolvePath = deps.resolvePath ?? resolveSearchPath;
+    this.writeDiagnostic =
+      deps.writeDiagnostic ??
+      ((event) => console.error(JSON.stringify({ event: "fff-router.diagnostic", ...event })));
   }
 
-  private releasePlanningLock(): void {
-    const next = this.planningWaiters.shift();
-    if (next) {
-      next();
-      return;
-    }
-
-    this.planningLocked = false;
-  }
-
-  private async withPlanningLock<T>(callback: () => Promise<T>): Promise<T> {
-    if (this.planningLocked) {
-      await new Promise<void>((resolve) => {
-        this.planningWaiters.push(resolve);
-      });
-    } else {
-      this.planningLocked = true;
-    }
-
-    try {
-      return await callback();
-    } finally {
-      this.releasePlanningLock();
-    }
-  }
-
-  private getRuntimeConfig(): CoordinatorRuntimeConfig {
-    return (
-      this.deps.liveConfigRef?.current ?? {
-        config: this.deps.config,
-        primaryBackendId: this.deps.primaryBackendId,
-        fallbackBackendId: this.deps.fallbackBackendId,
-      }
-    );
-  }
-
-  private syncLifecycleTtls(config: RouterConfig): void {
-    const nextDaemons = Object.fromEntries(
-      Object.entries(this.lifecycleState.daemons).map(([key, daemon]) => [
-        key,
-        {
-          ...daemon,
-          ttlMs: daemon.rootType === "git" ? config.ttl.gitMs : config.ttl.nonGitMs,
-        },
-      ]),
-    );
-
-    this.lifecycleState = {
-      ...this.lifecycleState,
-      daemons: nextDaemons,
-    };
-  }
-
-  private async rollbackPersistentLifecycle(key: string): Promise<void> {
-    await this.withPlanningLock(async () => {
-      const nextDaemons = { ...this.lifecycleState.daemons };
-      delete nextDaemons[key];
-      this.lifecycleState = {
-        ...this.lifecycleState,
-        daemons: nextDaemons,
-      };
-    });
-  }
-
-  private async applyLifecycleEvictions(evicted: string[]): Promise<void> {
-    const persistentBackendIds = Object.values(this.deps.adapters)
-      .filter((adapter) => typeof adapter.startRuntime === "function")
-      .map((adapter) => adapter.backendId);
-
-    await Promise.all(
-      evicted.flatMap((persistenceRoot) =>
-        persistentBackendIds.map((backendId) =>
-          this.deps.runtimeManager.evictRuntime({
-            backendId,
-            persistenceRoot,
-          }),
-        ),
-      ),
-    );
-  }
-
-  private getAdapter(backendId: SearchBackendId): SearchBackendAdapter<any> {
-    const adapter = this.deps.adapters[backendId];
-    if (!adapter) {
-      throw new Error(`No adapter registered for backend '${backendId}'`);
-    }
-    return adapter;
-  }
-
-  private async executeWithAdapter(args: {
-    adapter: SearchBackendAdapter;
-    request: BackendSearchRequest;
-    lifecyclePlan: RoutingLifecyclePlan;
-    toolTimeoutMs: number;
-  }): Promise<BackendSearchResult> {
-    const shouldUsePersistentRuntime = args.lifecyclePlan.action.type !== "run-ephemeral";
-
-    if (!args.adapter.supportedQueryKinds.includes(args.request.queryKind)) {
-      return {
-        ok: false,
-        error: {
-          code: "SEARCH_FAILED",
-          backendId: args.adapter.backendId,
-          message: `${args.adapter.backendId} does not support ${args.request.queryKind}`,
-        },
-      };
-    }
-
-    if (!args.adapter.startRuntime) {
-      try {
-        return await withBackendCallTimeout(args.adapter.execute({ request: args.request }), {
-          backendId: args.adapter.backendId,
-          timeoutMs: args.toolTimeoutMs,
-        });
-      } catch (error) {
-        return {
-          ok: false,
-          error: {
-            code: "BACKEND_UNAVAILABLE",
-            backendId: args.adapter.backendId,
-            message: error instanceof Error ? error.message : String(error),
-          },
-        };
-      }
-    }
-
-    if (!shouldUsePersistentRuntime) {
-      let runtime: Awaited<ReturnType<NonNullable<typeof args.adapter.startRuntime>>> | null = null;
-      try {
-        runtime = await args.adapter.startRuntime({
-          backendId: args.adapter.backendId,
-          persistenceRoot: args.request.persistenceRoot,
-        });
-        const result = await withBackendCallTimeout(
-          args.adapter.execute({
-            request: args.request,
-            runtime,
-          }),
-          { backendId: args.adapter.backendId, timeoutMs: args.toolTimeoutMs },
-        );
-        return result;
-      } catch (error) {
-        return {
-          ok: false,
-          error: {
-            code: "BACKEND_UNAVAILABLE",
-            backendId: args.adapter.backendId,
-            message: error instanceof Error ? error.message : String(error),
-          },
-        };
-      } finally {
-        try {
-          await runtime?.close();
-        } catch {
-          // Best-effort cleanup for ephemeral runtimes. Preserve the search result.
-        }
-      }
-    }
-
-    try {
-      const runtimeSpec = {
-        backendId: args.adapter.backendId,
-        persistenceRoot: args.request.persistenceRoot,
-        start: async () => {
-          return await args.adapter.startRuntime?.({
-            backendId: args.adapter.backendId,
-            persistenceRoot: args.request.persistenceRoot,
-          });
-        },
-      };
-      const execute = async () =>
-        await this.deps.runtimeManager.withRuntime(runtimeSpec, async (runtime) => {
-          runtimeUsed = runtime;
-          return await executeWithRuntime(runtime);
-        });
-      const runtimeKey = {
-        backendId: args.adapter.backendId,
-        persistenceRoot: args.request.persistenceRoot,
-      };
-      const executeWithRuntime = async (runtime: Awaited<ReturnType<typeof runtimeSpec.start>>) => {
-        this.deps.runtimeManager.recordRuntimeCallStart(runtimeKey);
-        try {
-          const result = await withBackendCallTimeout(
-            args.adapter.execute({ request: args.request, runtime }),
-            { backendId: args.adapter.backendId, timeoutMs: args.toolTimeoutMs },
-          );
-          if (result.ok) {
-            this.deps.runtimeManager.recordRuntimeCallSuccess(runtimeKey);
-          } else {
-            this.deps.runtimeManager.recordRuntimeCallError({
-              ...runtimeKey,
-              error: result.error.message,
-            });
-          }
-          return result;
-        } catch (error) {
-          this.deps.runtimeManager.recordRuntimeCallError({
-            ...runtimeKey,
-            error: error instanceof Error ? error.message : String(error),
-          });
-          throw error;
-        }
-      };
-      let runtimeUsed: Awaited<ReturnType<typeof runtimeSpec.start>> | undefined;
-
-      let firstResult: BackendSearchResult;
-      try {
-        firstResult = await execute();
-      } catch (error) {
-        if (!(error instanceof BackendCallTimeoutError)) {
-          throw error;
-        }
-        const freshRuntime = await this.deps.runtimeManager.restartRuntime(
-          runtimeSpec,
-          runtimeUsed,
-        );
-        return await executeWithRuntime(freshRuntime);
-      }
-      if (!firstResult.ok && isStaleRuntimeErrorMessage(firstResult.error.message)) {
-        const freshRuntime = await this.deps.runtimeManager.restartRuntime(
-          runtimeSpec,
-          runtimeUsed,
-        );
-        return await executeWithRuntime(freshRuntime);
-      }
-
-      return firstResult;
-    } catch (error) {
-      return {
-        ok: false,
-        error: {
-          code: "BACKEND_UNAVAILABLE",
-          backendId: args.adapter.backendId,
-          message: error instanceof Error ? error.message : String(error),
-        },
-      };
-    }
-  }
-
-  private emitBackendDiagnostics(result: BackendSearchResult): void {
-    if (!result.ok || !result.value.diagnostics) {
-      return;
-    }
-
-    try {
-      this.writeDiagnostic({
-        backendId: result.value.backendId,
-        queryKind: result.value.queryKind,
-        diagnostics: result.value.diagnostics,
-      });
-    } catch {
-      // Diagnostics must never affect search results.
-    }
-  }
-
-  async execute(request: PublicToolRequest): Promise<SearchCoordinatorResult> {
-    if (!request.within || request.within.length === 0) {
-      return invalid("within must be resolved client-side before reaching the coordinator");
-    }
-
-    const queryKind = queryKindForRequest(request);
-    const runtimeConfig = this.getRuntimeConfig();
-    const primaryAdapter = this.getAdapter(runtimeConfig.primaryBackendId);
-    if (!primaryAdapter.supportedQueryKinds.includes(queryKind)) {
-      return {
-        ok: false,
-        error: {
-          code: "SEARCH_FAILED",
-          message: `${primaryAdapter.backendId} does not support ${queryKind}`,
-        },
-      };
-    }
-
-    if (request.cursor !== null && primaryAdapter.backendId !== "fff-mcp") {
-      return invalid("cursor pagination is only supported by the fff-mcp backend");
-    }
-
-    const validatedWithin = await this.validateWithin({ withinPaths: request.within });
+  private async resolveTarget(
+    within: string[],
+  ): Promise<Result<{ validatedWithin: ValidatedWithin; target: RoutingTarget }>> {
+    const validatedWithin = await this.validateWithin({ withinPaths: within });
     if (!validatedWithin.ok) {
       return validatedWithin;
     }
 
-    const resolvedPath = await this.resolveRoutingPath(validatedWithin.value.resolvedWithin);
-    if (!resolvedPath.ok) {
-      switch (resolvedPath.error.code) {
-        case "OUTSIDE_ALLOWED_SCOPE":
-        case "INVALID_REQUEST":
-          return {
-            ok: false,
-            error: {
-              code: resolvedPath.error.code,
-              message: resolvedPath.error.message,
-            },
-          };
-        case "SEARCH_PATH_NOT_FOUND":
-          return {
-            ok: false,
-            error: {
-              code: "WITHIN_NOT_FOUND",
-              message: resolvedPath.error.message,
-            },
-          };
-        default:
-          return internalError(resolvedPath.error.message);
-      }
-    }
-
-    // All multi-path entries must share the same routing target (git root
-    // or allowlisted non-git prefix). A single fff-mcp / rg call can only
-    // operate under one persistence root, so mixing roots in one request
-    // has no natural semantics — error out up front with a clear message.
-    const additionalEntries = validatedWithin.value.additionalEntries ?? [];
-    if (additionalEntries.length > 0) {
-      for (const entry of additionalEntries) {
-        const entryPath = await this.resolveRoutingPath(entry.resolvedWithin);
-        if (!entryPath.ok) {
-          return {
-            ok: false,
-            error: {
-              code:
-                entryPath.error.code === "SEARCH_PATH_NOT_FOUND"
-                  ? "WITHIN_NOT_FOUND"
-                  : entryPath.error.code === "OUTSIDE_ALLOWED_SCOPE"
-                    ? "OUTSIDE_ALLOWED_SCOPE"
-                    : entryPath.error.code === "INVALID_REQUEST"
-                      ? "INVALID_REQUEST"
-                      : "INTERNAL_ERROR",
-              message: entryPath.error.message,
-            },
-          };
-        }
-        if (entryPath.value.gitRoot !== resolvedPath.value.gitRoot) {
-          return invalid(
-            `within array entries must share a routing target; '${entry.resolvedWithin}' resolves to a different root than '${validatedWithin.value.resolvedWithin}'`,
-          );
-        }
-      }
-    }
-
-    const lifecyclePlan = await this.withPlanningLock(async () => {
-      this.syncLifecycleTtls(runtimeConfig.config);
-      const nextState: DaemonRegistryState = {
-        ...this.lifecycleState,
-        now: this.now(),
-      };
-      const plan = this.planLifecycle({
-        queryKind,
-        realPath: resolvedPath.value.realPath,
-        statType: resolvedPath.value.statType,
-        gitRoot: resolvedPath.value.gitRoot,
-        config: runtimeConfig.config,
-        state: nextState,
-      });
-      if (!plan.ok) {
-        return plan;
-      }
-
-      this.lifecycleState = plan.value.nextState;
-      await this.applyLifecycleEvictions(plan.value.evicted);
-      return plan;
-    });
-    if (!lifecyclePlan.ok) {
-      return {
-        ok: false,
-        error: {
-          code:
-            lifecyclePlan.error.code === "OUTSIDE_ALLOWED_SCOPE"
-              ? "OUTSIDE_ALLOWED_SCOPE"
-              : "INVALID_REQUEST",
-          message: lifecyclePlan.error.message,
-        },
-      };
-    }
-
-    const primaryRequest = buildBackendRequest({
-      request,
-      validatedWithin: validatedWithin.value,
-      persistenceRoot: lifecyclePlan.value.target.persistenceRoot,
-      backendId: primaryAdapter.backendId,
-    });
-    const primaryResult = await this.executeWithAdapter({
-      adapter: primaryAdapter,
-      request: primaryRequest,
-      lifecyclePlan: lifecyclePlan.value,
-      toolTimeoutMs: runtimeConfig.config.runtime?.toolTimeoutMs ?? DEFAULT_BACKEND_TOOL_TIMEOUT_MS,
-    });
-    this.emitBackendDiagnostics(primaryResult);
-
-    if (primaryResult.ok) {
-      const normalizedItems = normalizeBackendItems(
-        validatedWithin.value.basePath,
-        primaryResult.value.items as Array<Record<string, unknown>>,
-      );
-      return {
-        ok: true,
-        value: shapePublicResult({
-          request,
-          basePath: validatedWithin.value.basePath,
-          persistenceRoot: lifecyclePlan.value.target.persistenceRoot,
-          backendUsed: primaryResult.value.backendId,
-          fallbackApplied: false,
-          nextCursor: primaryResult.value.nextCursor,
-          items: normalizedItems,
-          renderedCompact: primaryResult.value.renderedCompact,
-          summary: primaryResult.value.summary,
-        }),
-      };
-    }
-
-    if (
-      lifecyclePlan.value.action.type === "start-persistent" &&
-      primaryResult.error.code === "BACKEND_UNAVAILABLE"
-    ) {
-      await this.rollbackPersistentLifecycle(lifecyclePlan.value.action.key);
-    }
-
-    if (primaryResult.error.code !== "BACKEND_UNAVAILABLE") {
-      return {
-        ok: false,
-        error: {
-          code: primaryResult.error.code,
-          message: primaryResult.error.message,
-        },
-      };
-    }
-
-    if (!runtimeConfig.fallbackBackendId) {
-      return {
-        ok: false,
-        error: {
-          code: primaryResult.error.code,
-          message: primaryResult.error.message,
-        },
-      };
-    }
-
-    if (request.cursor !== null && runtimeConfig.fallbackBackendId !== "fff-mcp") {
-      return {
-        ok: false,
-        error: {
-          code: primaryResult.error.code,
-          message: primaryResult.error.message,
-        },
-      };
-    }
-
-    const fallbackAdapter = this.getAdapter(runtimeConfig.fallbackBackendId);
-    const fallbackRequest = buildBackendRequest({
-      request,
-      validatedWithin: validatedWithin.value,
-      persistenceRoot: lifecyclePlan.value.target.persistenceRoot,
-      backendId: fallbackAdapter.backendId,
-    });
-    const fallbackResult = await this.executeWithAdapter({
-      adapter: fallbackAdapter,
-      request: fallbackRequest,
-      lifecyclePlan: {
-        ...lifecyclePlan.value,
-        action: { type: "run-ephemeral", key: lifecyclePlan.value.action.key },
+    const entries = [
+      {
+        resolvedWithin: validatedWithin.value.resolvedWithin,
+        basePath: validatedWithin.value.basePath,
+        ...(validatedWithin.value.fileRestriction
+          ? { fileRestriction: validatedWithin.value.fileRestriction }
+          : {}),
       },
-      toolTimeoutMs: runtimeConfig.config.runtime?.toolTimeoutMs ?? DEFAULT_BACKEND_TOOL_TIMEOUT_MS,
-    });
-    this.emitBackendDiagnostics(fallbackResult);
-    if (!fallbackResult.ok) {
-      return {
-        ok: false,
-        error: {
-          code:
-            primaryResult.error.code === "BACKEND_UNAVAILABLE" &&
-            fallbackResult.error.code === "BACKEND_UNAVAILABLE"
-              ? "BACKEND_UNAVAILABLE"
-              : "SEARCH_FAILED",
-          message: fallbackResult.error.message,
-        },
-      };
+      ...(validatedWithin.value.additionalEntries ?? []),
+    ];
+
+    let target: RoutingTarget | undefined;
+    for (const entry of entries) {
+      const resolved = await this.resolvePath(entry.resolvedWithin);
+      if (!resolved.ok) {
+        const code =
+          resolved.error.code === "SEARCH_PATH_NOT_FOUND"
+            ? "WITHIN_NOT_FOUND"
+            : resolved.error.code === "OUTSIDE_ALLOWED_SCOPE"
+              ? "OUTSIDE_ALLOWED_SCOPE"
+              : resolved.error.code === "INVALID_REQUEST"
+                ? "INVALID_REQUEST"
+                : "INTERNAL_ERROR";
+        return error(code, resolved.error.message);
+      }
+      const routed = deriveRoutingTarget({
+        realPath: resolved.value.realPath,
+        statType: resolved.value.statType,
+        gitRoot: resolved.value.gitRoot,
+        config: this.deps.configRef.current,
+      });
+      if (!routed.ok) {
+        return routed;
+      }
+      if (target && routed.value.persistenceRoot !== target.persistenceRoot) {
+        return error(
+          "INVALID_REQUEST",
+          `within paths must share one routing root; '${entry.resolvedWithin}' routes to '${routed.value.persistenceRoot}', not '${target.persistenceRoot}'`,
+        );
+      }
+      target ??= routed.value;
     }
 
-    const normalizedItems = normalizeBackendItems(
-      validatedWithin.value.basePath,
-      fallbackResult.value.items as Array<Record<string, unknown>>,
-    );
     return {
       ok: true,
-      value: shapePublicResult({
-        request,
-        basePath: validatedWithin.value.basePath,
-        persistenceRoot: lifecyclePlan.value.target.persistenceRoot,
-        backendUsed: fallbackResult.value.backendId,
-        fallbackApplied: true,
-        nextCursor: fallbackResult.value.nextCursor,
-        items: normalizedItems,
-        renderedCompact: fallbackResult.value.renderedCompact,
-        summary: fallbackResult.value.summary,
-      }),
+      value: { validatedWithin: validatedWithin.value, target: target! },
     };
+  }
+
+  private acquire(target: RoutingTarget) {
+    return this.deps.workerPool.acquire({
+      root: target.persistenceRoot,
+      rootType: target.rootType,
+      ttlMs: target.ttlMs,
+      start: async () =>
+        await this.deps.adapter.startRuntime({
+          persistenceRoot: target.persistenceRoot,
+        }),
+    });
+  }
+
+  private async executeAttempt(
+    request: PublicToolRequest,
+    validatedWithin: ValidatedWithin,
+    target: RoutingTarget,
+  ): Promise<
+    | { kind: "success"; value: PublicToolResult }
+    | { kind: "retry"; message: string }
+    | { kind: "error"; error: RouterError }
+  > {
+    const acquired = await this.acquire(target);
+    if (!acquired.ok) {
+      return { kind: "error", error: acquired.error };
+    }
+    const lease = acquired.value;
+    let invalidateReason: string | undefined;
+
+    try {
+      let upstreamCursor: string | null = null;
+      if (request.cursor) {
+        const decoded = decodeCursor({
+          cursor: request.cursor,
+          root: target.persistenceRoot,
+          generation: lease.generation,
+          request,
+        });
+        if (!decoded.ok) {
+          return { kind: "error", error: decoded.error };
+        }
+        upstreamCursor = decoded.value;
+      }
+
+      const backendRequest = buildBackendRequest({
+        request,
+        validatedWithin,
+        target,
+        upstreamCursor,
+      });
+      lease.recordCallStart();
+
+      let backendResult: BackendSearchResult;
+      try {
+        backendResult = await withTimeout(
+          this.deps.adapter.execute({ request: backendRequest, runtime: lease.runtime }),
+          this.deps.configRef.current.runtime.toolTimeoutMs,
+        );
+      } catch (caught) {
+        const message = caught instanceof Error ? caught.message : String(caught);
+        lease.recordCallError(message);
+        invalidateReason = message;
+        if (caught instanceof WorkerCallTimeoutError) {
+          return request.cursor
+            ? {
+                kind: "error",
+                error: {
+                  code: "CURSOR_EXPIRED",
+                  message: "cursor expired because its worker timed out",
+                },
+              }
+            : { kind: "retry", message };
+        }
+        return request.cursor
+          ? {
+              kind: "error",
+              error: {
+                code: "CURSOR_EXPIRED",
+                message: "cursor expired because its worker failed",
+              },
+            }
+          : { kind: "retry", message };
+      }
+
+      if (!backendResult.ok) {
+        lease.recordCallError(backendResult.error.message);
+        if (isStaleWorkerMessage(backendResult.error.message)) {
+          invalidateReason = backendResult.error.message;
+          return request.cursor
+            ? {
+                kind: "error",
+                error: {
+                  code: "CURSOR_EXPIRED",
+                  message: "cursor expired because its worker restarted",
+                },
+              }
+            : { kind: "retry", message: backendResult.error.message };
+        }
+        return {
+          kind: "error",
+          error: {
+            code:
+              backendResult.error.code === "WORKER_UNAVAILABLE"
+                ? "WORKER_UNAVAILABLE"
+                : "SEARCH_FAILED",
+            message: backendResult.error.message,
+            retryable: backendResult.error.code === "WORKER_UNAVAILABLE",
+          },
+        };
+      }
+
+      lease.recordCallSuccess();
+      if (backendResult.value.diagnostics) {
+        try {
+          this.writeDiagnostic({
+            root: target.persistenceRoot,
+            tool: request.tool,
+            diagnostics: backendResult.value.diagnostics,
+          });
+        } catch {
+          // Diagnostics never affect search results.
+        }
+      }
+      return {
+        kind: "success",
+        value: toPublicResult({
+          request,
+          target,
+          lease,
+          result: backendResult.value,
+        }),
+      };
+    } finally {
+      if (invalidateReason) {
+        await this.deps.workerPool.invalidate(
+          target.persistenceRoot,
+          lease.generation,
+          invalidateReason,
+        );
+      }
+      await lease.release();
+    }
+  }
+
+  async execute(request: PublicToolRequest): Promise<Result<PublicToolResult>> {
+    const routed = await this.resolveTarget(request.within);
+    if (!routed.ok) {
+      return routed;
+    }
+
+    const first = await this.executeAttempt(
+      request,
+      routed.value.validatedWithin,
+      routed.value.target,
+    );
+    if (first.kind === "success") {
+      return { ok: true, value: first.value };
+    }
+    if (first.kind === "error") {
+      return { ok: false, error: first.error };
+    }
+
+    const second = await this.executeAttempt(
+      request,
+      routed.value.validatedWithin,
+      routed.value.target,
+    );
+    if (second.kind === "success") {
+      return { ok: true, value: second.value };
+    }
+    return {
+      ok: false,
+      error:
+        second.kind === "error"
+          ? second.error
+          : {
+              code: "WORKER_UNAVAILABLE",
+              message: `fff-mcp worker failed twice: ${second.message}`,
+              retryable: true,
+            },
+    };
+  }
+
+  async warm(within: string[]): Promise<Result<WorkerDiagnostic[]>> {
+    const diagnostics: WorkerDiagnostic[] = [];
+    const seen = new Set<string>();
+    for (const candidate of within) {
+      const routed = await this.resolveTarget([candidate]);
+      if (!routed.ok) {
+        return routed;
+      }
+      if (seen.has(routed.value.target.persistenceRoot)) {
+        continue;
+      }
+      seen.add(routed.value.target.persistenceRoot);
+      const acquired = await this.acquire(routed.value.target);
+      if (!acquired.ok) {
+        return acquired;
+      }
+      await acquired.value.release();
+      const diagnostic = this.deps.workerPool
+        .getDiagnostics()
+        .find(
+          (entry) => entry.root === routed.value.target.persistenceRoot && entry.state !== "dead",
+        );
+      if (diagnostic) {
+        diagnostics.push(diagnostic);
+      }
+    }
+    return { ok: true, value: diagnostics };
+  }
+
+  async evict(within: string[]): Promise<Result<{ evicted: string[] }>> {
+    const evicted: string[] = [];
+    const seen = new Set<string>();
+    for (const candidate of within) {
+      const routed = await this.resolveTarget([candidate]);
+      if (!routed.ok) {
+        return routed;
+      }
+      const root = routed.value.target.persistenceRoot;
+      if (seen.has(root)) {
+        continue;
+      }
+      seen.add(root);
+      if (await this.deps.workerPool.evict(root)) {
+        evicted.push(root);
+      }
+    }
+    return { ok: true, value: { evicted } };
+  }
+
+  status(): RouterStatus {
+    return {
+      workers: this.deps.workerPool.getDiagnostics(),
+      limits: this.deps.configRef.current.limits,
+    };
+  }
+
+  async close(): Promise<void> {
+    await this.deps.workerPool.closeAll();
   }
 }
 
-export function createSearchCoordinator(deps: CoordinatorDeps): SearchCoordinator {
-  return new SearchCoordinatorImpl(deps);
+export function createRouterService(deps: RouterServiceDeps): RouterService {
+  return new RouterServiceImpl(deps);
 }

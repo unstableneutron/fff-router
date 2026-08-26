@@ -1,10 +1,4 @@
-import type {
-  Result,
-  RuntimeRequestKey,
-  SearchBackendId,
-  SearchQueryKind,
-  ValidatedWithinEntry,
-} from "../types";
+import type { Result, SearchBackendId, SearchQueryKind, ValidatedWithinEntry } from "../types";
 
 export type SearchBackendRuntime = {
   id: string;
@@ -13,29 +7,22 @@ export type SearchBackendRuntime = {
   onClose?: (handler: () => void) => () => void;
 };
 
-export type RuntimeStartSpec<TRuntime extends SearchBackendRuntime = SearchBackendRuntime> =
-  RuntimeRequestKey & {
-    start: () => Promise<TRuntime>;
-  };
+export type RuntimeStartSpec<TRuntime extends SearchBackendRuntime = SearchBackendRuntime> = {
+  persistenceRoot: string;
+  start: () => Promise<TRuntime>;
+};
 
-export type BackendRequestBase = RuntimeRequestKey & {
+export type BackendRequestBase = {
+  persistenceRoot: string;
   within: string;
   basePath: string;
   fileRestriction?: string;
-  /**
-   * Extra within entries for multi-path requests. Omitted (or empty) for
-   * single-path requests so existing adapters and tests that construct
-   * `BackendRequestBase` literals keep working. Multi-path-aware adapters
-   * should read `additionalWithinEntries ?? []` and branch on length;
-   * adapters that don't support multi-path should reject when the array
-   * is non-empty rather than silently dropping the extras.
-   */
   additionalWithinEntries?: ValidatedWithinEntry[];
   glob?: string;
   extensions: string[];
   excludePaths: string[];
   limit: number;
-  cursor?: string | null;
+  cursor: string | null;
 };
 
 export type FindFilesBackendRequest = BackendRequestBase & {
@@ -43,24 +30,14 @@ export type FindFilesBackendRequest = BackendRequestBase & {
   query: string;
 };
 
-export type SearchTermsBackendRequest = BackendRequestBase & {
-  queryKind: "search_terms";
-  terms: string[];
-  contextLines: number;
-};
-
 export type GrepBackendRequest = BackendRequestBase & {
   queryKind: "grep";
   patterns: string[];
   literal: boolean;
-  caseSensitive: boolean;
   contextLines: number;
 };
 
-export type BackendSearchRequest =
-  | FindFilesBackendRequest
-  | SearchTermsBackendRequest
-  | GrepBackendRequest;
+export type BackendSearchRequest = FindFilesBackendRequest | GrepBackendRequest;
 
 export type BackendFileItem = {
   path: string;
@@ -82,7 +59,7 @@ export type BackendTextMatch = {
 export type BackendResultItem = BackendFileItem | BackendTextMatch;
 
 export type BackendSearchError = {
-  code: "BACKEND_UNAVAILABLE" | "SEARCH_FAILED";
+  code: "WORKER_UNAVAILABLE" | "SEARCH_FAILED";
   message: string;
   backendId: SearchBackendId;
 };
@@ -111,11 +88,10 @@ export type BackendSearchResult = Result<BackendSearchSuccess, BackendSearchErro
 export interface SearchBackendAdapter<
   TRuntime extends SearchBackendRuntime = SearchBackendRuntime,
 > {
-  readonly backendId: SearchBackendId;
-  readonly supportedQueryKinds: SearchQueryKind[];
-  startRuntime?: (args: RuntimeRequestKey) => Promise<TRuntime>;
+  readonly backendId: "fff-mcp";
+  startRuntime: (args: { persistenceRoot: string }) => Promise<TRuntime>;
   execute: (args: {
     request: BackendSearchRequest;
-    runtime?: TRuntime;
+    runtime: TRuntime;
   }) => Promise<BackendSearchResult>;
 }

@@ -1,1509 +1,211 @@
-import { describe, expect, test, vi } from "vitest";
-import type {
-  BackendResultItem,
-  BackendSearchRequest,
-  BackendSearchResult,
-  SearchBackendAdapter,
-  SearchBackendRuntime,
-} from "./adapters/types";
-import { createCoordinatorRuntimeConfigRef, createSearchCoordinator } from "./coordinator";
-import { RuntimeManager } from "./runtime-manager";
-import type { PublicToolRequest, RouterConfig, SearchBackendId, SearchQueryKind } from "./types";
+import { mkdir, mkdtemp } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { describe, expect, test } from "vitest";
+import type { FffMcpRuntime } from "./adapters/fff-mcp-stdio";
+import type { BackendSearchRequest, SearchBackendAdapter } from "./adapters/types";
+import { createRouterService } from "./coordinator";
+import { getDefaultRouterConfig } from "./daemon-config";
+import { WorkerPool } from "./runtime-manager";
+import type { PublicFindFilesRequest, RouterConfig } from "./types";
 
-const config: RouterConfig = {
-  allowlistedNonGitPrefixes: [
-    {
-      prefix: "/allow",
-      mode: "first-child-root",
-    },
-  ],
-  promotion: { windowMs: 10 * 60 * 1000, requiredHits: 2 },
-  ttl: { gitMs: 60 * 60 * 1000, nonGitMs: 15 * 60 * 1000 },
-  limits: { maxPersistentDaemons: 12, maxPersistentNonGitDaemons: 4 },
-};
+async function gitFixture() {
+  const root = await mkdtemp(path.join(os.tmpdir(), "fff-router-service-"));
+  await mkdir(path.join(root, ".git"));
+  await mkdir(path.join(root, "src"));
+  return { root, src: path.join(root, "src") };
+}
 
-function makePublicRequest(overrides: Partial<PublicToolRequest> = {}): PublicToolRequest {
+function request(
+  within: string,
+  overrides: Partial<PublicFindFilesRequest> = {},
+): PublicFindFilesRequest {
   return {
-    tool: "fff_find_files",
+    tool: "find_files",
     query: "router",
-    within: ["/repo/src"],
+    within: [within],
     extensions: [],
     excludePaths: [],
     limit: 20,
     cursor: null,
-    outputMode: "compact",
     ...overrides,
-  } as PublicToolRequest;
+  };
 }
 
-function makeAdapter(args: {
-  backendId: SearchBackendId;
-  supportedQueryKinds?: SearchQueryKind[];
-  execute: (
-    request: BackendSearchRequest,
-    runtime?: SearchBackendRuntime,
-  ) => Promise<BackendSearchResult>;
+function harness(args: {
+  config?: RouterConfig;
+  execute?: SearchBackendAdapter<FffMcpRuntime>["execute"];
 }) {
-  const calls: BackendSearchRequest[] = [];
-  let startCount = 0;
-
-  const adapter: SearchBackendAdapter<SearchBackendRuntime> = {
-    backendId: args.backendId,
-    supportedQueryKinds: args.supportedQueryKinds ?? ["find_files", "search_terms", "grep"],
-    async startRuntime(runtimeArgs) {
-      startCount += 1;
+  let starts = 0;
+  const closed: string[] = [];
+  const requests: BackendSearchRequest[] = [];
+  const adapter: SearchBackendAdapter<FffMcpRuntime> = {
+    backendId: "fff-mcp",
+    async startRuntime() {
+      starts += 1;
+      const id = `worker-${starts}`;
       return {
-        id: `${args.backendId}::${runtimeArgs.persistenceRoot}`,
-        close: async () => {},
+        id,
+        close: async () => {
+          closed.push(id);
+        },
+        callTool: async () => "",
       };
     },
-    async execute({ request, runtime }) {
-      calls.push(request);
-      return await args.execute(request, runtime);
-    },
-  };
-
-  return {
-    adapter,
-    calls,
-    get startCount() {
-      return startCount;
-    },
-  };
-}
-
-function okResult(
-  queryKind: SearchQueryKind,
-  items: BackendResultItem[],
-  backendId: SearchBackendId = "fff-node",
-  nextCursor: string | null = null,
-): BackendSearchResult {
-  return {
-    ok: true,
-    value: {
-      backendId,
-      queryKind,
-      items,
-      nextCursor,
-    },
-  };
-}
-
-describe("createSearchCoordinator", () => {
-  test("uses the latest runtime config from a live config ref", async () => {
-    const liveConfigRef = createCoordinatorRuntimeConfigRef({
-      config,
-      primaryBackendId: "fff-node",
-      fallbackBackendId: "rg",
-    });
-    const fffNode = makeAdapter({
-      backendId: "fff-node",
-      execute: async () => okResult("find_files", []),
-    });
-    const rg = makeAdapter({
-      backendId: "rg",
-      execute: async () =>
-        okResult(
-          "find_files",
-          [{ path: "/repo/src/router.ts", relativePath: "src/router.ts" }],
-          "rg",
-        ),
-    });
-
-    const coordinator = createSearchCoordinator({
-      config,
-      adapters: {
-        "fff-node": fffNode.adapter,
-        rg: rg.adapter,
-      },
-      primaryBackendId: "fff-node",
-      fallbackBackendId: "rg",
-      liveConfigRef,
-      runtimeManager: new RuntimeManager(),
-      validateWithin: async ({ withinPaths: [within = "/missing"] }) => ({
-        ok: true,
-        value: { resolvedWithin: within, basePath: within },
-      }),
-      resolveRoutingPath: async (within) => ({
-        ok: true,
-        value: { realPath: within, statType: "directory", gitRoot: "/repo" },
-      }),
-    });
-
-    liveConfigRef.current = {
-      config,
-      primaryBackendId: "rg",
-      fallbackBackendId: null,
-    };
-
-    const result = await coordinator.execute(makePublicRequest({ outputMode: "json" }));
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) throw new Error("expected success");
-    if (!("backend_used" in result.value)) throw new Error("expected json result");
-    expect(result.value.backend_used).toBe("rg");
-    expect(fffNode.calls).toHaveLength(0);
-    expect(rg.calls).toHaveLength(1);
-  });
-
-  test("logs backend diagnostics for observability without exposing them publicly", async () => {
-    const writeDiagnostic = vi.fn();
-    const fffMcp = makeAdapter({
-      backendId: "fff-mcp",
-      execute: async () => ({
-        ok: true,
-        value: {
-          backendId: "fff-mcp",
-          queryKind: "grep",
-          items: [],
-          nextCursor: null,
-          diagnostics: {
-            cursorDrain: {
-              pagesFetched: 2,
-              filteredOutCount: 2,
-              repeatedCursor: "9",
-              pageCapHit: false,
-            },
-          },
-        },
-      }),
-    });
-
-    const coordinator = createSearchCoordinator({
-      config,
-      adapters: { "fff-mcp": fffMcp.adapter },
-      primaryBackendId: "fff-mcp",
-      fallbackBackendId: null,
-      runtimeManager: new RuntimeManager(),
-      writeDiagnostic,
-      validateWithin: async ({ withinPaths: [within = "/missing"] }) => ({
-        ok: true,
-        value: { resolvedWithin: within, basePath: within },
-      }),
-      resolveRoutingPath: async (within) => ({
-        ok: true,
-        value: { realPath: within, statType: "directory", gitRoot: "/repo" },
-      }),
-    });
-
-    const result = await coordinator.execute(
-      makePublicRequest({
-        tool: "fff_grep",
-        patterns: ["UsageStatisticsEnabled"],
-        literal: true,
-        outputMode: "json",
-      }),
-    );
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) throw new Error("expected success");
-    expect(writeDiagnostic).toHaveBeenCalledWith({
-      backendId: "fff-mcp",
-      queryKind: "grep",
-      diagnostics: {
-        cursorDrain: {
-          pagesFetched: 2,
-          filteredOutCount: 2,
-          repeatedCursor: "9",
-          pageCapHit: false,
-        },
-      },
-    });
-    expect(JSON.stringify(result.value)).not.toContain("cursorDrain");
-  });
-
-  test("uses the configured primary backend from the adapter registry", async () => {
-    const fffNode = makeAdapter({
-      backendId: "fff-node",
-      execute: async () => okResult("find_files", []),
-    });
-    const rg = makeAdapter({
-      backendId: "rg",
-      execute: async () =>
-        okResult(
-          "find_files",
-          [{ path: "/repo/src/router.ts", relativePath: "src/router.ts" }],
-          "rg",
-        ),
-    });
-
-    const coordinator = createSearchCoordinator({
-      config,
-      adapters: {
-        "fff-node": fffNode.adapter,
-        rg: rg.adapter,
-      },
-      primaryBackendId: "rg",
-      fallbackBackendId: null,
-      runtimeManager: new RuntimeManager(),
-      validateWithin: async ({ withinPaths: [within = "/missing"] }) => ({
-        ok: true,
-        value: { resolvedWithin: within, basePath: within },
-      }),
-      resolveRoutingPath: async (within) => ({
-        ok: true,
-        value: { realPath: within, statType: "directory", gitRoot: "/repo" },
-      }),
-    });
-
-    const result = await coordinator.execute(makePublicRequest({ outputMode: "json" }));
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) throw new Error("expected success");
-    expect(result.value).toEqual({
-      mode: "json",
-      base_path: "/repo/src",
-      next_cursor: null,
-      backend_used: "rg",
-      fallback_applied: false,
-      stats: { result_count: 1 },
-      items: [
-        {
-          path: "router.ts",
-          absolute_path: "/repo/src/router.ts",
-        },
-      ],
-    });
-    expect(fffNode.calls).toHaveLength(0);
-    expect(rg.calls).toHaveLength(1);
-  });
-
-  test("does not attempt fallback when the selected primary backend has no fallback", async () => {
-    const primary = makeAdapter({
-      backendId: "rg",
-      execute: async () => ({
-        ok: false as const,
-        error: {
-          code: "BACKEND_UNAVAILABLE" as const,
-          backendId: "rg" as const,
-          message: "rg missing",
-        },
-      }),
-    });
-    const fffNode = makeAdapter({
-      backendId: "fff-node",
-      execute: async () => okResult("find_files", []),
-    });
-
-    const coordinator = createSearchCoordinator({
-      config,
-      adapters: {
-        "fff-node": fffNode.adapter,
-        rg: primary.adapter,
-      },
-      primaryBackendId: "rg",
-      fallbackBackendId: null,
-      runtimeManager: new RuntimeManager(),
-      validateWithin: async ({ withinPaths: [within = "/missing"] }) => ({
-        ok: true,
-        value: { resolvedWithin: within, basePath: within },
-      }),
-      resolveRoutingPath: async (within) => ({
-        ok: true,
-        value: { realPath: within, statType: "directory", gitRoot: "/repo" },
-      }),
-    });
-
-    const result = await coordinator.execute(makePublicRequest());
-
-    expect(result.ok).toBe(false);
-    if (result.ok) throw new Error("expected failure");
-    expect(result.error).toEqual({
-      code: "BACKEND_UNAVAILABLE",
-      message: "rg missing",
-    });
-    expect(fffNode.calls).toHaveLength(0);
-  });
-  test("uses the primary adapter and shapes compact find_files output", async () => {
-    const primary = makeAdapter({
-      backendId: "fff-node",
-      execute: async () =>
-        okResult("find_files", [{ path: "/repo/src/router.ts", relativePath: "src/router.ts" }]),
-    });
-    const fallback = makeAdapter({
-      backendId: "rg",
-      execute: async () => okResult("find_files", []),
-    });
-
-    const coordinator = createSearchCoordinator({
-      config,
-      adapters: {
-        "fff-node": primary.adapter,
-        rg: fallback.adapter,
-      },
-      primaryBackendId: "fff-node",
-      fallbackBackendId: "rg",
-      runtimeManager: new RuntimeManager(),
-      validateWithin: async ({ withinPaths: [within = "/missing"] }) => ({
-        ok: true,
-        value: { resolvedWithin: within, basePath: within },
-      }),
-      resolveRoutingPath: async (within) => ({
-        ok: true,
-        value: { realPath: within, statType: "directory", gitRoot: "/repo" },
-      }),
-    });
-
-    const result = await coordinator.execute(makePublicRequest());
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) throw new Error("expected success");
-    expect(result.value).toEqual({
-      mode: "compact",
-      base_path: "/repo/src",
-      next_cursor: null,
-      items: [{ path: "router.ts" }],
-    });
-    expect(primary.startCount).toBe(1);
-    expect(fallback.calls).toHaveLength(0);
-  });
-
-  test("preserves compact passthrough text from fff-mcp grep", async () => {
-    const primary = makeAdapter({
-      backendId: "fff-mcp",
-      execute: async () => ({
-        ok: true as const,
-        value: {
-          backendId: "fff-mcp" as const,
-          queryKind: "grep" as const,
-          items: [],
-          nextCursor: null,
-          renderedCompact: [
-            "→ Read lib/fff-router/coordinator.ts (only match)",
-            "lib/fff-router/coordinator.ts [def]",
-            " 539: export function createSearchCoordinator(deps: CoordinatorDeps): SearchCoordinator {",
-            " 540| return new SearchCoordinatorImpl(deps);",
-          ].join("\n"),
-        },
-      }),
-    });
-
-    const coordinator = createSearchCoordinator({
-      config,
-      adapters: { "fff-mcp": primary.adapter },
-      primaryBackendId: "fff-mcp",
-      fallbackBackendId: null,
-      runtimeManager: new RuntimeManager(),
-      validateWithin: async ({ withinPaths: [within = "/missing"] }) => ({
-        ok: true,
-        value: { resolvedWithin: within, basePath: within },
-      }),
-      resolveRoutingPath: async (within) => ({
-        ok: true,
-        value: { realPath: within, statType: "directory", gitRoot: "/repo" },
-      }),
-    });
-
-    const result = await coordinator.execute(
-      makePublicRequest({
-        tool: "fff_grep",
-        patterns: ["createSearchCoordinator"],
-        literal: false,
-        caseSensitive: true,
-        contextLines: 0,
-      }),
-    );
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) throw new Error("expected success");
-    expect(result.value).toEqual({
-      mode: "compact",
-      base_path: "/repo/src",
-      next_cursor: null,
-      text: [
-        "→ Read lib/fff-router/coordinator.ts (only match)",
-        "lib/fff-router/coordinator.ts [def]",
-        " 539: export function createSearchCoordinator(deps: CoordinatorDeps): SearchCoordinator {",
-        " 540| return new SearchCoordinatorImpl(deps);",
-      ].join("\n"),
-    });
-  });
-
-  test("preserves compact passthrough text and cursor from fff-mcp find_files", async () => {
-    const renderedCompact = [
-      "→ Read lib/fff-router/coordinator.ts (best match)",
-      "5/13 matches",
-      "lib/fff-router/coordinator.ts git:clean",
-      "cursor: 8",
-    ].join("\n");
-    const primary = makeAdapter({
-      backendId: "fff-mcp",
-      execute: async () => ({
-        ok: true as const,
-        value: {
-          backendId: "fff-mcp" as const,
-          queryKind: "find_files" as const,
-          items: [{ path: "/repo/src/coordinator.ts", relativePath: "src/coordinator.ts" }],
-          nextCursor: "8",
-          renderedCompact,
-        },
-      }),
-    });
-
-    const coordinator = createSearchCoordinator({
-      config,
-      adapters: { "fff-mcp": primary.adapter },
-      primaryBackendId: "fff-mcp",
-      fallbackBackendId: null,
-      runtimeManager: new RuntimeManager(),
-      validateWithin: async ({ withinPaths: [within = "/missing"] }) => ({
-        ok: true,
-        value: { resolvedWithin: within, basePath: within },
-      }),
-      resolveRoutingPath: async (within) => ({
-        ok: true,
-        value: { realPath: within, statType: "directory", gitRoot: "/repo" },
-      }),
-    });
-
-    const result = await coordinator.execute(makePublicRequest({ cursor: "7" }));
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) throw new Error("expected success");
-    expect(primary.calls[0]).toMatchObject({ cursor: "7" });
-    expect(result.value).toEqual({
-      mode: "compact",
-      base_path: "/repo/src",
-      next_cursor: "8",
-      text: renderedCompact,
-    });
-  });
-
-  test("rejects cursor requests for backends that cannot honor them", async () => {
-    const primary = makeAdapter({
-      backendId: "rg",
-      execute: async () => okResult("find_files", [], "rg"),
-    });
-
-    const coordinator = createSearchCoordinator({
-      config,
-      adapters: { rg: primary.adapter },
-      primaryBackendId: "rg",
-      fallbackBackendId: null,
-      runtimeManager: new RuntimeManager(),
-      validateWithin: async ({ withinPaths: [within = "/missing"] }) => ({
-        ok: true,
-        value: { resolvedWithin: within, basePath: within },
-      }),
-      resolveRoutingPath: async (within) => ({
-        ok: true,
-        value: { realPath: within, statType: "directory", gitRoot: "/repo" },
-      }),
-    });
-
-    const result = await coordinator.execute(makePublicRequest({ cursor: "7" }));
-
-    expect(result.ok).toBe(false);
-    if (result.ok) throw new Error("expected failure");
-    expect(result.error).toEqual({
-      code: "INVALID_REQUEST",
-      message: "cursor pagination is only supported by the fff-mcp backend",
-    });
-    expect(primary.calls).toHaveLength(0);
-  });
-
-  test("preserves compact passthrough text from fff-mcp search_terms", async () => {
-    const primary = makeAdapter({
-      backendId: "fff-mcp",
-      execute: async () => ({
-        ok: true as const,
-        value: {
-          backendId: "fff-mcp" as const,
-          queryKind: "search_terms" as const,
-          items: [],
-          nextCursor: null,
-          renderedCompact: "→ Read lib/fff-router/coordinator.ts (only match)",
-        },
-      }),
-    });
-
-    const coordinator = createSearchCoordinator({
-      config,
-      adapters: { "fff-mcp": primary.adapter },
-      primaryBackendId: "fff-mcp",
-      fallbackBackendId: null,
-      runtimeManager: new RuntimeManager(),
-      validateWithin: async ({ withinPaths: [within = "/missing"] }) => ({
-        ok: true,
-        value: { resolvedWithin: within, basePath: within },
-      }),
-      resolveRoutingPath: async (within) => ({
-        ok: true,
-        value: { realPath: within, statType: "directory", gitRoot: "/repo" },
-      }),
-    });
-
-    const result = await coordinator.execute(
-      makePublicRequest({
-        tool: "fff_search_terms",
-        terms: ["createSearchCoordinator"],
-        contextLines: 0,
-      }),
-    );
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) throw new Error("expected success");
-    expect(result.value).toEqual({
-      mode: "compact",
-      base_path: "/repo/src",
-      next_cursor: null,
-      text: "→ Read lib/fff-router/coordinator.ts (only match)",
-    });
-  });
-
-  test("adds fff-mcp summary and item metadata to json results", async () => {
-    const primary = makeAdapter({
-      backendId: "fff-mcp",
-      execute: async () => ({
-        ok: true as const,
-        value: {
-          backendId: "fff-mcp" as const,
-          queryKind: "grep" as const,
-          items: [
-            {
-              path: "/repo/src/coordinator.ts",
-              relativePath: "src/coordinator.ts",
-              line: 539,
-              text: "export function createSearchCoordinator(deps: CoordinatorDeps): SearchCoordinator {",
-              isDefinition: true,
-              definitionBody: ["return new SearchCoordinatorImpl(deps);", "}"],
-            },
-          ],
-          nextCursor: null,
-          summary: {
-            shownCount: 1,
-            totalCount: 1,
-            readRecommendation: {
-              relativePath: "src/coordinator.ts",
-              reason: "only match",
-            },
-          },
-        },
-      }),
-    });
-
-    const coordinator = createSearchCoordinator({
-      config,
-      adapters: { "fff-mcp": primary.adapter },
-      primaryBackendId: "fff-mcp",
-      fallbackBackendId: null,
-      runtimeManager: new RuntimeManager(),
-      validateWithin: async ({ withinPaths: [within = "/missing"] }) => ({
-        ok: true,
-        value: { resolvedWithin: within, basePath: within },
-      }),
-      resolveRoutingPath: async (within) => ({
-        ok: true,
-        value: { realPath: within, statType: "directory", gitRoot: "/repo" },
-      }),
-    });
-
-    const result = await coordinator.execute(
-      makePublicRequest({
-        tool: "fff_grep",
-        patterns: ["createSearchCoordinator"],
-        literal: false,
-        caseSensitive: true,
-        contextLines: 0,
-        outputMode: "json",
-      }),
-    );
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) throw new Error("expected success");
-    expect(result.value).toEqual({
-      mode: "json",
-      base_path: "/repo/src",
-      next_cursor: null,
-      backend_used: "fff-mcp",
-      fallback_applied: false,
-      stats: { result_count: 1, shown_count: 1, total_count: 1 },
-      read_recommendation: {
-        path: "coordinator.ts",
-        absolute_path: "/repo/src/coordinator.ts",
-        reason: "only match",
-      },
-      items: [
-        {
-          path: "coordinator.ts",
-          absolute_path: "/repo/src/coordinator.ts",
-          line: 539,
-          text: "export function createSearchCoordinator(deps: CoordinatorDeps): SearchCoordinator {",
-          is_definition: true,
-          definition_body: ["return new SearchCoordinatorImpl(deps);", "}"],
-        },
-      ],
-    });
-  });
-
-  test("invokes routing lifecycle planning and reuses persistent runtimes", async () => {
-    const primary = makeAdapter({
-      backendId: "fff-node",
-      execute: async (request) => okResult(request.queryKind, []),
-    });
-    const fallback = makeAdapter({
-      backendId: "rg",
-      execute: async () => okResult("find_files", []),
-    });
-    const planningCalls: SearchQueryKind[] = [];
-
-    const coordinator = createSearchCoordinator({
-      config,
-      adapters: {
-        "fff-node": primary.adapter,
-        rg: fallback.adapter,
-      },
-      primaryBackendId: "fff-node",
-      fallbackBackendId: "rg",
-      runtimeManager: new RuntimeManager(),
-      validateWithin: async ({ withinPaths: [within = "/missing"] }) => ({
-        ok: true,
-        value: { resolvedWithin: within, basePath: within },
-      }),
-      resolveRoutingPath: async (within) => ({
-        ok: true,
-        value: { realPath: within, statType: "directory", gitRoot: "/repo" },
-      }),
-      planLifecycle: (args) => {
-        planningCalls.push(args.queryKind);
+    execute:
+      args.execute ??
+      (async ({ request: backendRequest }) => {
+        requests.push(backendRequest);
         return {
           ok: true,
           value: {
-            queryKind: args.queryKind,
-            target: {
-              rootType: "git",
-              persistenceRoot: "/repo",
-              searchScope: args.realPath,
-              backendMode: "persistent",
-              ttlMs: config.ttl.gitMs,
-            },
-            nextState: args.state,
-            action:
-              planningCalls.length === 1
-                ? { type: "start-persistent", key: "/repo" as const }
-                : { type: "reuse-persistent", key: "/repo" as const },
-            evicted: [],
+            backendId: "fff-mcp",
+            queryKind: backendRequest.queryKind,
+            items: [
+              {
+                path: path.join(backendRequest.persistenceRoot, "src", "router.ts"),
+                relativePath: "src/router.ts",
+              },
+            ],
+            nextCursor: null,
+          },
+        };
+      }),
+  };
+  const config = args.config ?? getDefaultRouterConfig();
+  const workerPool = new WorkerPool<FffMcpRuntime>({
+    maxWorkers: config.limits.maxWorkers,
+    maxNonGitWorkers: config.limits.maxNonGitWorkers,
+    sweepIntervalMs: 60_000,
+    restartBackoffMs: 1,
+  });
+  const service = createRouterService({ configRef: { current: config }, adapter, workerPool });
+  return {
+    service,
+    get starts() {
+      return starts;
+    },
+    requests,
+    closed,
+  };
+}
+
+describe("RouterService", () => {
+  test("reuses one warm worker and emits normalized TypeScript-friendly results", async () => {
+    const repo = await gitFixture();
+    const testHarness = harness({});
+
+    const first = await testHarness.service.execute(request(repo.src));
+    const second = await testHarness.service.execute(request(repo.src));
+
+    expect(testHarness.starts).toBe(1);
+    expect(first).toMatchObject({
+      ok: true,
+      value: {
+        tool: "find_files",
+        root: repo.root,
+        backend: "fff-mcp",
+        items: [{ path: "src/router.ts", absolutePath: path.join(repo.root, "src/router.ts") }],
+        stats: { coldStart: true, workerId: "worker-1", workerGeneration: 1 },
+      },
+    });
+    expect(second).toMatchObject({ ok: true, value: { stats: { coldStart: false } } });
+    await testHarness.service.close();
+  });
+
+  test("wraps upstream cursors and unwraps them only for the same worker/query", async () => {
+    const repo = await gitFixture();
+    const seenCursors: Array<string | null> = [];
+    const testHarness = harness({
+      execute: async ({ request: backendRequest }) => {
+        seenCursors.push(backendRequest.cursor);
+        return {
+          ok: true,
+          value: {
+            backendId: "fff-mcp",
+            queryKind: "find_files",
+            items: [],
+            nextCursor: backendRequest.cursor ? null : "upstream-2",
+            renderedCompact: "0 matches\ncursor: upstream-2",
           },
         };
       },
     });
+    const first = await testHarness.service.execute(request(repo.src));
+    if (!first.ok) throw new Error(first.error.message);
+    expect(first.value.nextCursor).not.toBe("upstream-2");
+    expect(first.value.displayText).toContain(`cursor: ${first.value.nextCursor}`);
 
-    await coordinator.execute(
-      makePublicRequest({
-        tool: "fff_search_terms",
-        terms: ["router"],
-        contextLines: 0,
-      }),
+    const second = await testHarness.service.execute(
+      request(repo.src, { cursor: first.value.nextCursor }),
     );
-    await coordinator.execute(
-      makePublicRequest({
-        tool: "fff_grep",
-        patterns: ["router"],
-        literal: false,
-        caseSensitive: true,
-        contextLines: 0,
-      }),
-    );
+    expect(second.ok).toBe(true);
+    expect(seenCursors).toEqual([null, "upstream-2"]);
 
-    expect(planningCalls).toEqual(["search_terms", "grep"]);
-    expect(primary.startCount).toBe(1);
+    const wrongQuery = await testHarness.service.execute(
+      request(repo.src, { query: "different", cursor: first.value.nextCursor }),
+    );
+    expect(wrongQuery).toMatchObject({ ok: false, error: { code: "CURSOR_INVALID" } });
+    await testHarness.service.close();
   });
 
-  test("restarts and retries a persistent runtime once when it reports Not connected", async () => {
-    let startCount = 0;
-    const closedRuntimeIds: string[] = [];
-    const primary = makeAdapter({
-      backendId: "fff-mcp",
-      execute: async (request, runtime) => {
-        if (runtime?.id.endsWith("runtime-1")) {
+  test("restarts a stale worker once on a first-page call", async () => {
+    const repo = await gitFixture();
+    let calls = 0;
+    const testHarness = harness({
+      execute: async () => {
+        calls += 1;
+        if (calls === 1) {
           return {
-            ok: false as const,
-            error: {
-              code: "SEARCH_FAILED" as const,
-              backendId: "fff-mcp" as const,
-              message: "SEARCH_FAILED: Not connected",
-            },
+            ok: false,
+            error: { code: "SEARCH_FAILED", backendId: "fff-mcp", message: "transport closed" },
           };
         }
-        return okResult(
-          request.queryKind,
-          [{ path: "/repo/src/router.ts", relativePath: "src/router.ts" }],
-          "fff-mcp",
-        );
-      },
-    });
-    primary.adapter.startRuntime = async (runtimeArgs) => {
-      startCount += 1;
-      const id = `${runtimeArgs.backendId}::${runtimeArgs.persistenceRoot}::runtime-${startCount}`;
-      return {
-        id,
-        close: async () => {
-          closedRuntimeIds.push(id);
-        },
-      };
-    };
-
-    const coordinator = createSearchCoordinator({
-      config,
-      adapters: { "fff-mcp": primary.adapter },
-      primaryBackendId: "fff-mcp",
-      fallbackBackendId: null,
-      runtimeManager: new RuntimeManager(),
-      validateWithin: async ({ withinPaths: [within = "/missing"] }) => ({
-        ok: true,
-        value: { resolvedWithin: within, basePath: within },
-      }),
-      resolveRoutingPath: async (within) => ({
-        ok: true,
-        value: { realPath: within, statType: "directory", gitRoot: "/repo" },
-      }),
-    });
-
-    const result = await coordinator.execute(makePublicRequest({ outputMode: "json" }));
-
-    expect(result.ok).toBe(true);
-    expect(startCount).toBe(2);
-    expect(primary.calls).toHaveLength(2);
-    expect(closedRuntimeIds).toEqual(["fff-mcp::/repo::runtime-1"]);
-    if (!result.ok) throw new Error("expected success");
-    expect(result.value).toMatchObject({
-      backend_used: "fff-mcp",
-      items: [{ path: "router.ts", absolute_path: "/repo/src/router.ts" }],
-    });
-  });
-
-  test("times out a persistent runtime call, closes it, and retries on a fresh runtime", async () => {
-    let startCount = 0;
-    const closedRuntimeIds: string[] = [];
-    const primary = makeAdapter({
-      backendId: "fff-mcp",
-      execute: async (request, runtime) => {
-        if (runtime?.id.endsWith("runtime-1")) {
-          await new Promise((resolve) => setTimeout(resolve, 20));
-          return okResult(
-            request.queryKind,
-            [{ path: "/repo/src/slow.ts", relativePath: "src/slow.ts" }],
-            "fff-mcp",
-          );
-        }
-        return okResult(
-          request.queryKind,
-          [{ path: "/repo/src/fast.ts", relativePath: "src/fast.ts" }],
-          "fff-mcp",
-        );
-      },
-    });
-    primary.adapter.startRuntime = async (runtimeArgs) => {
-      startCount += 1;
-      const id = `${runtimeArgs.backendId}::${runtimeArgs.persistenceRoot}::runtime-${startCount}`;
-      return {
-        id,
-        close: async () => {
-          closedRuntimeIds.push(id);
-        },
-      };
-    };
-
-    const coordinator = createSearchCoordinator({
-      config: { ...config, runtime: { toolTimeoutMs: 1 } } as RouterConfig,
-      adapters: { "fff-mcp": primary.adapter },
-      primaryBackendId: "fff-mcp",
-      fallbackBackendId: null,
-      runtimeManager: new RuntimeManager(),
-      validateWithin: async ({ withinPaths: [within = "/missing"] }) => ({
-        ok: true,
-        value: { resolvedWithin: within, basePath: within },
-      }),
-      resolveRoutingPath: async (within) => ({
-        ok: true,
-        value: { realPath: within, statType: "directory", gitRoot: "/repo" },
-      }),
-    });
-
-    const result = await coordinator.execute(makePublicRequest({ outputMode: "json" }));
-
-    expect(result.ok).toBe(true);
-    expect(startCount).toBe(2);
-    expect(primary.calls).toHaveLength(2);
-    expect(closedRuntimeIds).toEqual(["fff-mcp::/repo::runtime-1"]);
-    if (!result.ok) throw new Error("expected success");
-    expect(result.value).toMatchObject({
-      backend_used: "fff-mcp",
-      items: [{ path: "fast.ts", absolute_path: "/repo/src/fast.ts" }],
-    });
-  });
-
-  test("falls back only on backend failure", async () => {
-    const primary = makeAdapter({
-      backendId: "fff-node",
-      execute: async () => ({
-        ok: false as const,
-        error: {
-          code: "BACKEND_UNAVAILABLE" as const,
-          backendId: "fff-node" as const,
-          message: "primary unavailable",
-        },
-      }),
-    });
-    const fallback = makeAdapter({
-      backendId: "rg",
-      execute: async () => ({
-        ok: true as const,
-        value: {
-          backendId: "rg" as const,
-          queryKind: "find_files" as const,
-          items: [{ path: "/repo/src/router.ts", relativePath: "src/router.ts" }],
-          nextCursor: null,
-        },
-      }),
-    });
-
-    const coordinator = createSearchCoordinator({
-      config,
-      adapters: {
-        "fff-node": primary.adapter,
-        rg: fallback.adapter,
-      },
-      primaryBackendId: "fff-node",
-      fallbackBackendId: "rg",
-      runtimeManager: new RuntimeManager(),
-      validateWithin: async ({ withinPaths: [within = "/missing"] }) => ({
-        ok: true,
-        value: { resolvedWithin: within, basePath: within },
-      }),
-      resolveRoutingPath: async (within) => ({
-        ok: true,
-        value: { realPath: within, statType: "directory", gitRoot: "/repo" },
-      }),
-    });
-
-    const result = await coordinator.execute(makePublicRequest({ outputMode: "json" }));
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) throw new Error("expected success");
-    expect(result.value).toEqual({
-      mode: "json",
-      base_path: "/repo/src",
-      next_cursor: null,
-      backend_used: "rg",
-      fallback_applied: true,
-      fallback_reason: "backend_error",
-      stats: { result_count: 1 },
-      items: [
-        {
-          path: "router.ts",
-          absolute_path: "/repo/src/router.ts",
-        },
-      ],
-    });
-    expect(fallback.calls).toHaveLength(1);
-  });
-
-  test("does not fall back on zero results", async () => {
-    const primary = makeAdapter({
-      backendId: "fff-node",
-      execute: async () => okResult("find_files", []),
-    });
-    const fallback = makeAdapter({
-      backendId: "rg",
-      execute: async () => okResult("find_files", []),
-    });
-
-    const coordinator = createSearchCoordinator({
-      config,
-      adapters: {
-        "fff-node": primary.adapter,
-        rg: fallback.adapter,
-      },
-      primaryBackendId: "fff-node",
-      fallbackBackendId: "rg",
-      runtimeManager: new RuntimeManager(),
-      validateWithin: async ({ withinPaths: [within = "/missing"] }) => ({
-        ok: true,
-        value: { resolvedWithin: within, basePath: within },
-      }),
-      resolveRoutingPath: async (within) => ({
-        ok: true,
-        value: { realPath: within, statType: "directory", gitRoot: "/repo" },
-      }),
-    });
-
-    const result = await coordinator.execute(makePublicRequest());
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) throw new Error("expected success");
-    expect(result.value).toEqual({
-      mode: "compact",
-      base_path: "/repo/src",
-      next_cursor: null,
-      items: [],
-    });
-    expect(fallback.calls).toHaveLength(0);
-  });
-
-  test("translates exclude paths relative to the public base path", async () => {
-    const primary = makeAdapter({
-      backendId: "fff-node",
-      execute: async () => okResult("find_files", []),
-    });
-    const fallback = makeAdapter({
-      backendId: "rg",
-      execute: async () => okResult("find_files", []),
-    });
-
-    const coordinator = createSearchCoordinator({
-      config,
-      adapters: {
-        "fff-node": primary.adapter,
-        rg: fallback.adapter,
-      },
-      primaryBackendId: "fff-node",
-      fallbackBackendId: "rg",
-      runtimeManager: new RuntimeManager(),
-      validateWithin: async ({ withinPaths: [within = "/missing"] }) => ({
-        ok: true,
-        value: { resolvedWithin: within, basePath: "/repo/src" },
-      }),
-      resolveRoutingPath: async () => ({
-        ok: true,
-        value: {
-          realPath: "/repo/src",
-          statType: "directory",
-          gitRoot: "/repo",
-        },
-      }),
-    });
-
-    await coordinator.execute(makePublicRequest({ excludePaths: ["generated"] }));
-
-    expect(primary.calls[0]?.excludePaths).toEqual(["src/generated"]);
-  });
-
-  test("shapes nested subtree results relative to base_path while preserving repo-relative excludes", async () => {
-    const primary = makeAdapter({
-      backendId: "fff-node",
-      execute: async () =>
-        okResult("find_files", [
-          {
-            path: "/repo/Vendor/libghostty/include/ghostty.h",
-            relativePath: "Vendor/libghostty/include/ghostty.h",
-          },
-        ]),
-    });
-    const fallback = makeAdapter({
-      backendId: "rg",
-      execute: async () => okResult("find_files", []),
-    });
-
-    const coordinator = createSearchCoordinator({
-      config,
-      adapters: {
-        "fff-node": primary.adapter,
-        rg: fallback.adapter,
-      },
-      primaryBackendId: "fff-node",
-      fallbackBackendId: "rg",
-      runtimeManager: new RuntimeManager(),
-      validateWithin: async ({ withinPaths: [within = "/missing"] }) => ({
-        ok: true,
-        value: { resolvedWithin: within, basePath: "/repo/Vendor/libghostty/include" },
-      }),
-      resolveRoutingPath: async () => ({
-        ok: true,
-        value: {
-          realPath: "/repo/Vendor/libghostty/include",
-          statType: "directory",
-          gitRoot: "/repo",
-        },
-      }),
-    });
-
-    const result = await coordinator.execute(
-      makePublicRequest({
-        within: ["/repo/Vendor/libghostty/include"],
-        excludePaths: ["generated"],
-      }),
-    );
-
-    expect(primary.calls[0]?.excludePaths).toEqual(["Vendor/libghostty/include/generated"]);
-    expect(result.ok).toBe(true);
-    if (!result.ok) throw new Error("expected success");
-    expect(result.value).toEqual({
-      mode: "compact",
-      base_path: "/repo/Vendor/libghostty/include",
-      next_cursor: null,
-      items: [{ path: "ghostty.h" }],
-    });
-  });
-
-  test("evicts planned persistent runtimes before continuing", async () => {
-    let closeCount = 0;
-    const runtimeManager = new RuntimeManager();
-    await runtimeManager.withRuntime(
-      {
-        backendId: "fff-node",
-        persistenceRoot: "/old",
-        start: async () => ({
-          id: "old-runtime",
-          close: async () => {
-            closeCount += 1;
-          },
-        }),
-      },
-      async () => undefined,
-    );
-
-    const primary = makeAdapter({
-      backendId: "fff-node",
-      execute: async () => okResult("find_files", []),
-    });
-    const fallback = makeAdapter({
-      backendId: "rg",
-      execute: async () => okResult("find_files", []),
-    });
-
-    const coordinator = createSearchCoordinator({
-      config,
-      adapters: {
-        "fff-node": primary.adapter,
-        rg: fallback.adapter,
-      },
-      primaryBackendId: "fff-node",
-      fallbackBackendId: "rg",
-      runtimeManager,
-      validateWithin: async ({ withinPaths: [within = "/missing"] }) => ({
-        ok: true,
-        value: { resolvedWithin: within, basePath: within },
-      }),
-      resolveRoutingPath: async (within) => ({
-        ok: true,
-        value: { realPath: within, statType: "directory", gitRoot: "/repo" },
-      }),
-      planLifecycle: (args) => ({
-        ok: true,
-        value: {
-          queryKind: args.queryKind,
-          target: {
-            rootType: "git",
-            persistenceRoot: "/repo",
-            searchScope: args.realPath,
-            backendMode: "persistent",
-            ttlMs: config.ttl.gitMs,
-          },
-          nextState: args.state,
-          action: { type: "start-persistent", key: "/repo" },
-          evicted: ["/old"],
-        },
-      }),
-    });
-
-    await coordinator.execute(makePublicRequest());
-    expect(closeCount).toBe(1);
-  });
-
-  test("does not fall back when the primary adapter returns SEARCH_FAILED", async () => {
-    const primary = makeAdapter({
-      backendId: "fff-node",
-      execute: async () => ({
-        ok: false as const,
-        error: {
-          code: "SEARCH_FAILED" as const,
-          backendId: "fff-node" as const,
-          message: "primary search failed",
-        },
-      }),
-    });
-    const fallback = makeAdapter({
-      backendId: "rg",
-      execute: async () =>
-        okResult("find_files", [{ path: "/repo/src/router.ts", relativePath: "src/router.ts" }]),
-    });
-
-    const coordinator = createSearchCoordinator({
-      config,
-      adapters: {
-        "fff-node": primary.adapter,
-        rg: fallback.adapter,
-      },
-      primaryBackendId: "fff-node",
-      fallbackBackendId: "rg",
-      runtimeManager: new RuntimeManager(),
-      validateWithin: async ({ withinPaths: [within = "/missing"] }) => ({
-        ok: true,
-        value: { resolvedWithin: within, basePath: within },
-      }),
-      resolveRoutingPath: async (within) => ({
-        ok: true,
-        value: { realPath: within, statType: "directory", gitRoot: "/repo" },
-      }),
-    });
-
-    const result = await coordinator.execute(makePublicRequest());
-
-    expect(result.ok).toBe(false);
-    if (result.ok) throw new Error("expected failure");
-    expect(result.error.code).toBe("SEARCH_FAILED");
-    expect(fallback.calls).toHaveLength(0);
-  });
-
-  test("preserves successful ephemeral results when runtime cleanup fails", async () => {
-    const primary = makeAdapter({
-      backendId: "fff-node",
-      execute: async () =>
-        okResult("find_files", [{ path: "/allow/pkg-a/router.ts", relativePath: "router.ts" }]),
-    });
-    primary.adapter.startRuntime = async () => ({
-      id: "ephemeral-runtime",
-      close: async () => {
-        throw new Error("close failed");
-      },
-    });
-    const fallback = makeAdapter({
-      backendId: "rg",
-      execute: async () => okResult("find_files", []),
-    });
-
-    const coordinator = createSearchCoordinator({
-      config,
-      adapters: {
-        "fff-node": primary.adapter,
-        rg: fallback.adapter,
-      },
-      primaryBackendId: "fff-node",
-      fallbackBackendId: "rg",
-      runtimeManager: new RuntimeManager(),
-      validateWithin: async ({ withinPaths: [within = "/missing"] }) => ({
-        ok: true,
-        value: { resolvedWithin: within, basePath: within },
-      }),
-      resolveRoutingPath: async (within) => ({
-        ok: true,
-        value: { realPath: within, statType: "directory", gitRoot: null },
-      }),
-      planLifecycle: (args) => ({
-        ok: true,
-        value: {
-          queryKind: args.queryKind,
-          target: {
-            rootType: "non-git",
-            persistenceRoot: "/allow/pkg-a",
-            searchScope: args.realPath,
-            backendMode: "ephemeral-candidate",
-            ttlMs: config.ttl.nonGitMs,
-          },
-          nextState: args.state,
-          action: { type: "run-ephemeral", key: "/allow/pkg-a" },
-          evicted: [],
-        },
-      }),
-    });
-
-    const result = await coordinator.execute(makePublicRequest({ within: ["/allow/pkg-a"] }));
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) throw new Error("expected success");
-    expect(result.value).toEqual({
-      mode: "compact",
-      base_path: "/allow/pkg-a",
-      next_cursor: null,
-      items: [{ path: "router.ts" }],
-    });
-  });
-
-  test("returns SEARCH_FAILED when an adapter does not support the query kind", async () => {
-    const primary = makeAdapter({
-      backendId: "fff-node",
-      supportedQueryKinds: ["find_files"],
-      execute: async () => okResult("find_files", []),
-    });
-    const fallback = makeAdapter({
-      backendId: "rg",
-      supportedQueryKinds: ["find_files"],
-      execute: async () => okResult("find_files", []),
-    });
-
-    const coordinator = createSearchCoordinator({
-      config,
-      adapters: {
-        "fff-node": primary.adapter,
-        rg: fallback.adapter,
-      },
-      primaryBackendId: "fff-node",
-      fallbackBackendId: "rg",
-      runtimeManager: new RuntimeManager(),
-      validateWithin: async ({ withinPaths: [within = "/missing"] }) => ({
-        ok: true,
-        value: { resolvedWithin: within, basePath: within },
-      }),
-      resolveRoutingPath: async (within) => ({
-        ok: true,
-        value: { realPath: within, statType: "directory", gitRoot: "/repo" },
-      }),
-    });
-
-    const result = await coordinator.execute(
-      makePublicRequest({
-        tool: "fff_grep",
-        patterns: ["router"],
-        literal: false,
-        caseSensitive: true,
-        contextLines: 0,
-      }),
-    );
-
-    expect(result.ok).toBe(false);
-    if (result.ok) throw new Error("expected failure");
-    expect(result.error.code).toBe("SEARCH_FAILED");
-  });
-
-  test("derives file restriction and stable public errors", async () => {
-    const primary = makeAdapter({
-      backendId: "fff-node",
-      execute: async (request) =>
-        okResult(request.queryKind, [
-          {
-            path: "/repo/src/router.ts",
-            relativePath: "src/router.ts",
-            line: 12,
-            text: "export function planRequest() {}",
-          },
-        ]),
-    });
-    const fallback = makeAdapter({
-      backendId: "rg",
-      execute: async () => okResult("grep", []),
-    });
-
-    const coordinator = createSearchCoordinator({
-      config,
-      adapters: {
-        "fff-node": primary.adapter,
-        rg: fallback.adapter,
-      },
-      primaryBackendId: "fff-node",
-      fallbackBackendId: "rg",
-      runtimeManager: new RuntimeManager(),
-      validateWithin: async ({ withinPaths: _withinPaths }) => ({
-        ok: true,
-        value: {
-          resolvedWithin: "/repo/src/router.ts",
-          basePath: "/repo/src",
-          fileRestriction: "/repo/src/router.ts",
-        },
-      }),
-      resolveRoutingPath: async () => ({
-        ok: true,
-        value: {
-          realPath: "/repo/src/router.ts",
-          statType: "file",
-          gitRoot: "/repo",
-        },
-      }),
-    });
-
-    const success = await coordinator.execute(
-      makePublicRequest({
-        tool: "fff_grep",
-        patterns: ["planRequest"],
-        literal: false,
-        caseSensitive: true,
-        contextLines: 0,
-      }),
-    );
-    expect(success.ok).toBe(true);
-    if (!success.ok) throw new Error("expected success");
-    expect(primary.calls[0]?.fileRestriction).toBe("/repo/src/router.ts");
-    expect(success.value).toEqual({
-      mode: "compact",
-      base_path: "/repo/src",
-      next_cursor: null,
-      items: [
-        {
-          path: "router.ts",
-          line: 12,
-          text: "export function planRequest() {}",
-        },
-      ],
-    });
-
-    const invalid = await coordinator.execute(makePublicRequest({ within: undefined }));
-    expect(invalid.ok).toBe(false);
-    if (invalid.ok) throw new Error("expected failure");
-    expect(invalid.error.code).toBe("INVALID_REQUEST");
-  });
-
-  test("multi-path within routes every entry through the backend adapter", async () => {
-    // End-to-end: public request with three file paths under the same git
-    // root. The coordinator must validate each entry, confirm they share
-    // a routing target, and hand the backend a request with one primary
-    // plus two `additionalWithinEntries`.
-    const liveConfigRef = createCoordinatorRuntimeConfigRef({
-      config,
-      primaryBackendId: "fff-mcp",
-      fallbackBackendId: "rg",
-    });
-    const primary = makeAdapter({
-      backendId: "fff-mcp",
-      execute: async (request) => ({
-        ok: true,
-        value: {
-          backendId: "fff-mcp",
-          queryKind: request.queryKind,
-          items: [
-            {
-              path: "/repo/Cargo.toml",
-              relativePath: "Cargo.toml",
-              line: 1,
-              text: 'rustls = "0.23"',
-            },
-          ],
-          nextCursor: null,
-        },
-      }),
-    });
-
-    const coordinator = createSearchCoordinator({
-      config,
-      adapters: {
-        "fff-mcp": primary.adapter,
-        rg: makeAdapter({
-          backendId: "rg",
-          execute: async () => ({
-            ok: true,
-            value: { backendId: "rg", queryKind: "grep", items: [], nextCursor: null },
-          }),
-        }).adapter,
-      },
-      primaryBackendId: "fff-mcp",
-      fallbackBackendId: "rg",
-      liveConfigRef,
-      runtimeManager: new RuntimeManager(),
-      validateWithin: async ({ withinPaths }) => {
-        const entries = withinPaths.map((p) => ({
-          resolvedWithin: p,
-          basePath: p.endsWith(".toml") ? p.replace(/\/[^/]+$/, "") : p,
-          ...(p.endsWith(".toml") ? { fileRestriction: p } : {}),
-        }));
-        const [head, ...rest] = entries as [
-          (typeof entries)[number],
-          ...(typeof entries)[number][],
-        ];
         return {
           ok: true,
           value: {
-            resolvedWithin: head.resolvedWithin,
-            basePath: head.basePath,
-            ...(head.fileRestriction !== undefined
-              ? { fileRestriction: head.fileRestriction }
-              : {}),
-            ...(rest.length > 0 ? { additionalEntries: rest } : {}),
+            backendId: "fff-mcp",
+            queryKind: "find_files",
+            items: [],
+            nextCursor: null,
           },
         };
       },
-      resolveRoutingPath: async (within) => ({
-        ok: true,
-        value: {
-          realPath: within,
-          statType: within.endsWith(".toml") ? "file" : "directory",
-          gitRoot: "/repo",
-        },
-      }),
     });
 
-    const result = await coordinator.execute(
-      makePublicRequest({
-        tool: "fff_grep",
-        patterns: ["rustls"],
-        literal: true,
-        caseSensitive: false,
-        contextLines: 0,
-        within: [
-          "/repo/crates/portl-cli/Cargo.toml",
-          "/repo/crates/portl-agent/Cargo.toml",
-          "/repo/Cargo.toml",
-        ],
-      }),
-    );
-    expect(result.ok).toBe(true);
-    if (!result.ok) throw new Error("expected success");
-
-    // Primary adapter must have received one backend call with both extras.
-    expect(primary.calls).toHaveLength(1);
-    const backendReq = primary.calls[0]!;
-    expect(backendReq.additionalWithinEntries).toHaveLength(2);
-    expect(backendReq.additionalWithinEntries?.map((e) => e.resolvedWithin)).toEqual([
-      "/repo/crates/portl-agent/Cargo.toml",
-      "/repo/Cargo.toml",
-    ]);
+    expect(await testHarness.service.execute(request(repo.src))).toMatchObject({ ok: true });
+    expect(testHarness.starts).toBe(2);
+    expect(calls).toBe(2);
+    expect(testHarness.closed).toContain("worker-1");
+    await testHarness.service.close();
   });
 
-  test("multi-path within rejects entries that live in different routing targets", async () => {
-    // Two paths, different git roots — coordinator must error out up front
-    // because one backend call can't operate across two persistence roots.
-    const liveConfigRef = createCoordinatorRuntimeConfigRef({
-      config,
-      primaryBackendId: "fff-mcp",
-      fallbackBackendId: "rg",
-    });
-    const primary = makeAdapter({
-      backendId: "fff-mcp",
-      execute: async () => ({
-        ok: true,
-        value: { backendId: "fff-mcp", queryKind: "grep", items: [], nextCursor: null },
-      }),
-    });
+  test("rejects multiple non-Git paths that route to different roots", async () => {
+    const prefix = await mkdtemp(path.join(os.tmpdir(), "fff-router-nongit-"));
+    const a = path.join(prefix, "a", "src");
+    const b = path.join(prefix, "b", "src");
+    await mkdir(a, { recursive: true });
+    await mkdir(b, { recursive: true });
+    const config = getDefaultRouterConfig();
+    config.allowlistedNonGitPrefixes = [{ prefix, mode: "first-child-root" }];
+    const testHarness = harness({ config });
 
-    const coordinator = createSearchCoordinator({
-      config,
-      adapters: {
-        "fff-mcp": primary.adapter,
-        rg: makeAdapter({
-          backendId: "rg",
-          execute: async () => ({
-            ok: true,
-            value: { backendId: "rg", queryKind: "grep", items: [], nextCursor: null },
-          }),
-        }).adapter,
-      },
-      primaryBackendId: "fff-mcp",
-      fallbackBackendId: "rg",
-      liveConfigRef,
-      runtimeManager: new RuntimeManager(),
-      validateWithin: async ({ withinPaths }) => {
-        const [head, ...rest] = withinPaths.map((p) => ({ resolvedWithin: p, basePath: p })) as [
-          { resolvedWithin: string; basePath: string },
-          ...{ resolvedWithin: string; basePath: string }[],
-        ];
-        return {
-          ok: true,
-          value: {
-            resolvedWithin: head.resolvedWithin,
-            basePath: head.basePath,
-            ...(rest.length > 0 ? { additionalEntries: rest } : {}),
-          },
-        };
-      },
-      // Return a different gitRoot per request so the coordinator's
-      // cross-entry check trips.
-      resolveRoutingPath: async (within) => ({
-        ok: true,
-        value: {
-          realPath: within,
-          statType: "directory",
-          gitRoot: within.startsWith("/repo-a") ? "/repo-a" : "/repo-b",
-        },
-      }),
+    expect(await testHarness.service.execute(request(a, { within: [a, b] }))).toMatchObject({
+      ok: false,
+      error: { code: "INVALID_REQUEST", message: expect.stringContaining("one routing root") },
     });
+    expect(testHarness.starts).toBe(0);
+    await testHarness.service.close();
+  });
 
-    const result = await coordinator.execute(
-      makePublicRequest({ within: ["/repo-a/src", "/repo-b/src"] }),
-    );
-    expect(result.ok).toBe(false);
-    if (result.ok) throw new Error("expected failure");
-    expect(result.error.code).toBe("INVALID_REQUEST");
-    expect(result.error.message).toContain("share a routing target");
-    // Primary adapter must NOT have been called when routing enforcement
-    // fails — no partial state.
-    expect(primary.calls).toHaveLength(0);
+  test("deduplicates warm requests by discovered repository root", async () => {
+    const repo = await gitFixture();
+    const second = path.join(repo.root, "tests");
+    await mkdir(second);
+    const testHarness = harness({});
+    const warmed = await testHarness.service.warm([repo.src, second]);
+    expect(warmed.ok && warmed.value).toHaveLength(1);
+    expect(testHarness.starts).toBe(1);
+    await testHarness.service.close();
   });
 });

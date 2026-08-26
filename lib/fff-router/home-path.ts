@@ -1,7 +1,7 @@
 import path from "node:path";
-import type { PublicError, Result } from "./types";
+import type { Result, RouterError } from "./types";
 
-function invalid(message: string): Result<never, PublicError> {
+function invalid(message: string): Result<never, RouterError> {
   return {
     ok: false,
     error: {
@@ -18,7 +18,7 @@ function joinHome(home: string, suffix: string): string {
 export function expandHomePath(
   candidate: string,
   env: NodeJS.ProcessEnv = process.env,
-): Result<string, PublicError> {
+): Result<string, RouterError> {
   const trimmed = candidate.trim();
   const home = env.HOME?.trim();
 

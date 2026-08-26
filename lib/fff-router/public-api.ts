@@ -1,801 +1,330 @@
 import path from "node:path";
-import fs from "node:fs";
-import { type TSchema, Type } from "@sinclair/typebox";
-import picomatch from "picomatch";
+import * as z from "zod/v4";
 import { expandHomePath } from "./home-path";
 import type {
-  PublicError,
-  PublicErrorCode,
+  FindFilesResult,
+  GrepResult,
   PublicFindFilesRequest,
   PublicGrepRequest,
-  PublicOutputMode,
-  PublicSearchTermsRequest,
-  PublicToolDefinition,
   PublicToolName,
   PublicToolRequest,
+  PublicToolResult,
   Result,
+  RouterError,
+  RouterStatus,
+  WorkerDiagnostic,
 } from "./types";
 
-const EXTENSION_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._+-]*$/;
-const PATH_META_PATTERN = /[*?[\]{}!]/;
-const EXCLUDE_GLOB_META_PATTERN = /[*?[\]{}]/;
-const DEFAULT_LIMIT = 20;
-const DEFAULT_CONTEXT_LINES = 0;
+export const MAX_RESULTS = 50;
+export const MAX_CONTEXT_LINES = 5;
+export const MAX_PATTERNS = 20;
+export const MAX_FILTERS = 30;
+export const MAX_WITHIN_PATHS = 10;
+export const MAX_QUERY_LENGTH = 1_024;
 
-const outputModeSchema = Type.Union([Type.Literal("compact"), Type.Literal("json")]);
+const extension = z
+  .string()
+  .min(1)
+  .max(64)
+  .refine(
+    (value) => /^[A-Za-z0-9][A-Za-z0-9._+-]*$/.test(value.trim().replace(/^\./, "")),
+    "extensions must be literal suffixes without path or glob syntax",
+  );
 
-const cursorSchema = Type.Union([Type.String({ minLength: 1 }), Type.Null()]);
+const relativeFilter = z
+  .string()
+  .min(1)
+  .max(512)
+  .refine(
+    (value) => !path.posix.isAbsolute(value.trim().replace(/\\/g, "/").replace(/^\.\//, "")),
+    "path filters must be relative",
+  )
+  .refine(
+    (value) =>
+      !value
+        .trim()
+        .replace(/\\/g, "/")
+        .replace(/^\.\//, "")
+        .split("/")
+        .some((segment) => segment === "" || segment === "." || segment === ".."),
+    "path filters must not contain empty, current-directory, or parent-directory segments",
+  );
 
-export const ENABLE_SEARCH_TERMS = false;
+const glob = relativeFilter.refine(
+  (value) => !value.trim().startsWith("!"),
+  "glob is an include filter; use excludePaths for exclusions",
+);
 
-function defineTool(
-  name: PublicToolName,
-  description: string,
-  snippet: string,
-  inputSchema: TSchema,
-): PublicToolDefinition<TSchema> {
-  return { name, description, snippet, inputSchema };
+const within = z.union([
+  z
+    .string()
+    .min(1)
+    .max(4_096)
+    .refine((value) => value.trim().length > 0),
+  z
+    .array(
+      z
+        .string()
+        .min(1)
+        .max(4_096)
+        .refine((value) => value.trim().length > 0),
+    )
+    .min(1)
+    .max(MAX_WITHIN_PATHS),
+]);
+
+const commonShape = {
+  within,
+  glob: glob.optional(),
+  extensions: z.array(extension).max(MAX_FILTERS).optional().default([]),
+  excludePaths: z.array(relativeFilter).max(MAX_FILTERS).optional().default([]),
+  limit: z.number().int().min(1).max(MAX_RESULTS).optional().default(20),
+  cursor: z.string().min(1).max(4_096).nullable().optional().default(null),
+} satisfies z.ZodRawShape;
+
+export const findFilesInputSchema = z.strictObject({
+  query: z
+    .string()
+    .min(1)
+    .max(MAX_QUERY_LENGTH)
+    .refine((value) => value.trim().length > 0, "query must not be blank"),
+  ...commonShape,
+});
+
+export const grepInputSchema = z.strictObject({
+  patterns: z
+    .array(
+      z
+        .string()
+        .min(1)
+        .max(MAX_QUERY_LENGTH)
+        .refine((value) => value.trim().length > 0, "patterns must not be blank"),
+    )
+    .min(1)
+    .max(MAX_PATTERNS),
+  literal: z.boolean().optional().default(true),
+  contextLines: z.number().int().min(0).max(MAX_CONTEXT_LINES).optional().default(0),
+  ...commonShape,
+});
+
+export type FindFilesInput = z.input<typeof findFilesInputSchema>;
+export type GrepInput = z.input<typeof grepInputSchema>;
+
+export const fileHitSchema = z.object({
+  path: z.string(),
+  absolutePath: z.string(),
+});
+
+export const textHitSchema = z.object({
+  ...fileHitSchema.shape,
+  line: z.number().int().min(1),
+  text: z.string(),
+  column: z.number().int().min(0).optional(),
+  contextBefore: z.array(z.string()).optional(),
+  contextAfter: z.array(z.string()).optional(),
+  isDefinition: z.boolean().optional(),
+  definitionBody: z.array(z.string()).optional(),
+});
+
+export const searchResultStatsSchema = z.object({
+  resultCount: z.number().int().min(0),
+  upstreamShownCount: z.number().int().min(0).optional(),
+  upstreamTotalCount: z.number().int().min(0).optional(),
+  coldStart: z.boolean(),
+  workerId: z.string().min(1),
+  workerGeneration: z.number().int().min(1),
+});
+
+export const readRecommendationSchema = z.object({
+  path: z.string(),
+  absolutePath: z.string(),
+  reason: z.string().optional(),
+});
+
+const searchResultBaseShape = {
+  root: z.string(),
+  backend: z.literal("fff-mcp"),
+  nextCursor: z.string().nullable(),
+  stats: searchResultStatsSchema,
+  readRecommendation: readRecommendationSchema.optional(),
+  displayText: z.string().optional(),
+} satisfies z.ZodRawShape;
+
+export const findFilesResultSchema = z.object({
+  tool: z.literal("find_files"),
+  ...searchResultBaseShape,
+  items: z.array(fileHitSchema),
+}) satisfies z.ZodType<FindFilesResult>;
+
+export const grepResultSchema = z.object({
+  tool: z.literal("grep"),
+  ...searchResultBaseShape,
+  items: z.array(textHitSchema),
+}) satisfies z.ZodType<GrepResult>;
+
+export const publicToolResultSchema = z.discriminatedUnion("tool", [
+  findFilesResultSchema,
+  grepResultSchema,
+]) satisfies z.ZodType<PublicToolResult>;
+
+export const workerDiagnosticSchema = z.object({
+  root: z.string(),
+  rootType: z.enum(["git", "non-git"]),
+  state: z.enum(["starting", "ready", "draining", "dead"]),
+  workerId: z.string().optional(),
+  pid: z.number().int().nullable().optional(),
+  generation: z.number().int().min(1),
+  activeLeases: z.number().int().min(0),
+  startedAt: z.number().min(0).optional(),
+  lastUsedAt: z.number().min(0),
+  lastCallAt: z.number().min(0).optional(),
+  lastSuccessAt: z.number().min(0).optional(),
+  lastError: z.string().optional(),
+  lastErrorAt: z.number().min(0).optional(),
+  failureCount: z.number().int().min(0),
+  retryAfter: z.number().min(0).optional(),
+}) satisfies z.ZodType<WorkerDiagnostic>;
+
+export const routerStatusSchema = z.object({
+  workers: z.array(workerDiagnosticSchema),
+  limits: z.object({
+    maxWorkers: z.number().int().min(1),
+    maxNonGitWorkers: z.number().int().min(0),
+  }),
+}) satisfies z.ZodType<RouterStatus>;
+
+export const warmResultSchema = z.object({ workers: z.array(workerDiagnosticSchema) });
+export const evictResultSchema = z.object({ evicted: z.array(z.string()) });
+
+export type PublicToolDefinition = {
+  name: PublicToolName;
+  description: string;
+  inputSchema: typeof findFilesInputSchema | typeof grepInputSchema;
+};
+
+export const PUBLIC_TOOL_DEFINITIONS: readonly PublicToolDefinition[] = [
+  {
+    name: "find_files",
+    description:
+      "Fuzzy-search file names and paths using a shared warm fff-mcp index. within must be one or more absolute paths under the same repository or configured non-Git root.",
+    inputSchema: findFilesInputSchema,
+  },
+  {
+    name: "grep",
+    description:
+      "Search file contents through a shared warm fff-mcp index. Multiple patterns use OR semantics; literal matching is the safe default and regex matching must be selected explicitly.",
+    inputSchema: grepInputSchema,
+  },
+];
+
+function invalid(message: string): Result<never, RouterError> {
+  return { ok: false, error: { code: "INVALID_REQUEST", message } };
 }
 
-function invalid(
-  message: string,
-  code: PublicErrorCode = "INVALID_REQUEST",
-): Result<never, PublicError> {
-  return {
-    ok: false,
-    error: { code, message },
-  };
+function formatZodError(error: z.ZodError): string {
+  return error.issues
+    .map((issue) => {
+      const field = issue.path.length > 0 ? issue.path.join(".") : "request";
+      return `${field}: ${issue.message}`;
+    })
+    .join("; ");
 }
 
-function containsPathMeta(value: string): boolean {
-  return PATH_META_PATTERN.test(value);
-}
-
-function containsExcludeGlobMeta(value: string): boolean {
-  return EXCLUDE_GLOB_META_PATTERN.test(value);
-}
-
-function parseRequiredString(value: unknown, field: string): Result<string, PublicError> {
-  if (typeof value !== "string" || value.trim() === "") {
-    return invalid(`${field} must be a non-empty string`);
-  }
-
-  return { ok: true, value };
-}
-
-function parseOptionalNonNegativeInt(
-  value: unknown,
-  field: string,
-  defaultValue: number,
-): Result<number, PublicError> {
-  if (value === undefined) {
-    return { ok: true, value: defaultValue };
-  }
-
-  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
-    return invalid(`${field} must be a non-negative integer`);
-  }
-
-  return { ok: true, value };
-}
-
-function normalizeWithinString(
-  value: unknown,
+function normalizeWithin(
+  value: string | string[],
   env: NodeJS.ProcessEnv,
-): Result<string, PublicError> {
-  if (typeof value !== "string" || value.trim() === "") {
-    return invalid("within must be a non-empty string when provided");
-  }
-
-  const expanded = expandHomePath(value, env);
-  if (!expanded.ok) {
-    return expanded;
-  }
-
-  if (!path.isAbsolute(expanded.value)) {
-    return invalid("within must be absolute for direct MCP callers");
-  }
-
-  return { ok: true, value: expanded.value };
-}
-
-/**
- * Resolve the `within` field of a public request. Accepts `string | string[]
- * | undefined` and always returns either `undefined` or an array of ≥ 1
- * absolute paths so downstream code has one shape to handle. A single
- * string becomes a length-1 array; an empty array or duplicated entries
- * are rejected up front.
- */
-export function normalizeWithin(
-  value: unknown,
-  env: NodeJS.ProcessEnv = process.env,
-): Result<string[] | undefined, PublicError> {
-  if (value === undefined) {
-    return { ok: true, value: undefined };
-  }
-
-  if (!Array.isArray(value)) {
-    const single = normalizeWithinString(value, env);
-    if (!single.ok) {
-      return single;
-    }
-    return { ok: true, value: [single.value] };
-  }
-
-  if (value.length === 0) {
-    return invalid("within must not be an empty array when provided");
-  }
-
-  const resolved: string[] = [];
-  const seen = new Set<string>();
-  for (const entry of value) {
-    const result = normalizeWithinString(entry, env);
-    if (!result.ok) {
-      return result;
-    }
-    if (seen.has(result.value)) {
-      return invalid(`within contains duplicate path '${result.value}'`);
-    }
-    seen.add(result.value);
-    resolved.push(result.value);
-  }
-
-  return { ok: true, value: resolved };
-}
-
-export function normalizeExtensions(input: unknown): Result<string[], PublicError> {
-  if (input === undefined) {
-    return { ok: true, value: [] };
-  }
-
-  if (!Array.isArray(input)) {
-    return invalid("extensions must be an array of strings");
-  }
-
+): Result<string[], RouterError> {
+  const values = Array.isArray(value) ? value : [value];
   const normalized: string[] = [];
-  for (const entry of input) {
-    if (typeof entry !== "string") {
-      return invalid("extensions must contain only strings");
-    }
+  const seen = new Set<string>();
 
-    const clean = entry.trim().replace(/^\./, "");
-    if (!clean) {
-      return invalid("extensions must not contain empty values");
+  for (const entry of values) {
+    const expanded = expandHomePath(entry.trim(), env);
+    if (!expanded.ok) {
+      return invalid(expanded.error.message);
     }
-
-    if (
-      clean.includes("/") ||
-      clean.includes("\\") ||
-      containsPathMeta(clean) ||
-      !EXTENSION_PATTERN.test(clean)
-    ) {
-      return invalid("extensions must be literal suffixes without path syntax");
+    if (!path.isAbsolute(expanded.value)) {
+      return invalid("within paths must be absolute on the daemon wire protocol");
     }
-
+    const clean = path.normalize(expanded.value);
+    if (seen.has(clean)) {
+      return invalid(`within contains duplicate path '${clean}'`);
+    }
+    seen.add(clean);
     normalized.push(clean);
   }
 
   return { ok: true, value: normalized };
 }
 
-function normalizeGlobPattern(value: string): Result<string, PublicError> {
-  const trimmed = value.trim().replace(/\\/g, "/");
-  if (!trimmed) {
-    return invalid("glob must not be empty");
-  }
-
-  if (path.isAbsolute(trimmed)) {
-    return invalid("glob must be relative to the resolved base path");
-  }
-
-  if (trimmed.startsWith("!")) {
-    return invalid("glob must be an include pattern; use exclude_paths for exclusions");
-  }
-
-  const segments = trimmed.split("/");
-  if (segments.some((segment) => segment === "" || segment === ".")) {
-    return invalid("glob must not contain empty or current-directory segments");
-  }
-
-  if (segments.includes("..")) {
-    return invalid("glob must not escape the resolved base path");
-  }
-
-  return { ok: true, value: trimmed };
-}
-
-export function normalizeGlob(input: unknown): Result<string | undefined, PublicError> {
-  if (input === undefined) {
+function rejectWildcardOnlyRegex(patterns: string[], literal: boolean): Result<void, RouterError> {
+  if (literal) {
     return { ok: true, value: undefined };
   }
 
-  if (typeof input !== "string") {
-    return invalid("glob must be a string when provided");
-  }
-
-  return normalizeGlobPattern(input);
-}
-
-function validateExcludePathSyntax(entry: string): Result<string, PublicError> {
-  const trimmed = entry.trim().replace(/\\/g, "/");
-  if (!trimmed) {
-    return invalid("exclude_paths must not contain empty values");
-  }
-
-  if (path.isAbsolute(trimmed)) {
-    return invalid("exclude_paths must be relative to the resolved base path");
-  }
-
-  if (trimmed.startsWith("!")) {
-    return invalid("exclude_paths entries are already exclusions; omit leading !");
-  }
-
-  const segments = trimmed.split("/");
-  if (segments.some((segment) => segment === "" || segment === ".")) {
-    return invalid("exclude_paths must not contain empty or current-directory segments");
-  }
-
-  if (segments.includes("..")) {
-    return invalid("exclude_paths must not escape the resolved base path");
-  }
-
-  return { ok: true, value: segments.join("/") };
-}
-
-function normalizeExcludePath(entry: string): Result<string, PublicError> {
-  const normalized = validateExcludePathSyntax(entry);
-  if (!normalized.ok) {
-    return normalized;
-  }
-
-  if (containsPathMeta(normalized.value)) {
-    return invalid("exclude_paths must be literal descendant paths");
-  }
-
-  return normalized;
-}
-
-function resolveExcludeExpansionBase(within: string[] | undefined): string | undefined {
-  const primaryWithin = within?.[0];
-  if (primaryWithin === undefined) {
-    return undefined;
-  }
-
-  try {
-    const stats = fs.statSync(primaryWithin);
-    return stats.isFile() ? path.dirname(primaryWithin) : primaryWithin;
-  } catch {
-    return primaryWithin;
-  }
-}
-
-function expandExcludeGlobPath(basePath: string, pattern: string): string[] {
-  const segments = pattern.split("/");
-
-  function expand(absDir: string, prefix: string[], remaining: string[]): string[] {
-    const [segment, ...rest] = remaining;
-    if (segment === undefined) {
-      return [prefix.join("/")];
-    }
-
-    if (!containsExcludeGlobMeta(segment)) {
-      const nextAbs = path.join(absDir, segment);
-      if (rest.length === 0) {
-        return fs.existsSync(nextAbs) ? [[...prefix, segment].join("/")] : [];
-      }
-      try {
-        if (!fs.statSync(nextAbs).isDirectory()) {
-          return [];
-        }
-      } catch {
-        return [];
-      }
-      return expand(nextAbs, [...prefix, segment], rest);
-    }
-
-    let entries: fs.Dirent[];
-    try {
-      entries = fs.readdirSync(absDir, { withFileTypes: true });
-    } catch {
-      return [];
-    }
-
-    const matches = picomatch(segment, { dot: true });
-    return entries
-      .filter((entry) => matches(entry.name))
-      .sort((left, right) => left.name.localeCompare(right.name))
-      .flatMap((entry) => {
-        const nextPrefix = [...prefix, entry.name];
-        if (rest.length === 0) {
-          return [nextPrefix.join("/")];
-        }
-        if (!entry.isDirectory()) {
-          return [];
-        }
-        return expand(path.join(absDir, entry.name), nextPrefix, rest);
-      });
-  }
-
-  return expand(basePath, [], segments);
-}
-
-export function normalizeExcludePaths(
-  input: unknown,
-  within?: string[],
-): Result<string[], PublicError> {
-  if (input === undefined) {
-    return { ok: true, value: [] };
-  }
-
-  if (!Array.isArray(input)) {
-    return invalid("exclude_paths must be an array of strings");
-  }
-
-  const normalized: string[] = [];
-  const seen = new Set<string>();
-  const expansionBase = resolveExcludeExpansionBase(within);
-  for (const entry of input) {
-    if (typeof entry !== "string") {
-      return invalid("exclude_paths must contain only strings");
-    }
-
-    const excludePath = expansionBase
-      ? validateExcludePathSyntax(entry)
-      : normalizeExcludePath(entry);
-    if (!excludePath.ok) {
-      return excludePath;
-    }
-
-    const paths =
-      containsExcludeGlobMeta(excludePath.value) && expansionBase !== undefined
-        ? expandExcludeGlobPath(expansionBase, excludePath.value)
-        : [excludePath.value];
-
-    for (const pathValue of paths) {
-      if (!seen.has(pathValue)) {
-        seen.add(pathValue);
-        normalized.push(pathValue);
-      }
-    }
-  }
-
-  return { ok: true, value: normalized };
-}
-
-export function normalizeCursor(value: unknown): Result<string | null, PublicError> {
-  if (value === undefined || value === null) {
-    return { ok: true, value: null };
-  }
-
-  if (typeof value === "string" && value.trim() !== "") {
-    return { ok: true, value };
-  }
-
-  return invalid("cursor must be a non-empty string when provided");
-}
-
-export function normalizeTerms(value: unknown): Result<string[], PublicError> {
-  if (!Array.isArray(value) || value.length === 0) {
-    return invalid("terms must contain at least one string");
-  }
-
-  const terms: string[] = [];
-  for (const entry of value) {
-    if (typeof entry !== "string" || entry.trim() === "") {
-      return invalid("terms must contain only non-empty strings");
-    }
-
-    terms.push(entry);
-  }
-
-  return { ok: true, value: terms };
-}
-
-export function normalizePatterns(value: unknown): Result<string[], PublicError> {
-  if (!Array.isArray(value) || value.length === 0) {
-    return invalid("patterns must contain at least one string");
-  }
-
-  const patterns: string[] = [];
-  for (const entry of value) {
-    if (typeof entry !== "string" || entry.trim() === "") {
-      return invalid("patterns must contain only non-empty strings");
-    }
-
-    patterns.push(entry);
-  }
-
-  return { ok: true, value: patterns };
-}
-
-function schemaFieldNames(schema: TSchema): string[] {
-  const properties = (schema as { properties?: Record<string, unknown> }).properties;
-  return Object.keys(properties ?? {});
-}
-
-function rejectUnknownFields(
-  input: Record<string, unknown>,
-  schema: TSchema,
-): Result<true, PublicError> {
-  const allowed = new Set(schemaFieldNames(schema));
-
-  for (const field of Object.keys(input)) {
-    if (!allowed.has(field)) {
-      return invalid(`unknown field '${field}'`);
-    }
-  }
-
-  return { ok: true, value: true };
-}
-
-/**
- * `within` accepts either a single absolute path or an array of absolute
- * paths (length ≥ 1). The multi-path form compiles to a single brace-expanded
- * constraint at the backend, so all entries must live under the same routing
- * target (git root or allowlisted prefix); the coordinator enforces that.
- */
-const withinSchema = Type.Union([
-  Type.String({ minLength: 1 }),
-  Type.Array(Type.String({ minLength: 1 }), { minItems: 1 }),
-]);
-
-export const findFilesInputSchema = Type.Object(
-  {
-    query: Type.String({ minLength: 1 }),
-    within: Type.Optional(withinSchema),
-    glob: Type.Optional(Type.String({ minLength: 1 })),
-    extensions: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
-    exclude_paths: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
-    limit: Type.Optional(Type.Integer({ minimum: 0 })),
-    cursor: Type.Optional(cursorSchema),
-    output_mode: Type.Optional(outputModeSchema),
-  },
-  { additionalProperties: false },
-);
-
-export const searchTermsInputSchema = Type.Object(
-  {
-    terms: Type.Array(Type.String({ minLength: 1 }), { minItems: 1 }),
-    within: Type.Optional(withinSchema),
-    glob: Type.Optional(Type.String({ minLength: 1 })),
-    extensions: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
-    exclude_paths: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
-    context_lines: Type.Optional(Type.Integer({ minimum: 0 })),
-    limit: Type.Optional(Type.Integer({ minimum: 0 })),
-    cursor: Type.Optional(cursorSchema),
-    output_mode: Type.Optional(outputModeSchema),
-  },
-  { additionalProperties: false },
-);
-
-export const grepInputSchema = Type.Object(
-  {
-    patterns: Type.Array(Type.String({ minLength: 1 }), { minItems: 1 }),
-    literal: Type.Boolean({
-      description:
-        "Required. If true, patterns are matched as literal text (safe for code, quotes, whitespace, and regex metacharacters). If false, patterns are regex. This tool does not guess; set it explicitly.",
-    }),
-    within: Type.Optional(withinSchema),
-    glob: Type.Optional(Type.String({ minLength: 1 })),
-    case_sensitive: Type.Optional(Type.Boolean()),
-    extensions: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
-    exclude_paths: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
-    context_lines: Type.Optional(Type.Integer({ minimum: 0 })),
-    limit: Type.Optional(Type.Integer({ minimum: 0 })),
-    cursor: Type.Optional(cursorSchema),
-    output_mode: Type.Optional(outputModeSchema),
-  },
-  { additionalProperties: false },
-);
-
-export const PUBLIC_TOOL_DEFINITIONS = [
-  defineTool(
-    "fff_find_files",
-    "Fuzzy file search by name/path under an already-resolved within scope. Use it when you are exploring a topic or looking for files, not when you already have a specific code identifier. `within` accepts a single absolute path or an array of absolute paths (multi-path unions the results — same semantics as passing multiple roots to `fd`). Keep queries short and let glob, extensions, and exclude_paths do the path narrowing.",
-    '{"query":"openssl header","within":"/opt/homebrew/lib","glob":"**/*.h","exclude_paths":["pkgconfig"]}',
-    findFilesInputSchema,
-  ),
-  ...(ENABLE_SEARCH_TERMS
-    ? [
-        defineTool(
-          "fff_search_terms",
-          "Search for one or more literal terms under an already-resolved within scope (absolute or HOME-based).",
-          '{"terms":["router","coordinator"],"within":"$HOME/.config"}',
-          searchTermsInputSchema,
-        ),
-      ]
-    : []),
-  defineTool(
-    "fff_grep",
-    "Search file contents under an already-resolved within scope. `literal` is REQUIRED: set literal=true for identifier searches, code fragments, or any string containing whitespace, quotes, or punctuation where regex interpretation is unwanted; set literal=false only when you need regex features (anchors, character classes, quantifiers, alternation). This tool does not guess. Use `patterns` for one or more terms; multiple entries use OR semantics. `within` accepts a single absolute path or an array of absolute paths — use the array form to replace shell patterns like `grep PAT file1 file2 dirA dirB` in one call (all entries must share a routing target). Use `glob` / `extensions` / `exclude_paths` to prefilter files aggressively.",
-    '{"patterns":["ActorAuth","actor_auth","PopulatedActorAuth"],"literal":true,"within":["crates/portl-cli/Cargo.toml","Cargo.toml"]}',
-    grepInputSchema,
-  ),
-] as const;
-
-export function createPublicError(code: PublicErrorCode, message: string): PublicError {
-  return { code, message };
-}
-
-export function publicErrorResult(
-  code: PublicErrorCode,
-  message: string,
-): Result<never, PublicError> {
-  return {
-    ok: false,
-    error: createPublicError(code, message),
-  };
-}
-
-export function parsePublicOutputMode(value: unknown): Result<PublicOutputMode, PublicError> {
-  if (value === undefined) {
-    return { ok: true, value: "compact" };
-  }
-
-  if (value === "compact" || value === "json") {
-    return { ok: true, value };
-  }
-
-  return invalid("output_mode must be one of: compact, json");
-}
-
-export function isCompactOutputMode(mode: PublicOutputMode): mode is "compact" {
-  return mode === "compact";
-}
-
-export function isJsonOutputMode(mode: PublicOutputMode): mode is "json" {
-  return mode === "json";
-}
-
-function normalizeFindFilesInput(
-  input: Record<string, unknown>,
-): Result<PublicFindFilesRequest, PublicError> {
-  const knownFields = rejectUnknownFields(input, findFilesInputSchema);
-  if (!knownFields.ok) {
-    return knownFields;
-  }
-
-  const query = parseRequiredString(input.query, "query");
-  if (!query.ok) {
-    return query;
-  }
-
-  const within = normalizeWithin(input.within);
-  if (!within.ok) {
-    return within;
-  }
-
-  const glob = normalizeGlob(input.glob);
-  if (!glob.ok) {
-    return glob;
-  }
-
-  const extensions = normalizeExtensions(input.extensions);
-  if (!extensions.ok) {
-    return extensions;
-  }
-
-  const excludePaths = normalizeExcludePaths(input.exclude_paths, within.value);
-  if (!excludePaths.ok) {
-    return excludePaths;
-  }
-
-  const limit = parseOptionalNonNegativeInt(input.limit, "limit", DEFAULT_LIMIT);
-  if (!limit.ok) {
-    return limit;
-  }
-
-  const cursor = normalizeCursor(input.cursor);
-  if (!cursor.ok) {
-    return cursor;
-  }
-
-  const outputMode = parsePublicOutputMode(input.output_mode);
-  if (!outputMode.ok) {
-    return outputMode;
-  }
-
-  const value: PublicFindFilesRequest = {
-    tool: "fff_find_files",
-    query: query.value,
-    ...(within.value !== undefined ? { within: within.value } : {}),
-    ...(glob.value !== undefined ? { glob: glob.value } : {}),
-    extensions: extensions.value,
-    excludePaths: excludePaths.value,
-    limit: limit.value,
-    cursor: cursor.value,
-    outputMode: outputMode.value,
-  };
-
-  return {
-    ok: true,
-    value,
-  };
-}
-
-function normalizeSearchTermsInput(
-  input: Record<string, unknown>,
-): Result<PublicSearchTermsRequest, PublicError> {
-  const knownFields = rejectUnknownFields(input, searchTermsInputSchema);
-  if (!knownFields.ok) {
-    return knownFields;
-  }
-
-  const terms = normalizeTerms(input.terms);
-  if (!terms.ok) {
-    return terms;
-  }
-
-  const within = normalizeWithin(input.within);
-  if (!within.ok) {
-    return within;
-  }
-
-  const glob = normalizeGlob(input.glob);
-  if (!glob.ok) {
-    return glob;
-  }
-
-  const extensions = normalizeExtensions(input.extensions);
-  if (!extensions.ok) {
-    return extensions;
-  }
-
-  const excludePaths = normalizeExcludePaths(input.exclude_paths, within.value);
-  if (!excludePaths.ok) {
-    return excludePaths;
-  }
-
-  const contextLines = parseOptionalNonNegativeInt(
-    input.context_lines,
-    "context_lines",
-    DEFAULT_CONTEXT_LINES,
-  );
-  if (!contextLines.ok) {
-    return contextLines;
-  }
-
-  const limit = parseOptionalNonNegativeInt(input.limit, "limit", DEFAULT_LIMIT);
-  if (!limit.ok) {
-    return limit;
-  }
-
-  const cursor = normalizeCursor(input.cursor);
-  if (!cursor.ok) {
-    return cursor;
-  }
-
-  const outputMode = parsePublicOutputMode(input.output_mode);
-  if (!outputMode.ok) {
-    return outputMode;
-  }
-
-  const value: PublicSearchTermsRequest = {
-    tool: "fff_search_terms",
-    terms: terms.value,
-    ...(within.value !== undefined ? { within: within.value } : {}),
-    ...(glob.value !== undefined ? { glob: glob.value } : {}),
-    extensions: extensions.value,
-    excludePaths: excludePaths.value,
-    contextLines: contextLines.value,
-    limit: limit.value,
-    cursor: cursor.value,
-    outputMode: outputMode.value,
-  };
-
-  return {
-    ok: true,
-    value,
-  };
-}
-
-function normalizeGrepInput(
-  input: Record<string, unknown>,
-): Result<PublicGrepRequest, PublicError> {
-  const knownFields = rejectUnknownFields(input, grepInputSchema);
-  if (!knownFields.ok) {
-    return knownFields;
-  }
-
-  const patterns = normalizePatterns(input.patterns);
-  if (!patterns.ok) {
-    return patterns;
-  }
-
-  if (typeof input.literal !== "boolean") {
-    return invalid(
-      "literal must be explicitly set to true or false; fff_grep does not guess between regex and literal interpretation",
-    );
-  }
-
-  const within = normalizeWithin(input.within);
-  if (!within.ok) {
-    return within;
-  }
-
-  const glob = normalizeGlob(input.glob);
-  if (!glob.ok) {
-    return glob;
-  }
-
-  if (input.case_sensitive !== undefined && typeof input.case_sensitive !== "boolean") {
-    return invalid("case_sensitive must be a boolean when provided");
-  }
-
-  const extensions = normalizeExtensions(input.extensions);
-  if (!extensions.ok) {
-    return extensions;
-  }
-
-  const excludePaths = normalizeExcludePaths(input.exclude_paths, within.value);
-  if (!excludePaths.ok) {
-    return excludePaths;
-  }
-
-  const contextLines = parseOptionalNonNegativeInt(
-    input.context_lines,
-    "context_lines",
-    DEFAULT_CONTEXT_LINES,
-  );
-  if (!contextLines.ok) {
-    return contextLines;
-  }
-
-  const limit = parseOptionalNonNegativeInt(input.limit, "limit", DEFAULT_LIMIT);
-  if (!limit.ok) {
-    return limit;
-  }
-
-  const cursor = normalizeCursor(input.cursor);
-  if (!cursor.ok) {
-    return cursor;
-  }
-
-  const outputMode = parsePublicOutputMode(input.output_mode);
-  if (!outputMode.ok) {
-    return outputMode;
-  }
-
-  const value: PublicGrepRequest = {
-    tool: "fff_grep",
-    patterns: patterns.value,
-    literal: input.literal,
-    ...(within.value !== undefined ? { within: within.value } : {}),
-    ...(glob.value !== undefined ? { glob: glob.value } : {}),
-    caseSensitive: input.case_sensitive ?? false,
-    extensions: extensions.value,
-    excludePaths: excludePaths.value,
-    contextLines: contextLines.value,
-    limit: limit.value,
-    cursor: cursor.value,
-    outputMode: outputMode.value,
-  };
-
-  return {
-    ok: true,
-    value,
-  };
+  const wildcardOnly = /^(?:[.^$]*(?:[.][*+?]|[*+])[.^$]*|[.^$\s]*|\.\*[+?]?|\.\+[?]?|[.*?])$/;
+  const rejected = patterns.find((pattern) => wildcardOnly.test(pattern.trim()));
+  return rejected
+    ? invalid(`regex '${rejected}' matches everything; provide a concrete expression`)
+    : { ok: true, value: undefined };
 }
 
 export function normalizePublicToolInput(
   tool: PublicToolName,
   input: unknown,
-): Result<PublicToolRequest, PublicError> {
-  if (!input || typeof input !== "object" || Array.isArray(input)) {
-    return invalid("request must be an object");
+  env: NodeJS.ProcessEnv = process.env,
+): Result<PublicToolRequest, RouterError> {
+  const schema = tool === "find_files" ? findFilesInputSchema : grepInputSchema;
+  const parsed = schema.safeParse(input);
+  if (!parsed.success) {
+    return invalid(formatZodError(parsed.error));
   }
 
-  const record = input as Record<string, unknown>;
-
-  switch (tool) {
-    case "fff_find_files":
-      return normalizeFindFilesInput(record);
-    case "fff_search_terms":
-      if (!ENABLE_SEARCH_TERMS) {
-        return invalid("fff_search_terms is disabled; use fff_grep with patterns instead");
-      }
-      return normalizeSearchTermsInput(record);
-    case "fff_grep":
-      return normalizeGrepInput(record);
+  const resolvedWithin = normalizeWithin(parsed.data.within, env);
+  if (!resolvedWithin.ok) {
+    return resolvedWithin;
   }
+
+  const common = {
+    within: resolvedWithin.value,
+    ...(parsed.data.glob
+      ? { glob: parsed.data.glob.trim().replace(/\\/g, "/").replace(/^\.\//, "") }
+      : {}),
+    extensions: [
+      ...new Set(parsed.data.extensions.map((value) => value.trim().replace(/^\./, ""))),
+    ],
+    excludePaths: [
+      ...new Set(
+        parsed.data.excludePaths.map((value) =>
+          value.trim().replace(/\\/g, "/").replace(/^\.\//, ""),
+        ),
+      ),
+    ],
+    limit: parsed.data.limit,
+    cursor: parsed.data.cursor,
+  };
+
+  if (tool === "find_files") {
+    const data = parsed.data as z.output<typeof findFilesInputSchema>;
+    const request: PublicFindFilesRequest = {
+      tool,
+      query: data.query.trim(),
+      ...common,
+    };
+    return { ok: true, value: request };
+  }
+
+  const data = parsed.data as z.output<typeof grepInputSchema>;
+  const concreteRegex = rejectWildcardOnlyRegex(data.patterns, data.literal);
+  if (!concreteRegex.ok) {
+    return concreteRegex;
+  }
+  const request: PublicGrepRequest = {
+    tool,
+    patterns: [...new Set(data.patterns)],
+    literal: data.literal,
+    contextLines: data.contextLines,
+    ...common,
+  };
+  return { ok: true, value: request };
 }

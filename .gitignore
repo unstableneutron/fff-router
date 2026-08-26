@@ -2,7 +2,7 @@
 docs/superpowers/
 scratch/
 
-# dependencies (bun install)
+# dependencies
 node_modules
 
 # output
