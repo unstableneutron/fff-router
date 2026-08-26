@@ -24,6 +24,8 @@ fff setup
 
 With aube already installed, `aube add --global github:unstableneutron/fff-router` is the supported alternative. `fff update` uses the same priority: Corepack/pnpm, aube, then a standalone pnpm.
 
+Git installs do not run package lifecycle scripts. They consume the committed `dist` output, which maintainers verify with `pnpm run check:dist` before publishing.
+
 `fff setup` downloads the latest compatible upstream `fff-mcp` release, verifies its SHA-256 checksum, installs it under `~/.local/bin` by default, and starts `fff-routerd`. The router discovers that managed binary even if `~/.local/bin` is not on `PATH`.
 
 To use an existing binary instead:

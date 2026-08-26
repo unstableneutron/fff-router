@@ -18,6 +18,7 @@ describe("published package contract", () => {
     expect(manifest.exports["./client"]).toHaveProperty("types");
     expect(manifest.exports["./protocol"]).toHaveProperty("types");
     expect(manifest.exports["./server"]).toHaveProperty("types");
+    expect(manifest.scripts).not.toHaveProperty("prepare");
     expect(manifest.dependencies).not.toHaveProperty("@ff-labs/fff-node");
     expect(manifest.dependencies).not.toHaveProperty("@sinclair/typebox");
   });

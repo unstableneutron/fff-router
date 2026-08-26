@@ -34,7 +34,6 @@
   "scripts": {
     "build": "node scripts/build-package.mjs",
     "build:package": "node scripts/build-package.mjs",
-    "prepare": "node scripts/build-package.mjs",
     "test": "vitest run",
     "check:dist": "node scripts/build-package.mjs && git diff --exit-code -- dist",
     "format": "node scripts/format-package.mjs",
