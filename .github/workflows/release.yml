@@ -1,0 +1,83 @@
+name: Release native binaries
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  native:
+    name: Build ${{ matrix.artifact }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            artifact: fff-linux-x64
+            target: linux
+          - runner: ubuntu-24.04-arm
+            artifact: fff-linux-arm64
+            target: linux-aarch64
+          - runner: macos-14
+            artifact: fff-darwin-arm64
+            target: macos
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - run: corepack enable
+      - run: corepack prepare pnpm@11.19.0 --activate
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec vitest run lib/fff-router/process-supervisor.test.ts lib/fff-router/legacy-mcp-client.test.ts
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install --yes clang jq libssl-dev
+      - if: runner.os == 'macOS'
+        run: |
+          brew install jq openssl@3
+          echo "LIBRARY_PATH=$(brew --prefix openssl@3)/lib" >> "$GITHUB_ENV"
+          echo "CPATH=$(brew --prefix openssl@3)/include" >> "$GITHUB_ENV"
+      - run: pnpm check:perry
+      - run: pnpm build:native -- --target ${{ matrix.target }} --output dist/native/${{ matrix.artifact }}
+      - run: dist/native/${{ matrix.artifact }} --version
+      - if: runner.os == 'Linux'
+        run: |
+          ldd dist/native/${{ matrix.artifact }}
+          ! ldd dist/native/${{ matrix.artifact }} | grep -E 'not found|libnode'
+      - if: runner.os == 'macOS'
+        run: |
+          otool -L dist/native/${{ matrix.artifact }}
+          ! otool -L dist/native/${{ matrix.artifact }} | grep -E '/opt/homebrew|/usr/local'
+      - run: bash scripts/native-live-smoke.sh dist/native/${{ matrix.artifact }} .
+      - if: always()
+        run: |
+          if test -f dist/native/${{ matrix.artifact }}; then
+            cd dist/native
+            shasum -a 256 ${{ matrix.artifact }} > ${{ matrix.artifact }}.sha256
+          fi
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          if-no-files-found: ignore
+          path: |
+            dist/native/${{ matrix.artifact }}
+            dist/native/${{ matrix.artifact }}.attest.json
+            dist/native/${{ matrix.artifact }}.sha256
+
+  publish:
+    needs: native
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release
+          merge-multiple: true
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" release/* --generate-notes --verify-tag

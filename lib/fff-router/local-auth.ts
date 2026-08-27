@@ -1,5 +1,5 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
-import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { getDaemonPaths } from "./daemon-config";
 
 function validToken(value: string): boolean {
@@ -9,8 +9,12 @@ function validToken(value: string): boolean {
 export async function readDaemonAuthToken(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<string | null> {
+  const tokenPath = getDaemonPaths({ env }).authTokenPath;
+  if (!existsSync(tokenPath)) {
+    return null;
+  }
   try {
-    const token = (await readFile(getDaemonPaths({ env }).authTokenPath, "utf8")).trim();
+    const token = readFileSync(tokenPath, "utf8").trim();
     return validToken(token) ? token : null;
   } catch {
     return null;
@@ -19,21 +23,21 @@ export async function readDaemonAuthToken(
 
 export async function ensureDaemonAuthToken(env: NodeJS.ProcessEnv = process.env): Promise<string> {
   const paths = getDaemonPaths({ env });
-  await mkdir(paths.dir, { recursive: true, mode: 0o700 });
+  mkdirSync(paths.dir, { recursive: true, mode: 0o700 });
   if (process.platform !== "win32") {
-    await chmod(paths.dir, 0o700);
+    chmodSync(paths.dir, 0o700);
   }
   const existing = await readDaemonAuthToken(env);
   if (existing) {
     if (process.platform !== "win32") {
-      await chmod(paths.authTokenPath, 0o600);
+      chmodSync(paths.authTokenPath, 0o600);
     }
     return existing;
   }
 
   const token = randomBytes(32).toString("base64url");
   try {
-    await writeFile(paths.authTokenPath, `${token}\n`, { flag: "wx", mode: 0o600 });
+    writeFileSync(paths.authTokenPath, `${token}\n`, { flag: "wx", mode: 0o600 });
     return token;
   } catch (caught) {
     if (typeof caught === "object" && caught && "code" in caught && caught.code === "EEXIST") {

@@ -1,6 +1,12 @@
 import { PACKAGE_MANAGER, PACKAGE_VERSION } from "./daemon-config";
 import { ensureDaemonRunning, readDaemonLogs } from "./daemon-autostart";
-import { getDaemonStatus, getDoctorReport, reloadDaemon, stopDaemon } from "./daemon-cli";
+import {
+  getDaemonStatus,
+  getDoctorReport,
+  reloadDaemon,
+  runForegroundDaemon,
+  stopDaemon,
+} from "./daemon-cli";
 import { checkFffMcpUpdate, installFffMcpUpdate, runInteractiveUpdate } from "./daemon-update";
 import { RouterClient } from "./http-client";
 import { runMcpHttpBridge } from "./mcp-bridge";
@@ -34,7 +40,7 @@ Usage:
   fff setup
   fff update
   fff mcp
-  fff daemon <start|stop|restart|reload|logs>
+  fff daemon <start|stop|restart|reload|logs> [--clear-runtimes]
 
 Search options:
   -w, --within <path>       Search scope; repeat for multiple paths
@@ -334,9 +340,22 @@ async function runStatus(argv: string[], env: NodeJS.ProcessEnv): Promise<number
   const workers = status.workers ?? [];
   process.stdout.write(`${workers.length} worker${workers.length === 1 ? "" : "s"}\n`);
   for (const worker of workers) {
+    const rss = worker.resources?.rssBytes;
     process.stdout.write(
-      `  ${worker.state.padEnd(8)} ${worker.root} (leases ${worker.activeLeases}, generation ${worker.generation})\n`,
+      `  ${worker.state.padEnd(8)} ${worker.root} (leases ${worker.activeLeases}, generation ${worker.generation}${rss !== undefined ? `, rss ${Math.ceil(rss / 1_048_576)} MiB` : ""})\n`,
     );
+  }
+  const client = new RouterClient({ env, autoStart: false });
+  try {
+    const detailed = await client.status();
+    if (detailed.ok && detailed.value.resources) {
+      const resources = detailed.value.resources;
+      process.stdout.write(
+        `memory: daemon ${Math.ceil(resources.daemonRssBytes / 1_048_576)} MiB, workers ${Math.ceil(resources.workerRssBytes / 1_048_576)} MiB, total ${Math.ceil(resources.totalRssBytes / 1_048_576)} MiB\n`,
+      );
+    }
+  } finally {
+    await client.close();
   }
   return 0;
 }
@@ -361,10 +380,15 @@ async function runDaemon(argv: string[], env: NodeJS.ProcessEnv): Promise<number
   if (argv.some((entry) => entry === "--help" || entry === "-h")) {
     throw new HelpRequested(HELP);
   }
-  if (argv.length !== 1) {
+  const clearRuntimes = argv.includes("--clear-runtimes");
+  const positionals = argv.filter((entry) => entry !== "--clear-runtimes");
+  if (positionals.length !== 1) {
     throw new UsageError("daemon requires exactly one action");
   }
-  const command = argv[0];
+  const command = positionals[0];
+  if (clearRuntimes && command !== "reload") {
+    throw new UsageError("--clear-runtimes is only valid with daemon reload");
+  }
   switch (command) {
     case "start":
       await ensureDaemonRunning(env);
@@ -381,7 +405,7 @@ async function runDaemon(argv: string[], env: NodeJS.ProcessEnv): Promise<number
       process.stdout.write("restarted fff-routerd\n");
       return 0;
     case "reload":
-      if (!(await reloadDaemon(env))) {
+      if (!(await reloadDaemon(env, { clearRuntimes }))) {
         throw new Error("fff-routerd is not running");
       }
       process.stdout.write("reloaded fff-routerd\n");
@@ -436,6 +460,10 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
       case "mcp":
         requireNoArguments(rest, "mcp");
         await runMcpHttpBridge({ env });
+        return 0;
+      case "__daemon":
+        requireNoArguments(rest, "__daemon");
+        await runForegroundDaemon(env);
         return 0;
       case "daemon":
         return await runDaemon(rest, env);

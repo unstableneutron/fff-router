@@ -1,34 +1,47 @@
 # fff-router
 
-`fff-router` is a machine-local routing layer for [FFF](https://github.com/dmtrKovalenko/fff). One per-user `fff-routerd` daemon owns a bounded pool of warm `fff-mcp` child processes—one process and index per repository root—and shares those workers across CLIs, MCP clients, Prime Agent extensions, and Pi extensions.
+`fff-router` is a machine-local routing and supervision layer for
+[FFF](https://github.com/dmtrKovalenko/fff). One per-user daemon owns a bounded pool of
+warm `fff-mcp` child processes—one process and index per repository root—and shares them
+across the CLI, TypeScript SDK, direct HTTP MCP clients, and stdio MCP hosts.
 
-Version 1 deliberately supports one backend: upstream `fff-mcp`. There is no embedded `fff-node`, `rg` fallback, backend selector, or legacy wrapper API.
+Version 2 has one backend (`fff-mcp`), no runtime npm dependencies, and a public MCP
+boundary targeting the stateless `2026-07-28` specification. The upstream worker still
+speaks its older stdio MCP revision; that compatibility handshake and compact-text parser
+are isolated in the worker adapter.
 
-## Install from GitHub
+## Install
 
-Node.js 22 or newer is required. Corepack pins the repository to pnpm 11.19.0; aube can also consume the committed pnpm lockfile for development workflows.
+### Native CLI and daemon
+
+Tagged releases build one self-contained Perry executable for:
+
+- macOS Apple Silicon (`fff-darwin-arm64`)
+- Linux ARM64 (`fff-linux-arm64`)
+- Linux x86-64 (`fff-linux-x64`)
+
+The same executable is both the CLI and daemon. A native CLI auto-starts itself with the
+hidden `__daemon` mode, so Node.js and a separate `fff-routerd` binary are not required.
+Run `fff setup` once after installing it; setup downloads the matching upstream `fff-mcp`
+binary and verifies its SHA-256 checksum. Native setup uses the platform `curl` command
+(included with macOS; install it with your Linux package manager if absent) through a
+deadline-bound, status-file adapter because Perry 0.5.1220 does not reliably deliver one-shot
+child exit callbacks. The TypeScript package uses bounded built-in fetch.
+
+### TypeScript SDK / Node CLI
+
+Node.js 22 or newer is required for the package build and SDK. Corepack pins pnpm:
 
 ```sh
 corepack pnpm@11.19.0 add --global github:unstableneutron/fff-router
 fff setup
 ```
 
-If pnpm's global home is not configured yet, run `corepack pnpm@11.19.0 setup` once and start a new shell before installing. In a disposable or non-interactive shell, configure it without editing a shell profile:
+If pnpm's global home is not configured, run `corepack pnpm@11.19.0 setup` once. `aube add
+--global github:unstableneutron/fff-router` is also supported. `fff update` prefers
+Corepack/pnpm, then aube, then a standalone pnpm.
 
-```sh
-export PNPM_HOME="${XDG_DATA_HOME:-$HOME/.local/share}/pnpm"
-export PATH="$PNPM_HOME/bin:$PATH"
-corepack pnpm@11.19.0 add --global github:unstableneutron/fff-router
-fff setup
-```
-
-With aube already installed, `aube add --global github:unstableneutron/fff-router` is the supported alternative. `fff update` uses the same priority: Corepack/pnpm, aube, then a standalone pnpm.
-
-Git installs do not run package lifecycle scripts. They consume the committed `dist` output, which maintainers verify with `pnpm run check:dist` before publishing.
-
-`fff setup` downloads the latest compatible upstream `fff-mcp` release, verifies its SHA-256 checksum, installs it under `~/.local/bin` by default, and starts `fff-routerd`. The router discovers that managed binary even if `~/.local/bin` is not on `PATH`.
-
-To use an existing binary instead:
+To use an existing worker binary:
 
 ```sh
 export FFF_ROUTER_FFF_MCP_BIN=/absolute/path/to/fff-mcp
@@ -42,21 +55,17 @@ fff doctor
 fff find router --within .
 fff find coordinator -w packages/api -e ts -e tsx --json
 
-# Literal content search (the default)
+# Literal content search (default) or explicit regex
 fff grep createRouterService -w . -C 2
-
-# Explicit regular expression search
 fff grep 'create(Router|Worker)' --regex -w lib --json
 
-# Prewarm one worker/index per discovered repository root
+# Pool management
 fff warm ~/src/project-a ~/src/project-b
-
-# Inspect and manage the shared pool
 fff status
 fff evict ~/src/project-a
 fff doctor
 
-# Daemon lifecycle
+# The daemon starts the authenticated HTTP MCP endpoint too
 fff daemon start
 fff daemon reload
 fff daemon restart
@@ -64,25 +73,19 @@ fff daemon stop
 fff daemon logs
 ```
 
-Run `fff --help` for all options. Human output preserves upstream FFF's compact rendering where possible. `--json` always emits the normalized v1 schema.
-
-### Exit codes
-
-| Code | Meaning                                    |
-| ---: | ------------------------------------------ |
-|  `0` | Success                                    |
-|  `1` | Runtime, daemon, worker, or search failure |
-|  `2` | Invalid CLI usage                          |
+Human output preserves upstream FFF's compact rendering where possible. `--json` emits the
+normalized v2 result schema. Exit code `0` is success, `1` is a runtime failure, and `2` is
+invalid CLI usage.
 
 ## TypeScript SDK
 
-Install the package in a Prime Agent or Pi extension and import the high-level client:
+Extensions should import the client, not the worker pool. That preserves one shared daemon
+and one warm index per root:
 
 ```ts
 import { getRouterClient } from "fff-router";
 
 const fff = await getRouterClient({ cwd: process.cwd() });
-
 const files = await fff.findFiles({
   query: "router",
   within: ".",
@@ -90,63 +93,69 @@ const files = await fff.findFiles({
   limit: 20,
 });
 
-if (!files.ok) {
-  throw new Error(`${files.error.code}: ${files.error.message}`);
-}
-
-for (const hit of files.value.items) {
-  console.log(hit.absolutePath);
-}
+if (!files.ok) throw new Error(`${files.error.code}: ${files.error.message}`);
+for (const hit of files.value.items) console.log(hit.absolutePath);
 ```
 
-The SDK resolves relative and home-relative `within` paths in the caller process before sending an absolute wire request. `getRouterClient()` keeps a process-global connection singleton, so multiple extension modules do not create duplicate HTTP clients or daemons.
-
-Available package exports:
+The SDK resolves relative and home-relative scopes in the caller before sending absolute
+paths over the wire. `getRouterClient()` keeps one process-global client per endpoint.
 
 | Export                | Intended use                                                       |
 | --------------------- | ------------------------------------------------------------------ |
-| `fff-router`          | High-level client, normalized request/result types, and schemas    |
+| `fff-router`          | High-level client, normalized types, and static schemas            |
 | `fff-router/client`   | `RouterClient`, `connectRouter`, and client input types            |
-| `fff-router/protocol` | Canonical Zod v4 input/output schemas and request normalization    |
-| `fff-router/server`   | Daemon, worker pool, adapter, and service primitives for embedding |
+| `fff-router/protocol` | JSON Schema 2020-12 plus dependency-free runtime validators        |
+| `fff-router/server`   | Daemon, supervisor pool, adapter, and service embedding primitives |
 
-An embedding can run the same server implementation directly:
+## MCP access
 
-```ts
-import { startHttpDaemon } from "fff-router/server";
+Running `fff daemon start` starts the generic HTTP MCP endpoint at
+`http://127.0.0.1:4319/mcp` by default. It is not coupled to `fff mcp`.
 
-const daemon = await startHttpDaemon();
-// await daemon.close();
+The endpoint implements stateless MCP `2026-07-28`:
+
+- no `initialize`, session ID, GET stream, or DELETE lifecycle;
+- `server/discover` is implemented;
+- every request carries protocol version and client capabilities in `_meta`;
+- HTTP requests require `MCP-Protocol-Version`, `Mcp-Method`, and, for tool calls,
+  `Mcp-Name`;
+- successful results include `resultType: "complete"`;
+- Origin validation and a random per-user bearer capability protect the loopback endpoint.
+
+The SDK reads the capability automatically. A direct HTTP request looks like:
+
+```http
+POST /mcp HTTP/1.1
+Host: 127.0.0.1:4319
+Authorization: Bearer <contents of ~/.local/state/fff-routerd/auth-token>
+Content-Type: application/json
+Accept: application/json, text/event-stream
+MCP-Protocol-Version: 2026-07-28
+Mcp-Method: tools/call
+Mcp-Name: find_files
+
+{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"find_files","arguments":{"query":"router","within":"/absolute/repo"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientInfo":{"name":"example","version":"1"},"io.modelcontextprotocol/clientCapabilities":{}}}}
 ```
 
-## MCP hosts
-
-`fff mcp` is a stdio bridge to the already shared daemon. Configure it as one MCP server instead of launching one upstream `fff-mcp` per repository or host session:
+`fff mcp` exposes the same modern contract over stdio for hosts that prefer a command-based
+MCP configuration:
 
 ```json
 {
   "mcpServers": {
-    "fff": {
-      "command": "fff",
-      "args": ["mcp"]
-    }
+    "fff": { "command": "fff", "args": ["mcp"] }
   }
 }
 ```
 
-The MCP tools are:
+Available tools are `find_files`, `grep`, `router_status`, `router_warm`, and
+`router_evict`. MCP wire scopes must be absolute; SDK and CLI scopes may be relative.
 
-- `find_files`
-- `grep`
-- `router_status`
-- `router_warm`
-- `router_evict`
+## Normalized protocol
 
-Search tools require absolute `within` paths on the MCP wire. SDK and CLI callers may use relative paths because they have a well-defined caller working directory.
-
-## Normalized v1 schema
-
-Zod v4 is the single input-schema source for the SDK normalization and MCP JSON Schema. Public names are camelCase, while MCP tool names retain upstream-compatible snake case.
+Inputs and outputs use one dependency-free TypeScript contract. Runtime validators and
+JSON Schema are defined together in `public-api.ts`; there is no AJV, Zod, Proxy, eval, or
+runtime-generated validator in the native module graph.
 
 ```ts
 type FindFilesInput = {
@@ -172,72 +181,48 @@ type GrepInput = {
 };
 ```
 
-A successful result has one stable shape. The SDK validates daemon responses with the exported Zod schemas before returning them to callers:
+Successful searches contain a root, normalized items, an opaque router cursor, and stats
+including `coldStart`, `workerId`, and `workerGeneration`. Cursors are bound to the root,
+complete query, and worker generation; they expire instead of silently replaying against a
+restarted index.
 
-```ts
-type SearchResult = {
-  tool: "find_files" | "grep";
-  root: string;
-  backend: "fff-mcp";
-  items: Array<{
-    path: string; // relative to root
-    absolutePath: string;
-    line?: number;
-    text?: string;
-    column?: number;
-    contextBefore?: string[];
-    contextAfter?: string[];
-    isDefinition?: boolean;
-    definitionBody?: string[];
-  }>;
-  nextCursor: string | null;
-  stats: {
-    resultCount: number;
-    upstreamShownCount?: number;
-    upstreamTotalCount?: number;
-    coldStart: boolean;
-    workerId: string;
-    workerGeneration: number;
-  };
-  readRecommendation?: {
-    path: string;
-    absolutePath: string;
-    reason?: string;
-  };
-  displayText?: string;
-};
-```
-
-`resultCount` is the number of normalized items actually returned. The optional
-`upstream*` counts preserve `fff-mcp`'s pre-filter summary and may therefore be larger.
-
-Router cursors wrap upstream cursors and bind them to the repository, complete search request, and worker generation. A cursor cannot be reused with a different query or root, and it expires clearly if its worker restarts. This prevents upstream's worker-local cursor IDs from silently restarting at page one.
-
-There is no public `caseSensitive` option: upstream `fff-mcp` owns its smart-case behavior, and the router does not advertise a switch it cannot faithfully implement.
-
-## Process and index model
+## Process model and supervisor
 
 ```mermaid
 flowchart TD
-  C["CLI / SDK / MCP clients"] --> D["one fff-routerd"]
-  D --> A["fff-mcp: repo A"]
-  D --> B["fff-mcp: repo B"]
-  D --> N["fff-mcp: allowed non-Git root"]
+  C["CLI / SDK / MCP clients"] --> D["one fff daemon"]
+  D --> A["supervised fff-mcp: repo A"]
+  D --> B["supervised fff-mcp: repo B"]
+  D --> N["supervised fff-mcp: allowed non-Git root"]
 ```
 
-- Git-backed requests route to the discovered Git root.
-- Non-Git requests are denied unless they are under a configured allowlist; each first child below an allowlist entry becomes an isolated worker root.
-- Concurrent cold requests for one root share the same startup promise.
-- Every call holds a worker lease. TTL, LRU, explicit eviction, reload, and capacity enforcement drain a busy worker and close it only after its final lease releases.
-- Unexpected exits and startup failures are diagnosed and restarted with backoff.
-- A stale transport or timed-out first-page call gets one fresh-worker retry. Cursor calls are not replayed across workers.
+Each worker is launched in its own process group on Linux and macOS. The supervisor:
 
-The adapter intentionally retains a bounded parser for upstream `fff-mcp`'s compact text output because the upstream project is outside this repository's control. Parsing, path filtering, and compact-text rewriting live together in `adapters/fff-mcp-stdio.ts`; everything above the adapter uses normalized structured objects.
+- deduplicates concurrent cold starts and holds active-call leases;
+- samples RSS, cumulative CPU time, and process/thread counts (including descendants through
+  `/proc` on Linux);
+- terminates a worker after two consecutive per-worker RSS violations;
+- evicts the largest idle workers when aggregate sampled RSS exceeds its cap;
+- bounds stdout messages and retained stderr diagnostics;
+- turns tool timeouts and malformed/closed transports into worker invalidation;
+- closes stdin, then escalates to process-group `SIGTERM` and `SIGKILL`;
+- applies capped exponential restart backoff and bounded dead-worker history;
+- gives upstream `fff-mcp` a nonzero idle timeout as an orphan failsafe.
+
+`fff status --json` reports each PID, generation, lease count, last activity/error,
+termination reason, and last resource sample. It also separates daemon RSS, worker RSS, and
+their measured total. Sampling and RSS caps are supervisor-enforced soft limits, not kernel
+quotas. For hostile workloads, add an OS boundary such as a cgroup/systemd unit on Linux or
+a launchd/container policy on macOS.
+
+The daemon exits after 30 minutes without an active request by default, closing all worker
+groups first. Any CLI/SDK/MCP request resets that timer. Set `daemonIdleTimeoutMs` to `0` to
+keep it resident. Autostart is transparent, so a later request starts it again.
 
 ## Configuration
 
-The daemon creates `~/.config/fff-routerd/config.json` on first use, or
-`$XDG_CONFIG_HOME/fff-routerd/config.json` when `XDG_CONFIG_HOME` is set:
+The daemon creates `~/.config/fff-routerd/config.json`, or
+`$XDG_CONFIG_HOME/fff-routerd/config.json`:
 
 ```json
 {
@@ -252,39 +237,73 @@ The daemon creates `~/.config/fff-routerd/config.json` on first use, or
   },
   "limits": {
     "maxWorkers": 12,
-    "maxNonGitWorkers": 4
+    "maxNonGitWorkers": 4,
+    "maxWorkerRssBytes": 805306368,
+    "maxTotalWorkerRssBytes": 2147483648
   },
   "runtime": {
     "toolTimeoutMs": 30000,
     "sweepIntervalMs": 30000,
-    "restartBackoffMs": 1000
+    "restartBackoffMs": 1000,
+    "restartBackoffMaxMs": 60000,
+    "processSampleIntervalMs": 5000,
+    "processShutdownGraceMs": 500,
+    "processKillGraceMs": 1000,
+    "workerOrphanIdleTimeoutMs": 1800000,
+    "daemonIdleTimeoutMs": 1800000
   }
 }
 ```
 
-`config.jsonc` is also accepted when `config.json` does not exist. Unknown fields—including the removed `backend` field—are rejected. Sending `SIGHUP` or running `fff daemon reload` applies reloadable worker policy. `SIGUSR2` reloads configuration and drains all workers.
+Non-Git requests are denied unless they fall under an allowlist entry; each first child
+below an entry becomes an isolated root. The daemon refuses non-loopback binds. Config is
+polled portably and can also be applied immediately over the authenticated control endpoint
+with `fff daemon reload`; `fff daemon reload --clear-runtimes` reloads and drains all workers.
+POSIX signals remain a foreground-runtime fallback, but are not the cross-runtime control
+contract. Routing policy is cooperative protection, not an OS filesystem sandbox: the
+processes retain their user's normal file permissions.
 
-The HTTP daemon is intentionally machine-local and refuses non-loopback bind addresses. MCP requests also require a random bearer capability stored in the per-user state directory with mode `0600`; unauthenticated health checks reveal only daemon compatibility metadata, not worker roots. `fff mcp` is a stateless stdio facade over that same authenticated loopback endpoint, so it does not require a Unix socket or named pipe. Do not treat routing policy as an OS sandbox: the daemon can search files readable by its user inside permitted roots.
+## Native development and release
 
-## Breaking changes from 0.x
+Perry is pinned as a dev dependency and strict mode rejects eval, runtime-computed imports,
+and recognized-but-unimplemented Node APIs:
 
-- Removed `@ff-labs/fff-node` and the `rg`/`fd` adapter path.
-- Removed backend and fallback configuration.
-- Removed `fff-find-files` and `fff-grep`; use `fff find` and `fff grep`.
-- Removed legacy `fff_*` public tool names and compatibility output modes.
-- Removed `search_terms`; use literal `grep` with multiple patterns.
-- Removed the ineffective explicit case-sensitivity option.
-- Replaced snake_case result fields with one camelCase structured schema.
-- Replaced split lifecycle/runtime registries with one lease-safe `WorkerPool`.
+```sh
+corepack pnpm install --frozen-lockfile
+corepack pnpm check:perry
+corepack pnpm build:native
+```
+
+Native builds also require Git, Rust/Cargo 1.88.0, and Clang (or Xcode Command Line Tools
+on macOS). Linux build hosts need `libssl-dev`. The published Perry 0.5.1220
+platform package does not include the native HTTP/net wrapper archives used by this daemon,
+so the build script fetches its exact source revision
+`06137858dc8c6f80975238377138f2f948d6ef88` and lets Perry build a source-matched runtime.
+Both that checkout and Cargo outputs are cached below `dist/native/`; set
+`PERRY_WORKSPACE_ROOT` to an existing checkout at that revision to supply it explicitly.
+
+`build:native` compiles `bin/fff.ts`, emits a native provenance attestation, and supports
+`--target linux`, `--target linux-aarch64`, and `--target macos`. macOS artifacts are built
+on Apple Silicon runners; Linux x64 and ARM64 use their corresponding Linux runners. CI
+runs type/lint/test/package checks plus all three native builds. A `v*` tag publishes the
+binaries, attestations, and SHA-256 files to a GitHub Release.
+
+The native executable still launches the separate upstream static `fff-mcp` worker. This
+keeps upstream indexing behavior intact while removing Node/V8 from the router and CLI.
+The native worker transport uses standard POSIX `/bin/sh`, `mkfifo`, `mv`, and `rm`
+utilities, which are present by default on the supported macOS and Linux release hosts.
 
 ## Development
 
 ```sh
 corepack pnpm install --frozen-lockfile
+corepack pnpm check
 corepack pnpm test
-corepack pnpm run check
-corepack pnpm run build
+corepack pnpm build
+FFF_ROUTER_FFF_MCP_BIN=/path/to/fff-mcp corepack pnpm smoke:live -- .
 corepack pnpm pack
 ```
 
-`pnpm run build` bundles the two executables and public JavaScript entrypoints, then emits TypeScript declarations for every exported SDK surface.
+`pnpm build` bundles the Node CLI and public SDK entrypoints and emits TypeScript
+declarations. `smoke:live` drives the modern HTTP boundary through a real upstream worker
+and asserts that find and grep reuse one worker generation.

@@ -19,12 +19,7 @@ const packageEntrypoints = [
   "bin/fff.ts",
   "bin/fff-routerd.ts",
 ];
-const externalPackages = ["@modelcontextprotocol/sdk", "picomatch", "zod"];
 const executableOutputs = ["dist/bin/fff.js", "dist/bin/fff-routerd.js"];
-
-function externalPatterns() {
-  return externalPackages.flatMap((pkg) => [pkg, `${pkg}/*`]);
-}
 
 async function ensureHashbang(relativePath) {
   const absolutePath = path.join(rootDir, relativePath);
@@ -51,7 +46,6 @@ await build({
   platform: "node",
   target: "node22",
   format: "esm",
-  external: externalPatterns(),
   logLevel: "info",
 });
 await execFileAsync(process.execPath, [

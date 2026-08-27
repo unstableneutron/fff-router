@@ -18,9 +18,9 @@ async function configEnv(value: unknown) {
   return env;
 }
 
-describe("v1 daemon config", () => {
-  test("uses an explicit v1 protocol identity", () => {
-    expect(DAEMON_PROTOCOL_VERSION).toBe("fff-router-v1");
+describe("v2 daemon config", () => {
+  test("uses an explicit v2 protocol identity", () => {
+    expect(DAEMON_PROTOCOL_VERSION).toBe("fff-router-v2");
   });
 
   test("honors XDG_CONFIG_HOME without changing home expansion", async () => {
@@ -63,6 +63,11 @@ describe("v1 daemon config", () => {
   test("rejects non-loopback binds", async () => {
     const env = await configEnv({ host: "0.0.0.0" });
     expect(() => getDaemonConfig({ env })).toThrow(/machine-local/);
+  });
+
+  test.each(["/health", "/control"])("reserves daemon path %s", async (mcpPath) => {
+    const env = await configEnv({ mcpPath });
+    expect(() => getDaemonConfig({ env })).toThrow(/reserved/);
   });
 
   test("rejects incoherent worker limits", async () => {

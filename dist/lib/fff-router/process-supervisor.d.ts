@@ -1,0 +1,65 @@
+import { type ChildProcessWithoutNullStreams, type SpawnOptionsWithoutStdio } from "node:child_process";
+import type { WorkerResourceUsage, WorkerSupervisionTelemetry } from "./types";
+export type SupervisedProcessExit = {
+    code: number | null;
+    signal: NodeJS.Signals | null;
+    reason?: string;
+};
+export type ProcessSupervisorOptions = {
+    command: string;
+    args: string[];
+    cwd: string;
+    env: Record<string, string>;
+    sampleIntervalMs: number;
+    maxRssBytes?: number;
+    maxRssSamples?: number;
+    shutdownGraceMs: number;
+    killGraceMs: number;
+    maxStderrBytes?: number;
+    sample?: (pid: number) => Promise<WorkerResourceUsage | null>;
+    spawnProcess?: (command: string, args: readonly string[], options: SpawnOptionsWithoutStdio & {
+        stdio: "pipe";
+        detached: boolean;
+    }) => ChildProcessWithoutNullStreams;
+};
+export declare function signalNativeProcessGroup(pid: number, signal: NodeJS.Signals): Promise<void>;
+export declare function terminateNativeProcessGroup(pid: number, shutdownGraceMs: number, killGraceMs: number): Promise<void>;
+export declare function parseLinuxProcStatCpuTime(value: string): number | undefined;
+export declare function sampleProcessResources(pid: number): Promise<WorkerResourceUsage | null>;
+export declare class ProcessSupervisor {
+    private readonly options;
+    readonly child: ChildProcessWithoutNullStreams;
+    readonly spawned: Promise<void>;
+    readonly telemetry: WorkerSupervisionTelemetry;
+    private readonly exitPromise;
+    private resolveExit;
+    private readonly closeHandlers;
+    private readonly resourceHandlers;
+    private readonly terminationHandlers;
+    private readonly sample;
+    private sampleTimer;
+    private exitPollTimer;
+    private sampling;
+    private stderrTail;
+    private overRssSamples;
+    private closePromise;
+    private exited;
+    constructor(options: ProcessSupervisorOptions);
+    get pid(): number | null;
+    getStderrTail(): string;
+    getResourceUsage(): WorkerResourceUsage | null;
+    getTerminationReason(): string | undefined;
+    onClose(handler: (exit: SupervisedProcessExit) => void): () => void;
+    onResourceSample(handler: () => void): () => void;
+    onTermination(handler: () => void): () => void;
+    private selectTerminationReason;
+    private scheduleExitPoll;
+    private scheduleSample;
+    private recordExit;
+    sampleNow(): Promise<WorkerResourceUsage | null>;
+    private signal;
+    private exitedWithin;
+    terminate(reason?: string): Promise<void>;
+    close(): Promise<void>;
+    waitForExit(): Promise<SupervisedProcessExit>;
+}

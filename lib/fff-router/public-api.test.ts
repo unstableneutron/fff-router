@@ -3,7 +3,7 @@ import { describe, expect, test } from "vitest";
 import { listMcpTools } from "./mcp-tools";
 import { MAX_CONTEXT_LINES, MAX_RESULTS, normalizePublicToolInput } from "./public-api";
 
-describe("v1 public protocol", () => {
+describe("v2 public protocol", () => {
   test("normalizes find_files into the canonical camelCase request", () => {
     const result = normalizePublicToolInput(
       "find_files",

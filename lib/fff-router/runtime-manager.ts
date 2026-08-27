@@ -1,5 +1,11 @@
 import type { SearchBackendRuntime } from "./adapters/types";
-import type { Result, RouterError, WorkerDiagnostic } from "./types";
+import type {
+  Result,
+  RouterError,
+  WorkerDiagnostic,
+  WorkerResourceUsage,
+  WorkerSupervisionTelemetry,
+} from "./types";
 
 type RootType = "git" | "non-git";
 
@@ -8,6 +14,8 @@ export type WorkerPoolOptions = {
   maxNonGitWorkers: number;
   sweepIntervalMs: number;
   restartBackoffMs: number;
+  restartBackoffMaxMs?: number;
+  maxTotalWorkerRssBytes?: number;
   maxDeadDiagnostics?: number;
   now?: () => number;
 };
@@ -37,8 +45,13 @@ type WorkerEntry<TRuntime extends SearchBackendRuntime> = {
   failureCount: number;
   retryAfter?: number;
   runtime?: TRuntime;
+  supervision: WorkerSupervisionTelemetry | null;
+  lastResources?: WorkerResourceUsage;
+  terminationReason?: string;
   startup?: Promise<TRuntime>;
   detachClose?: () => void;
+  detachResourceSample?: () => void;
+  detachTermination?: () => void;
 };
 
 export type WorkerLease<TRuntime extends SearchBackendRuntime> = {
@@ -71,27 +84,36 @@ export class WorkerPool<TRuntime extends SearchBackendRuntime = SearchBackendRun
   private readonly entries = new Map<string, WorkerEntry<TRuntime>>();
   private readonly deadDiagnostics: WorkerDiagnostic[] = [];
   private readonly now: () => number;
-  private sweepTimer: ReturnType<typeof setInterval>;
+  private sweepTimer: ReturnType<typeof setTimeout> | null = null;
   private generation = 0;
   private closed = false;
 
   constructor(private options: WorkerPoolOptions) {
     this.now = options.now ?? Date.now;
-    this.sweepTimer = this.createSweepTimer(options.sweepIntervalMs);
+    this.scheduleSweep();
   }
 
-  private createSweepTimer(intervalMs: number): ReturnType<typeof setInterval> {
-    const timer = setInterval(() => void this.sweep(), Math.max(100, intervalMs));
-    timer.unref?.();
-    return timer;
+  private scheduleSweep(): void {
+    if (this.closed || this.sweepTimer) return;
+    this.sweepTimer = setTimeout(
+      () => {
+        this.sweepTimer = null;
+        void this.sweep()
+          .catch(() => {})
+          .finally(() => this.scheduleSweep());
+      },
+      Math.max(100, this.options.sweepIntervalMs),
+    );
   }
 
   updateOptions(options: WorkerPoolOptions, ttl?: { gitMs: number; nonGitMs: number }): void {
-    if (!this.closed && options.sweepIntervalMs !== this.options.sweepIntervalMs) {
-      clearInterval(this.sweepTimer);
-      this.sweepTimer = this.createSweepTimer(options.sweepIntervalMs);
-    }
+    const reschedule = !this.closed && options.sweepIntervalMs !== this.options.sweepIntervalMs;
     this.options = { ...options, now: this.options.now };
+    if (reschedule) {
+      if (this.sweepTimer) clearTimeout(this.sweepTimer);
+      this.sweepTimer = null;
+      this.scheduleSweep();
+    }
     if (ttl) {
       for (const entry of this.entries.values()) {
         entry.ttlMs = entry.rootType === "git" ? ttl.gitMs : ttl.nonGitMs;
@@ -99,30 +121,58 @@ export class WorkerPool<TRuntime extends SearchBackendRuntime = SearchBackendRun
     }
   }
 
-  private toDiagnostic(entry: WorkerEntry<TRuntime>): WorkerDiagnostic {
+  private toDiagnostic(
+    entry: WorkerEntry<TRuntime>,
+    state: WorkerDiagnostic["state"] = entry.state,
+  ): WorkerDiagnostic {
+    const resources =
+      entry.supervision?.resources ??
+      entry.runtime?.getResourceUsage?.() ??
+      entry.lastResources ??
+      null;
+    const terminationReason =
+      entry.supervision?.terminationReason ??
+      entry.runtime?.getTerminationReason?.() ??
+      entry.terminationReason;
     return {
       root: entry.root,
       rootType: entry.rootType,
-      state: entry.state,
-      ...(entry.runtime?.id ? { workerId: entry.runtime.id } : {}),
-      ...(entry.runtime?.pid !== undefined ? { pid: entry.runtime.pid } : {}),
+      state,
+      workerId: entry.runtime?.id,
+      pid: entry.runtime?.pid,
       generation: entry.generation,
       activeLeases: entry.activeLeases,
-      ...(entry.startedAt !== undefined ? { startedAt: entry.startedAt } : {}),
+      startedAt: entry.startedAt,
       lastUsedAt: entry.lastUsedAt,
-      ...(entry.lastCallAt !== undefined ? { lastCallAt: entry.lastCallAt } : {}),
-      ...(entry.lastSuccessAt !== undefined ? { lastSuccessAt: entry.lastSuccessAt } : {}),
-      ...(entry.lastError !== undefined ? { lastError: entry.lastError } : {}),
-      ...(entry.lastErrorAt !== undefined ? { lastErrorAt: entry.lastErrorAt } : {}),
+      lastCallAt: entry.lastCallAt,
+      lastSuccessAt: entry.lastSuccessAt,
+      lastError: entry.lastError,
+      lastErrorAt: entry.lastErrorAt,
       failureCount: entry.failureCount,
-      ...(entry.retryAfter !== undefined ? { retryAfter: entry.retryAfter } : {}),
+      retryAfter: entry.retryAfter,
+      resources: resources ?? undefined,
+      terminationReason,
     };
   }
 
+  private restartDelay(failureCount: number): number {
+    const exponential = this.options.restartBackoffMs * 2 ** Math.max(0, failureCount - 1);
+    return Math.min(exponential, this.options.restartBackoffMaxMs ?? 60_000);
+  }
+
   private rememberDead(entry: WorkerEntry<TRuntime>): void {
-    const diagnostic = this.toDiagnostic({ ...entry, state: "dead" });
+    const diagnostic = this.toDiagnostic(entry, "dead");
     this.deadDiagnostics.unshift(diagnostic);
     this.deadDiagnostics.splice(this.options.maxDeadDiagnostics ?? 32);
+  }
+
+  private detachRuntimeObservers(entry: WorkerEntry<TRuntime>): void {
+    entry.detachClose?.();
+    entry.detachResourceSample?.();
+    entry.detachTermination?.();
+    entry.detachClose = undefined;
+    entry.detachResourceSample = undefined;
+    entry.detachTermination = undefined;
   }
 
   private activeEntries(rootType?: RootType): WorkerEntry<TRuntime>[] {
@@ -138,7 +188,7 @@ export class WorkerPool<TRuntime extends SearchBackendRuntime = SearchBackendRun
     if (!candidate) {
       return undefined;
     }
-    candidate.detachClose?.();
+    this.detachRuntimeObservers(candidate);
     candidate.state = "draining";
     this.entries.delete(candidate.root);
     return candidate.runtime;
@@ -198,7 +248,21 @@ export class WorkerPool<TRuntime extends SearchBackendRuntime = SearchBackendRun
       ttlMs: spec.ttlMs,
       createdAt: now,
       lastUsedAt: now,
+      startedAt: undefined,
+      lastCallAt: undefined,
+      lastSuccessAt: undefined,
+      lastError: undefined,
+      lastErrorAt: undefined,
       failureCount: previousFailures,
+      retryAfter: undefined,
+      runtime: undefined,
+      supervision: null,
+      lastResources: undefined,
+      terminationReason: undefined,
+      startup: undefined,
+      detachClose: undefined,
+      detachResourceSample: undefined,
+      detachTermination: undefined,
     };
 
     entry.startup = Promise.resolve()
@@ -211,12 +275,23 @@ export class WorkerPool<TRuntime extends SearchBackendRuntime = SearchBackendRun
         }
         const draining = entry.state === "draining";
         entry.runtime = runtime;
+        entry.supervision = runtime.supervision ?? null;
         entry.startup = undefined;
         entry.state = draining ? "draining" : "ready";
         entry.startedAt = this.now();
         entry.retryAfter = undefined;
-        entry.detachClose = runtime.onClose?.(() => {
-          this.markUnexpectedClose(spec.root, entry.token);
+        entry.detachClose = runtime.onClose?.((reason) => {
+          this.markUnexpectedClose(spec.root, entry.token, reason);
+        });
+        entry.detachResourceSample = runtime.onResourceSample?.(() => {
+          const resources = entry.supervision?.resources ?? runtime.getResourceUsage?.();
+          if (resources) entry.lastResources = { ...resources };
+        });
+        entry.detachTermination = runtime.onTermination?.(() => {
+          entry.terminationReason =
+            entry.supervision?.terminationReason ??
+            runtime.getTerminationReason?.() ??
+            entry.terminationReason;
         });
         return runtime;
       })
@@ -229,7 +304,7 @@ export class WorkerPool<TRuntime extends SearchBackendRuntime = SearchBackendRun
           entry.lastError = error instanceof Error ? error.message : String(error);
           entry.lastErrorAt = now;
           entry.failureCount += 1;
-          entry.retryAfter = now + this.options.restartBackoffMs * entry.failureCount;
+          entry.retryAfter = now + this.restartDelay(entry.failureCount);
         }
         throw error;
       });
@@ -238,20 +313,25 @@ export class WorkerPool<TRuntime extends SearchBackendRuntime = SearchBackendRun
     return entry;
   }
 
-  private markUnexpectedClose(root: string, token: symbol): void {
+  private markUnexpectedClose(root: string, token: symbol, reason?: string): void {
     const entry = this.entries.get(root);
     if (!entry || entry.token !== token || entry.state === "draining") {
       return;
     }
     const now = this.now();
-    entry.detachClose?.();
-    entry.detachClose = undefined;
-    entry.runtime = undefined;
+    const resources = entry.supervision?.resources ?? entry.runtime?.getResourceUsage?.();
+    if (resources) entry.lastResources = resources;
+    entry.terminationReason =
+      reason ??
+      entry.supervision?.terminationReason ??
+      entry.runtime?.getTerminationReason?.() ??
+      entry.terminationReason;
+    this.detachRuntimeObservers(entry);
     entry.state = "dead";
-    entry.lastError = "fff-mcp worker exited unexpectedly";
+    entry.lastError = entry.terminationReason ?? "fff-mcp worker exited unexpectedly";
     entry.lastErrorAt = now;
     entry.failureCount += 1;
-    entry.retryAfter = now + this.options.restartBackoffMs * entry.failureCount;
+    entry.retryAfter = now + this.restartDelay(entry.failureCount);
   }
 
   async acquire(
@@ -365,10 +445,13 @@ export class WorkerPool<TRuntime extends SearchBackendRuntime = SearchBackendRun
     entry.activeLeases = Math.max(0, entry.activeLeases - 1);
     entry.lastUsedAt = this.now();
     if (entry.activeLeases === 0 && entry.state === "draining") {
-      entry.detachClose?.();
+      this.detachRuntimeObservers(entry);
       this.entries.delete(root);
       this.rememberDead(entry);
       await closeBestEffort(entry.runtime);
+    }
+    if (entry.activeLeases === 0 && this.options.maxTotalWorkerRssBytes) {
+      void this.sweep();
     }
   }
 
@@ -382,7 +465,7 @@ export class WorkerPool<TRuntime extends SearchBackendRuntime = SearchBackendRun
     entry.failureCount += 1;
     entry.state = "draining";
     if (entry.activeLeases === 0) {
-      entry.detachClose?.();
+      this.detachRuntimeObservers(entry);
       this.entries.delete(root);
       this.rememberDead(entry);
       await closeBestEffort(entry.runtime);
@@ -396,7 +479,7 @@ export class WorkerPool<TRuntime extends SearchBackendRuntime = SearchBackendRun
     }
     entry.state = "draining";
     if (entry.activeLeases === 0) {
-      entry.detachClose?.();
+      this.detachRuntimeObservers(entry);
       this.entries.delete(root);
       this.rememberDead(entry);
       await closeBestEffort(entry.runtime);
@@ -436,6 +519,41 @@ export class WorkerPool<TRuntime extends SearchBackendRuntime = SearchBackendRun
       }
       capacityClosures.push(runtime);
     }
+    const totalLimit = this.options.maxTotalWorkerRssBytes;
+    if (totalLimit) {
+      let totalRss = this.activeEntries().reduce(
+        (total, entry) =>
+          total +
+          (entry.supervision?.resources?.rssBytes ??
+            entry.runtime?.getResourceUsage?.()?.rssBytes ??
+            0),
+        0,
+      );
+      while (totalRss > totalLimit) {
+        const candidate = this.activeEntries()
+          .filter((entry) => entry.activeLeases === 0 && entry.state === "ready")
+          .sort((left, right) => {
+            const rssDelta =
+              (right.supervision?.resources?.rssBytes ??
+                right.runtime?.getResourceUsage?.()?.rssBytes ??
+                0) -
+              (left.supervision?.resources?.rssBytes ??
+                left.runtime?.getResourceUsage?.()?.rssBytes ??
+                0);
+            return rssDelta || left.lastUsedAt - right.lastUsedAt;
+          })[0];
+        if (!candidate) break;
+        const rss =
+          candidate.supervision?.resources?.rssBytes ??
+          candidate.runtime?.getResourceUsage?.()?.rssBytes ??
+          0;
+        this.detachRuntimeObservers(candidate);
+        candidate.state = "draining";
+        this.entries.delete(candidate.root);
+        if (candidate.runtime) capacityClosures.push(candidate.runtime);
+        totalRss = Math.max(0, totalRss - rss);
+      }
+    }
     await Promise.all(capacityClosures.map(closeBestEffort));
   }
 
@@ -448,16 +566,36 @@ export class WorkerPool<TRuntime extends SearchBackendRuntime = SearchBackendRun
     ];
   }
 
+  getResourceSummary(): { sampledAt: number; workerRssBytes: number; measuredWorkers: number } {
+    const samples = this.activeEntries()
+      .map((entry) => entry.supervision?.resources ?? entry.runtime?.getResourceUsage?.() ?? null)
+      .filter((sample): sample is NonNullable<typeof sample> => sample !== null);
+    return {
+      sampledAt: samples.reduce((latest, sample) => Math.max(latest, sample.sampledAt), 0),
+      workerRssBytes: samples.reduce((total, sample) => total + sample.rssBytes, 0),
+      measuredWorkers: samples.length,
+    };
+  }
+
+  getLiveWorkerCount(): number {
+    return this.activeEntries().length;
+  }
+
+  getActiveLeaseCount(): number {
+    return this.activeEntries().reduce((total, entry) => total + entry.activeLeases, 0);
+  }
+
   async closeAll(): Promise<void> {
     if (this.closed) {
       return;
     }
     this.closed = true;
-    clearInterval(this.sweepTimer);
+    if (this.sweepTimer) clearTimeout(this.sweepTimer);
+    this.sweepTimer = null;
     const entries = [...this.entries.values()];
     this.entries.clear();
     for (const entry of entries) {
-      entry.detachClose?.();
+      this.detachRuntimeObservers(entry);
       entry.state = "draining";
     }
     await Promise.all(entries.map((entry) => closeBestEffort(entry.runtime)));

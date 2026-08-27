@@ -141,6 +141,34 @@ describe("checkFffMcpUpdate", () => {
       latestVersion: "0.9.4",
     });
   });
+
+  test("reads the managed install manifest without executing fff-mcp", async () => {
+    const home = await makeTempDir();
+    const installDir = path.join(home, ".local", "bin");
+    await mkdir(installDir, { recursive: true });
+    await writeFile(path.join(installDir, "fff-mcp"), "not an executable");
+    await writeFile(
+      path.join(installDir, ".fff-mcp-install.json"),
+      JSON.stringify({ version: "0.9.4", target: "aarch64-apple-darwin" }),
+    );
+
+    const plan = await checkFffMcpUpdate({
+      env: { HOME: home } as NodeJS.ProcessEnv,
+      target: "aarch64-apple-darwin",
+      getLatestRelease: async () => ({
+        tag: "v0.9.4",
+        version: "0.9.4",
+        assetUrl: "https://example.test/fff-mcp",
+        checksumUrl: "https://example.test/fff-mcp.sha256",
+      }),
+    });
+
+    expect(plan).toMatchObject({
+      kind: "current",
+      currentVersion: "0.9.4",
+      latestVersion: "0.9.4",
+    });
+  });
 });
 
 describe("selectLatestFffMcpRelease", () => {

@@ -35,7 +35,8 @@ export async function runMcpHttpBridge(options: McpHttpBridgeOptions = {}): Prom
       await options.connectStdio(handler, onClose);
       return;
     }
-    await createMcpServer({ handler, env }).connectStdio({ onClose });
+    const connection = await createMcpServer({ handler, env }).connectStdio({ onClose });
+    await connection.done;
   } catch (caught) {
     await client.close().catch(() => {});
     throw caught;

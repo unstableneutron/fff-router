@@ -1,4 +1,4 @@
-import fs from "node:fs/promises";
+import { realpathSync, statSync, type Stats } from "node:fs";
 import path from "node:path";
 import { expandHomePath } from "./home-path";
 import type {
@@ -52,9 +52,7 @@ function validateAbsolutePath(candidate: string, field: string): Result<string, 
   return { ok: true, value: trimmed };
 }
 
-function resolveStatType(
-  stats: Awaited<ReturnType<typeof fs.stat>>,
-): Result<"file" | "directory", RouterError> {
+function resolveStatType(stats: Stats): Result<"file" | "directory", RouterError> {
   if (stats.isDirectory()) {
     return { ok: true, value: "directory" };
   }
@@ -109,7 +107,7 @@ async function validateResolvedWithinEntry(
 
   let resolvedWithin: string;
   try {
-    resolvedWithin = await fs.realpath(within.value);
+    resolvedWithin = realpathSync(within.value);
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code === "ENOENT") {
@@ -121,7 +119,7 @@ async function validateResolvedWithinEntry(
 
   let stats;
   try {
-    stats = await fs.stat(resolvedWithin);
+    stats = statSync(resolvedWithin);
   } catch {
     return internalError(`failed to stat resolved within '${resolvedWithin}'`);
   }
