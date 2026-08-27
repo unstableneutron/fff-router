@@ -27,8 +27,15 @@ mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$XDG_STATE_HOME" "$FFF_MCP_INSTALL_DIR"
 export PATH="$FFF_MCP_INSTALL_DIR:/usr/bin:/bin:/usr/sbin:/sbin"
 
 cleanup() {
+  exit_code=$?
+  if [[ $exit_code -ne 0 ]]; then
+    echo "native smoke failed; bounded daemon diagnostics follow" >&2
+    "$binary" status --json >&2 || true
+    "$binary" daemon logs >&2 || true
+  fi
   "$binary" daemon stop >/dev/null 2>&1 || true
   rm -rf "$smoke_root"
+  exit "$exit_code"
 }
 trap cleanup EXIT
 

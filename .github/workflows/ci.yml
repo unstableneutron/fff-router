@@ -70,10 +70,17 @@ jobs:
           otool -L dist/native/${{ matrix.artifact }}
           ! otool -L dist/native/${{ matrix.artifact }} | grep -E '/opt/homebrew|/usr/local'
       - run: bash scripts/native-live-smoke.sh dist/native/${{ matrix.artifact }} .
-      - run: cd dist/native && shasum -a 256 ${{ matrix.artifact }} > ${{ matrix.artifact }}.sha256
-      - uses: actions/upload-artifact@v4
+      - if: always()
+        run: |
+          if test -f dist/native/${{ matrix.artifact }}; then
+            cd dist/native
+            shasum -a 256 ${{ matrix.artifact }} > ${{ matrix.artifact }}.sha256
+          fi
+      - if: always()
+        uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
+          if-no-files-found: ignore
           path: |
             dist/native/${{ matrix.artifact }}
             dist/native/${{ matrix.artifact }}.attest.json
