@@ -1,4 +1,4 @@
-import fs from "node:fs/promises";
+import { existsSync, realpathSync, statSync, type Stats } from "node:fs";
 import path from "node:path";
 import type { ResolvedSearchPath, Result, RouterErrorCode } from "./types";
 
@@ -6,13 +6,8 @@ function searchPathError(code: RouterErrorCode, message: string): Result<never> 
   return { ok: false, error: { code, message } };
 }
 
-async function pathExists(candidatePath: string): Promise<boolean> {
-  try {
-    await fs.access(candidatePath);
-    return true;
-  } catch {
-    return false;
-  }
+function pathExists(candidatePath: string): boolean {
+  return existsSync(candidatePath);
 }
 
 async function discoverGitRoot(
@@ -22,7 +17,7 @@ async function discoverGitRoot(
   let current = statType === "directory" ? realPath : path.dirname(realPath);
 
   while (true) {
-    if (await pathExists(path.join(current, ".git"))) {
+    if (pathExists(path.join(current, ".git"))) {
       return current;
     }
 
@@ -35,7 +30,7 @@ async function discoverGitRoot(
   }
 }
 
-function resolveStatType(stats: Awaited<ReturnType<typeof fs.stat>>): Result<"file" | "directory"> {
+function resolveStatType(stats: Stats): Result<"file" | "directory"> {
   if (stats.isDirectory()) {
     return { ok: true, value: "directory" };
   }
@@ -51,10 +46,13 @@ function resolveStatType(stats: Awaited<ReturnType<typeof fs.stat>>): Result<"fi
 }
 
 export async function resolveSearchPath(searchPath: string): Promise<Result<ResolvedSearchPath>> {
+  if (!pathExists(searchPath)) {
+    return searchPathError("SEARCH_PATH_NOT_FOUND", `search_path '${searchPath}' does not exist`);
+  }
   let realPath: string;
 
   try {
-    realPath = await fs.realpath(searchPath);
+    realPath = realpathSync(searchPath);
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code === "ENOENT") {
@@ -66,7 +64,7 @@ export async function resolveSearchPath(searchPath: string): Promise<Result<Reso
 
   let stats;
   try {
-    stats = await fs.stat(realPath);
+    stats = statSync(realPath);
   } catch {
     return searchPathError(
       "SEARCH_PATH_REALPATH_FAILED",

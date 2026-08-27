@@ -1,7 +1,10 @@
 import path from "node:path";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import type { ValidatedWithinEntry } from "../types";
+import {
+  createLegacyMcpClient,
+  LegacyMcpClient,
+  type LegacyMcpClientOptions,
+} from "../legacy-mcp-client";
+import type { ValidatedWithinEntry, WorkerSupervisionTelemetry } from "../types";
 import { filterItems } from "./common";
 import { resolveToolCommand } from "../tool-resolution";
 import type {
@@ -32,27 +35,24 @@ type EvaluatedTextMatchPage = ReturnType<typeof evaluateTextMatchPage>;
 const MAX_FILTERED_CURSOR_PAGES = 20;
 
 type FffMcpClient = {
-  connect: (transport: FffMcpTransport) => Promise<void>;
+  readonly pid: number | null;
+  readonly supervision: WorkerSupervisionTelemetry;
+  connect: () => Promise<void>;
   close: () => Promise<void> | void;
-  callTool: (args: { name: string; arguments: Record<string, unknown> }) => Promise<unknown>;
+  callTool: (name: string, args: Record<string, unknown>) => Promise<unknown>;
+  onClose: (handler: (reason?: string) => void) => () => void;
+  onResourceSample: (handler: () => void) => () => void;
+  onTermination: (handler: () => void) => () => void;
+  getResourceUsage: LegacyMcpClient["getResourceUsage"];
+  getTerminationReason: LegacyMcpClient["getTerminationReason"];
 };
-
-type FffMcpTransport = {
-  pid?: number | null;
-  onclose?: () => void;
-  close: () => Promise<void> | void;
-};
-
-type FffMcpTransportParams = ConstructorParameters<typeof StdioClientTransport>[0];
 
 type CreateFffMcpStdioAdapterOptions = {
   resolveCommand?: () => string;
-  createClient?: () => FffMcpClient;
-  createTransport?: (params: FffMcpTransportParams) => FffMcpTransport;
+  createClient?: (params: LegacyMcpClientOptions) => FffMcpClient;
   waitForReady?: (
     callTool: (name: string, args: Record<string, unknown>) => Promise<string>,
   ) => Promise<string>;
-  closeTimeoutMs?: number;
 };
 
 function searchFailed(message: string): BackendSearchResult {
@@ -72,28 +72,6 @@ function discoverFffMcpCommand(): string {
     throw new Error(resolution.remediation ?? "fff-mcp is not available");
   }
   return resolution.command;
-}
-
-async function closeBestEffort(
-  close: () => Promise<void> | void,
-  timeoutMs: number,
-): Promise<void> {
-  let timeout: ReturnType<typeof setTimeout> | null = null;
-  try {
-    await Promise.race([
-      Promise.resolve()
-        .then(close)
-        .catch(() => {}),
-      new Promise<void>((resolve) => {
-        timeout = setTimeout(resolve, timeoutMs);
-        timeout.unref?.();
-      }),
-    ]);
-  } finally {
-    if (timeout) {
-      clearTimeout(timeout);
-    }
-  }
 }
 
 function inheritedStringEnv(): Record<string, string> {
@@ -1080,67 +1058,46 @@ export function createFffMcpStdioAdapter(
   return {
     backendId: "fff-mcp",
     async startRuntime(args) {
-      const transportParams = {
+      const clientOptions: LegacyMcpClientOptions = {
         command: (options.resolveCommand ?? discoverFffMcpCommand)(),
-        args: [args.persistenceRoot, "--idle-timeout-secs", "0", "--no-update-check"],
+        args: [
+          args.persistenceRoot,
+          "--idle-timeout-secs",
+          String(Math.ceil((args.supervision?.orphanIdleTimeoutMs ?? 30 * 60 * 1_000) / 1_000)),
+          "--no-update-check",
+        ],
         cwd: args.persistenceRoot,
         env: inheritedStringEnv(),
-        stderr: "pipe",
-      } satisfies FffMcpTransportParams;
-      const transport: FffMcpTransport =
-        options.createTransport?.(transportParams) ??
-        (new StdioClientTransport(transportParams) as FffMcpTransport);
+        sampleIntervalMs: args.supervision?.sampleIntervalMs ?? 5_000,
+        ...(args.supervision?.maxRssBytes ? { maxRssBytes: args.supervision.maxRssBytes } : {}),
+        shutdownGraceMs: args.supervision?.shutdownGraceMs ?? 500,
+        killGraceMs: args.supervision?.killGraceMs ?? 1_000,
+      };
       const client: FffMcpClient =
-        options.createClient?.() ??
-        (new Client(
-          { name: "fff-router-fff-mcp", version: "1.0.0" },
-          { capabilities: {} },
-        ) as unknown as FffMcpClient);
+        options.createClient?.(clientOptions) ?? createLegacyMcpClient(clientOptions);
       try {
-        await client.connect(transport);
+        await client.connect();
       } catch (error) {
-        const closeTimeoutMs = options.closeTimeoutMs ?? 500;
-        await closeBestEffort(() => client.close(), closeTimeoutMs);
-        await closeBestEffort(() => transport.close(), closeTimeoutMs);
+        await Promise.resolve(client.close()).catch(() => {});
         throw error;
       }
-
-      let closed = false;
-      const closeHandlers = new Set<() => void>();
-      const markClosed = () => {
-        if (closed) {
-          return;
-        }
-        closed = true;
-        for (const handler of closeHandlers) {
-          handler();
-        }
-      };
-      const previousOnClose = transport.onclose;
-      transport.onclose = () => {
-        markClosed();
-        previousOnClose?.();
-      };
 
       const runtime: FffMcpRuntime = {
         id: `fff-mcp::${args.persistenceRoot}`,
         get pid() {
-          return transport.pid ?? null;
+          return client.pid;
         },
-        onClose(handler) {
-          closeHandlers.add(handler);
-          return () => {
-            closeHandlers.delete(handler);
-          };
-        },
+        supervision: client.supervision,
+        onClose: (handler) => client.onClose(handler),
+        onResourceSample: (handler) => client.onResourceSample(handler),
+        onTermination: (handler) => client.onTermination(handler),
+        getResourceUsage: () => client.getResourceUsage(),
+        getTerminationReason: () => client.getTerminationReason(),
         async close() {
-          markClosed();
-          const closeTimeoutMs = options.closeTimeoutMs ?? 500;
-          await closeBestEffort(() => client.close(), closeTimeoutMs);
-          await closeBestEffort(() => transport.close(), closeTimeoutMs);
+          await client.close();
         },
         async callTool(name, args) {
-          const response = (await client.callTool({ name, arguments: args })) as {
+          const response = (await client.callTool(name, args)) as {
             isError?: boolean;
             content?: Array<{ type?: string; text?: string }>;
           };

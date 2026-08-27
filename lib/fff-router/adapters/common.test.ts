@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { filterItems } from "./common";
+import { filterItems, matchesExcludePaths, matchesGlob } from "./common";
 import type { FindFilesBackendRequest } from "./types";
 
 const request: FindFilesBackendRequest = {
@@ -38,5 +38,16 @@ describe("filterItems", () => {
     );
 
     expect(items).toEqual([{ path: "/repo/src/router.ts", relativePath: "src/router.ts" }]);
+  });
+
+  test("implements the portable glob subset without a runtime package", () => {
+    expect(matchesGlob("**/*.{ts,tsx}", "src/router.ts")).toBe(true);
+    expect(matchesGlob("**/*.{ts,tsx}", "router.tsx")).toBe(true);
+    expect(matchesGlob("*.ts", "src/router.ts")).toBe(true);
+    expect(matchesGlob("src/file?.[tj]s", "src/file1.ts")).toBe(true);
+    expect(matchesGlob("src/**", "src/deep/router.ts")).toBe(true);
+    expect(matchesGlob("!**/*.test.ts", "src/router.ts")).toBe(true);
+    expect(matchesGlob("!**/*.test.ts", "src/router.test.ts")).toBe(false);
+    expect(matchesExcludePaths(["**/generated/**"], "src/generated/router.ts")).toBe(false);
   });
 });

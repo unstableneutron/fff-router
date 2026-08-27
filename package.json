@@ -1,6 +1,6 @@
 {
   "name": "fff-router",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "bin": {
     "fff": "./dist/bin/fff.js",
     "fff-routerd": "./dist/bin/fff-routerd.js"
@@ -34,20 +34,19 @@
   "scripts": {
     "build": "node scripts/build-package.mjs",
     "build:package": "node scripts/build-package.mjs",
+    "build:native": "node scripts/build-native.mjs",
+    "check:perry": "perry check bin/fff.ts --check-deps --deep-deps --strict",
+    "smoke:live": "node scripts/live-smoke.mjs",
     "test": "vitest run",
     "check:dist": "node scripts/build-package.mjs && git diff --exit-code -- dist",
     "format": "node scripts/format-package.mjs",
     "check": "tsc --noEmit && node scripts/format-package.mjs --check && oxlint --threads=1 lib bin scripts",
     "fix": "pnpm run format && oxlint --threads=1 --fix --fix-suggestions --fix-dangerously lib bin scripts"
   },
-  "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.30.0",
-    "picomatch": "^4.0.7",
-    "zod": "^4.4.3"
-  },
+  "dependencies": {},
   "devDependencies": {
+    "@perryts/perry": "0.5.1220",
     "@types/node": "^22.0.0",
-    "@types/picomatch": "^4.0.0",
     "esbuild": "^0.28.2",
     "oxfmt": "^0.43.0",
     "oxlint": "^1.58.0",
@@ -57,5 +56,8 @@
   "engines": {
     "node": ">=22.0.0"
   },
-  "packageManager": "pnpm@11.19.0"
+  "packageManager": "pnpm@11.19.0",
+  "perry": {
+    "strict": true
+  }
 }

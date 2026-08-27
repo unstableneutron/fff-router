@@ -1,5 +1,5 @@
 // lib/fff-router/resolve-within.ts
-import fs from "node:fs/promises";
+import { realpathSync, statSync } from "node:fs";
 import path2 from "node:path";
 
 // lib/fff-router/home-path.ts
@@ -127,7 +127,7 @@ async function validateResolvedWithinEntry(candidate) {
   }
   let resolvedWithin;
   try {
-    resolvedWithin = await fs.realpath(within.value);
+    resolvedWithin = realpathSync(within.value);
   } catch (error) {
     const code = error.code;
     if (code === "ENOENT") {
@@ -137,7 +137,7 @@ async function validateResolvedWithinEntry(candidate) {
   }
   let stats;
   try {
-    stats = await fs.stat(resolvedWithin);
+    stats = statSync(resolvedWithin);
   } catch {
     return internalError(`failed to stat resolved within '${resolvedWithin}'`);
   }

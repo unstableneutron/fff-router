@@ -8,7 +8,7 @@ node_modules
 # output
 out
 standalone
-dist/**/*.d.ts
+dist/native/
 *.tgz
 
 # code coverage

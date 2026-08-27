@@ -1,18 +1,18 @@
 import path from "node:path";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { ensureDaemonRunning } from "./daemon-autostart";
 import { getDaemonEndpoint, getDaemonPaths, PACKAGE_VERSION } from "./daemon-config";
 import { expandHomePath } from "./home-path";
 import { bearerHeaders, readDaemonAuthToken } from "./local-auth";
+import { MCP_PROTOCOL_VERSION } from "./mcp-server";
+import { requestJson } from "./http-json";
 import {
   evictResultSchema,
   findFilesResultSchema,
   grepResultSchema,
   routerStatusSchema,
   warmResultSchema,
+  type RuntimeSchema,
 } from "./public-api";
-import type { ZodType } from "zod/v4";
 import type {
   FindFilesResult,
   GrepResult,
@@ -31,33 +31,26 @@ type CommonClientInput = {
   cursor?: string | null;
 };
 
-export type FindFilesClientInput = CommonClientInput & {
-  query: string;
-};
-
+export type FindFilesClientInput = CommonClientInput & { query: string };
 export type GrepClientInput = CommonClientInput & {
   patterns: string | string[];
   literal?: boolean;
   contextLines?: number;
 };
-
 export type RouterClientOptions = {
   env?: NodeJS.ProcessEnv;
   cwd?: string;
   autoStart?: boolean;
 };
-
 export type ToolResponse = {
+  resultType?: "complete";
   isError?: boolean;
   content?: Array<{ type: string; text?: string }>;
-  structuredContent?: Record<string, unknown>;
+  structuredContent?: unknown;
 };
 
 function clientError(message: string): Result<never, RouterError> {
-  return {
-    ok: false,
-    error: { code: "DAEMON_UNAVAILABLE", message, retryable: true },
-  };
+  return { ok: false, error: { code: "DAEMON_UNAVAILABLE", message, retryable: true } };
 }
 
 function errorFromResponse(response: ToolResponse): RouterError {
@@ -73,17 +66,12 @@ function errorFromResponse(response: ToolResponse): RouterError {
   }
 }
 
-function structured<T>(response: ToolResponse, schema: ZodType<T>): Result<T, RouterError> {
-  if (response.isError) {
-    return { ok: false, error: errorFromResponse(response) };
-  }
-  if (!response.structuredContent) {
+function structured<T>(response: ToolResponse, schema: RuntimeSchema<T>): Result<T, RouterError> {
+  if (response.isError) return { ok: false, error: errorFromResponse(response) };
+  if (response.structuredContent === undefined) {
     return {
       ok: false,
-      error: {
-        code: "INTERNAL_ERROR",
-        message: "fff-routerd returned no structured content",
-      },
+      error: { code: "INTERNAL_ERROR", message: "fff-routerd returned no structured content" },
     };
   }
   const parsed = schema.safeParse(response.structuredContent);
@@ -111,20 +99,30 @@ function resolveWithin(
   const values = within === undefined ? [cwd] : Array.isArray(within) ? within : [within];
   return values.map((value) => {
     const expanded = expandHomePath(value, env);
-    if (!expanded.ok) {
-      throw new Error(expanded.error.message);
-    }
+    if (!expanded.ok) throw new Error(expanded.error.message);
     return path.isAbsolute(expanded.value)
       ? path.normalize(expanded.value)
       : path.resolve(cwd, expanded.value);
   });
 }
 
+function encodeMcpHeader(value: string): string {
+  if (/^[\x21-\x7e](?:[\x20-\x7e]*[\x21-\x7e])?$/.test(value) && !value.startsWith("=?base64?")) {
+    return value;
+  }
+  return `=?base64?${Buffer.from(value, "utf8").toString("base64")}?=`;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 export class RouterClient {
-  private client: Client | null = null;
-  private transport: StreamableHTTPClientTransport | null = null;
+  private endpoint: string | null = null;
+  private authToken: string | null = null;
   private connecting: Promise<void> | null = null;
   private closed = false;
+  private requestId = 0;
   private readonly env: NodeJS.ProcessEnv;
   private readonly cwd: string;
   private readonly autoStart: boolean;
@@ -140,39 +138,16 @@ export class RouterClient {
   }
 
   private async connect(): Promise<void> {
-    if (this.closed) {
-      throw new Error("fff-router client is closed");
-    }
-    if (this.client) {
-      return;
-    }
-    if (this.connecting) {
-      return await this.connecting;
-    }
+    if (this.closed) throw new Error("fff-router client is closed");
+    if (this.endpoint && this.authToken) return;
+    if (this.connecting) return await this.connecting;
     this.connecting = (async () => {
-      if (this.autoStart) {
-        await ensureDaemonRunning(this.env);
-      }
+      if (this.autoStart) await ensureDaemonRunning(this.env);
       const authToken = await readDaemonAuthToken(this.env);
-      if (!authToken) {
+      if (!authToken)
         throw new Error("fff-routerd authentication token is missing; restart the daemon");
-      }
-      const transport = new StreamableHTTPClientTransport(
-        new URL(getDaemonEndpoint({ env: this.env })),
-        { requestInit: { headers: bearerHeaders(authToken) } },
-      );
-      const client = new Client(
-        { name: "fff-router-client", version: PACKAGE_VERSION },
-        { capabilities: {} },
-      );
-      try {
-        await client.connect(transport);
-        this.transport = transport;
-        this.client = client;
-      } catch (caught) {
-        await transport.close().catch(() => {});
-        throw caught;
-      }
+      this.endpoint = getDaemonEndpoint({ env: this.env });
+      this.authToken = authToken;
     })();
     try {
       await this.connecting;
@@ -181,13 +156,58 @@ export class RouterClient {
     }
   }
 
-  private async disconnect(): Promise<void> {
-    const client = this.client;
-    const transport = this.transport;
-    this.client = null;
-    this.transport = null;
-    await client?.close().catch(() => {});
-    await transport?.close().catch(() => {});
+  private disconnect(): void {
+    this.endpoint = null;
+    this.authToken = null;
+  }
+
+  private async request(
+    method: string,
+    params: Record<string, unknown>,
+    name?: string,
+  ): Promise<unknown> {
+    await this.connect();
+    const id = ++this.requestId;
+    const body = {
+      jsonrpc: "2.0",
+      id,
+      method,
+      params: {
+        ...params,
+        _meta: {
+          "io.modelcontextprotocol/protocolVersion": MCP_PROTOCOL_VERSION,
+          "io.modelcontextprotocol/clientInfo": {
+            name: "fff-router-client",
+            version: PACKAGE_VERSION,
+          },
+          "io.modelcontextprotocol/clientCapabilities": {},
+        },
+      },
+    };
+    const response = await requestJson(this.endpoint!, {
+      method: "POST",
+      headers: {
+        ...bearerHeaders(this.authToken!),
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
+        "mcp-protocol-version": MCP_PROTOCOL_VERSION,
+        "mcp-method": method,
+        ...(name ? { "mcp-name": encodeMcpHeader(name) } : {}),
+      },
+      body: JSON.stringify(body),
+    });
+    const payload = response.payload;
+    if (!isRecord(payload) || payload.jsonrpc !== "2.0" || payload.id !== id) {
+      throw new Error(`fff-routerd returned an invalid MCP response (HTTP ${response.status})`);
+    }
+    if (isRecord(payload.error)) {
+      const code = typeof payload.error.code === "number" ? payload.error.code : -32603;
+      const message =
+        typeof payload.error.message === "string" ? payload.error.message : "MCP request failed";
+      throw new Error(`MCP ${code}: ${message}`);
+    }
+    if (!("result" in payload)) throw new Error("fff-routerd MCP response has no result");
+    return payload.result;
   }
 
   async callMcpTool(
@@ -196,16 +216,10 @@ export class RouterClient {
     allowReconnect = true,
   ): Promise<ToolResponse> {
     try {
-      await this.connect();
-      return (await this.client!.callTool({
-        name,
-        arguments: input,
-      })) as ToolResponse;
+      return (await this.request("tools/call", { name, arguments: input }, name)) as ToolResponse;
     } catch (caught) {
-      await this.disconnect();
-      if (allowReconnect) {
-        return await this.callMcpTool(name, input, false);
-      }
+      this.disconnect();
+      if (allowReconnect) return await this.callMcpTool(name, input, false);
       throw caught;
     }
   }
@@ -213,7 +227,7 @@ export class RouterClient {
   private async callTool<T>(
     name: string,
     input: Record<string, unknown>,
-    schema: ZodType<T>,
+    schema: RuntimeSchema<T>,
   ): Promise<Result<T, RouterError>> {
     try {
       return structured(await this.callMcpTool(name, input), schema);
@@ -225,10 +239,7 @@ export class RouterClient {
   async findFiles(input: FindFilesClientInput): Promise<Result<FindFilesResult, RouterError>> {
     return await this.callTool(
       "find_files",
-      {
-        ...input,
-        within: resolveWithin(input.within, this.cwd, this.env),
-      },
+      { ...input, within: resolveWithin(input.within, this.cwd, this.env) },
       findFilesResultSchema,
     );
   }
@@ -269,13 +280,12 @@ export class RouterClient {
 
   async close(): Promise<void> {
     this.closed = true;
-    await this.disconnect();
+    this.disconnect();
   }
 }
 
 export async function connectRouter(options: RouterClientOptions = {}): Promise<RouterClient> {
   const client = new RouterClient(options);
-  // Make connection and protocol errors eager.
   const status = await client.status();
   if (!status.ok) {
     await client.close();
@@ -284,7 +294,7 @@ export async function connectRouter(options: RouterClientOptions = {}): Promise<
   return client;
 }
 
-const CLIENTS_KEY = "__fffRouterClientsV1__";
+const CLIENTS_KEY = "__fffRouterClientsV2__";
 
 function globalClients(): Map<string, Promise<RouterClient>> {
   const global = globalThis as typeof globalThis & {

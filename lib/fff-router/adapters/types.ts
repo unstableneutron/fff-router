@@ -1,10 +1,22 @@
-import type { Result, SearchBackendId, SearchQueryKind, ValidatedWithinEntry } from "../types";
+import type {
+  Result,
+  SearchBackendId,
+  SearchQueryKind,
+  ValidatedWithinEntry,
+  WorkerResourceUsage,
+  WorkerSupervisionTelemetry,
+} from "../types";
 
 export type SearchBackendRuntime = {
   id: string;
   pid?: number | null;
+  supervision?: WorkerSupervisionTelemetry;
   close: () => Promise<void> | void;
-  onClose?: (handler: () => void) => () => void;
+  onClose?: (handler: (reason?: string) => void) => () => void;
+  onResourceSample?: (handler: () => void) => () => void;
+  onTermination?: (handler: () => void) => () => void;
+  getResourceUsage?: () => WorkerResourceUsage | null;
+  getTerminationReason?: () => string | undefined;
 };
 
 export type RuntimeStartSpec<TRuntime extends SearchBackendRuntime = SearchBackendRuntime> = {
@@ -89,7 +101,16 @@ export interface SearchBackendAdapter<
   TRuntime extends SearchBackendRuntime = SearchBackendRuntime,
 > {
   readonly backendId: "fff-mcp";
-  startRuntime: (args: { persistenceRoot: string }) => Promise<TRuntime>;
+  startRuntime: (args: {
+    persistenceRoot: string;
+    supervision?: {
+      sampleIntervalMs?: number;
+      maxRssBytes?: number;
+      shutdownGraceMs?: number;
+      killGraceMs?: number;
+      orphanIdleTimeoutMs?: number;
+    };
+  }) => Promise<TRuntime>;
   execute: (args: {
     request: BackendSearchRequest;
     runtime: TRuntime;

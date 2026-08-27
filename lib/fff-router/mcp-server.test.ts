@@ -1,5 +1,5 @@
 import { describe, expect, test, vi } from "vitest";
-import { createMcpServer } from "./mcp-server";
+import { createMcpServer, MCP_PROTOCOL_VERSION } from "./mcp-server";
 import type { RouterService } from "./types";
 
 function service(): RouterService {
@@ -45,7 +45,22 @@ function service(): RouterService {
   };
 }
 
-describe("v1 MCP server", () => {
+function request(method: string, params: Record<string, unknown> = {}) {
+  return {
+    jsonrpc: "2.0" as const,
+    id: 1,
+    method,
+    params: {
+      ...params,
+      _meta: {
+        "io.modelcontextprotocol/protocolVersion": MCP_PROTOCOL_VERSION,
+        "io.modelcontextprotocol/clientCapabilities": {},
+      },
+    },
+  };
+}
+
+describe("stateless MCP 2026-07-28 server", () => {
   test("exposes search and worker-management tools", async () => {
     const tools = await createMcpServer({ service: service() }).listTools();
     expect(tools.map((tool) => tool.name)).toEqual([
@@ -63,6 +78,7 @@ describe("v1 MCP server", () => {
       within: "/repo",
     });
     expect(response).toMatchObject({
+      resultType: "complete",
       isError: false,
       structuredContent: {
         tool: "find_files",
@@ -71,6 +87,59 @@ describe("v1 MCP server", () => {
         items: [{ path: "src/router.ts", absolutePath: "/repo/src/router.ts" }],
       },
     });
+  });
+
+  test("discovers capabilities without an initialize session", async () => {
+    const server = createMcpServer({ service: service() });
+    expect(await server.handleRequest(request("server/discover"))).toMatchObject({
+      result: {
+        resultType: "complete",
+        supportedVersions: [MCP_PROTOCOL_VERSION],
+        capabilities: { tools: {} },
+      },
+    });
+    expect(await server.handleRequest(request("initialize"))).toMatchObject({
+      error: { code: -32601 },
+    });
+  });
+
+  test("returns serializable JSON Schema and cache hints from tools/list", async () => {
+    const response = await createMcpServer({ service: service() }).handleRequest(
+      request("tools/list"),
+    );
+    const serialized = JSON.stringify(response);
+    const parsed = JSON.parse(serialized) as {
+      result: { resultType: string; ttlMs: number; cacheScope: string; tools: unknown[] };
+    };
+    expect(parsed).toMatchObject({
+      result: {
+        resultType: "complete",
+        ttlMs: 300_000,
+        cacheScope: "private",
+      },
+    });
+    expect(parsed.result.tools[0]).toMatchObject({
+      name: "find_files",
+      inputSchema: { type: "object" },
+    });
+  });
+
+  test("requires per-request protocol metadata", async () => {
+    const server = createMcpServer({ service: service() });
+    expect(
+      await server.handleRequest({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }),
+    ).toMatchObject({ error: { code: -32602 } });
+    expect(
+      await server.handleRequest({
+        ...request("tools/list"),
+        params: {
+          _meta: {
+            "io.modelcontextprotocol/protocolVersion": "2025-11-25",
+            "io.modelcontextprotocol/clientCapabilities": {},
+          },
+        },
+      }),
+    ).toMatchObject({ error: { code: -32022 } });
   });
 
   test("returns stable structured error codes in text content", async () => {

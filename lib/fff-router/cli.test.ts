@@ -12,6 +12,7 @@ describe("fff CLI", () => {
     });
     expect(await main(["--help"])).toBe(0);
     expect(output.join("")).toContain("fff warm <path...>");
+    expect(output.join("")).toContain("daemon <start|stop|restart|reload|logs> [--clear-runtimes]");
     expect(output.join("")).toContain(
       "corepack pnpm@11.19.0 add --global github:unstableneutron/fff-router",
     );
@@ -27,5 +28,6 @@ describe("fff CLI", () => {
     expect(await main(["status", "--unknown"])).toBe(2);
     expect(await main(["setup", "extra"])).toBe(2);
     expect(await main(["daemon", "stop", "extra"])).toBe(2);
+    expect(await main(["daemon", "stop", "--clear-runtimes"])).toBe(2);
   });
 });

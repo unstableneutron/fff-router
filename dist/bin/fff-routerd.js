@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // lib/fff-router/tool-resolution.ts
-import { constants as fsConstants, accessSync, existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 var TOOL_ENV_VARS = {
@@ -13,8 +13,8 @@ function managedInstallPath(env) {
 }
 function isExecutable(pathValue) {
   try {
-    accessSync(pathValue, fsConstants.X_OK);
-    return true;
+    const stats = statSync(pathValue);
+    return stats.isFile() && (process.platform === "win32" || (stats.mode & 73) !== 0);
   } catch {
     return false;
   }
@@ -31,8 +31,8 @@ function resolveExecutableOnPath(command, env = process.env) {
   const directories = pathValue.split(path.delimiter).filter(Boolean);
   const extensions = commandExtensions(env);
   for (const directory of directories) {
-    for (const extension2 of extensions) {
-      const candidatePath = process.platform === "win32" && extension2 && !command.toUpperCase().endsWith(extension2) ? path.join(directory, `${command}${extension2}`) : path.join(directory, command);
+    for (const extension of extensions) {
+      const candidatePath = process.platform === "win32" && extension && !command.toUpperCase().endsWith(extension) ? path.join(directory, `${command}${extension}`) : path.join(directory, command);
       if (existsSync(candidatePath) && isExecutable(candidatePath)) {
         return candidatePath;
       }
@@ -93,7 +93,7 @@ function resolveToolCommand(tool, deps = {}) {
 }
 
 // lib/fff-router/daemon-autostart.ts
-import path12 from "node:path";
+import path14 from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 
 // lib/fff-router/daemon-config.ts
@@ -153,30 +153,22 @@ function expandHomePath(candidate, env = process.env) {
 
 // lib/fff-router/daemon-config.ts
 var DEFAULT_DAEMON_HOST = "127.0.0.1";
-var DAEMON_PROTOCOL_VERSION = "fff-router-v1";
+var DAEMON_PROTOCOL_VERSION = "fff-router-v2";
 var DEFAULT_DAEMON_PORT = 4319;
 var DEFAULT_DAEMON_MCP_PATH = "/mcp";
 var DEFAULT_BACKEND_TOOL_TIMEOUT_MS = 3e4;
 var DEFAULT_SWEEP_INTERVAL_MS = 3e4;
 var DEFAULT_RESTART_BACKOFF_MS = 1e3;
+var DEFAULT_RESTART_BACKOFF_MAX_MS = 6e4;
+var DEFAULT_PROCESS_SAMPLE_INTERVAL_MS = 5e3;
+var DEFAULT_PROCESS_SHUTDOWN_GRACE_MS = 500;
+var DEFAULT_PROCESS_KILL_GRACE_MS = 1e3;
+var DEFAULT_WORKER_ORPHAN_IDLE_TIMEOUT_MS = 30 * 60 * 1e3;
+var DEFAULT_DAEMON_IDLE_TIMEOUT_MS = 30 * 60 * 1e3;
+var DEFAULT_MAX_WORKER_RSS_BYTES = 768 * 1024 * 1024;
+var DEFAULT_MAX_TOTAL_WORKER_RSS_BYTES = 2 * 1024 * 1024 * 1024;
 var moduleDir = path3.dirname(fileURLToPath(import.meta.url));
-function packageVersion() {
-  const candidatePaths = [
-    path3.resolve(moduleDir, "../../package.json"),
-    path3.resolve(moduleDir, "../../../package.json")
-  ];
-  for (const candidatePath of candidatePaths) {
-    if (!existsSync2(candidatePath)) {
-      continue;
-    }
-    const parsed = JSON.parse(readFileSync(candidatePath, "utf8"));
-    if (typeof parsed.version === "string" && parsed.version.length > 0) {
-      return parsed.version;
-    }
-  }
-  throw new Error("Unable to determine fff-router package version");
-}
-var PACKAGE_VERSION = packageVersion();
+var PACKAGE_VERSION = "2.0.0";
 function hashFingerprint(value) {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex").slice(0, 16);
 }
@@ -205,7 +197,7 @@ function getDaemonSourceFingerprint(args = {}) {
   if (env.FFF_ROUTER_DAEMON_SOURCE_FINGERPRINT) {
     return env.FFF_ROUTER_DAEMON_SOURCE_FINGERPRINT;
   }
-  const daemonEntrypointPath = args.daemonEntrypointPath ?? env.FFF_ROUTER_DAEMON_BIN ?? env.FFF_ROUTER_DAEMON_ENTRYPOINT ?? packagedDaemonEntrypointPath();
+  const daemonEntrypointPath = args.daemonEntrypointPath ?? env.FFF_ROUTER_DAEMON_BIN ?? env.FFF_ROUTER_DAEMON_ENTRYPOINT ?? (process.versions.perry ? process.execPath : packagedDaemonEntrypointPath());
   return hashFingerprint({
     packageVersion: PACKAGE_VERSION,
     daemonEntrypointPath,
@@ -238,12 +230,20 @@ function getDefaultRouterConfig() {
     },
     limits: {
       maxWorkers: 12,
-      maxNonGitWorkers: 4
+      maxNonGitWorkers: 4,
+      maxWorkerRssBytes: DEFAULT_MAX_WORKER_RSS_BYTES,
+      maxTotalWorkerRssBytes: DEFAULT_MAX_TOTAL_WORKER_RSS_BYTES
     },
     runtime: {
       toolTimeoutMs: DEFAULT_BACKEND_TOOL_TIMEOUT_MS,
       sweepIntervalMs: DEFAULT_SWEEP_INTERVAL_MS,
-      restartBackoffMs: DEFAULT_RESTART_BACKOFF_MS
+      restartBackoffMs: DEFAULT_RESTART_BACKOFF_MS,
+      restartBackoffMaxMs: DEFAULT_RESTART_BACKOFF_MAX_MS,
+      processSampleIntervalMs: DEFAULT_PROCESS_SAMPLE_INTERVAL_MS,
+      processShutdownGraceMs: DEFAULT_PROCESS_SHUTDOWN_GRACE_MS,
+      processKillGraceMs: DEFAULT_PROCESS_KILL_GRACE_MS,
+      workerOrphanIdleTimeoutMs: DEFAULT_WORKER_ORPHAN_IDLE_TIMEOUT_MS,
+      daemonIdleTimeoutMs: DEFAULT_DAEMON_IDLE_TIMEOUT_MS
     }
   };
 }
@@ -262,9 +262,22 @@ function getDefaultDaemonFileConfig() {
     allowlist: [],
     warmRoots: [],
     ttl: { ...reload.router.ttl },
-    limits: { ...reload.router.limits },
+    limits: {
+      maxWorkers: reload.router.limits.maxWorkers,
+      maxNonGitWorkers: reload.router.limits.maxNonGitWorkers,
+      maxWorkerRssBytes: reload.router.limits.maxWorkerRssBytes ?? DEFAULT_MAX_WORKER_RSS_BYTES,
+      maxTotalWorkerRssBytes: reload.router.limits.maxTotalWorkerRssBytes ?? DEFAULT_MAX_TOTAL_WORKER_RSS_BYTES
+    },
     runtime: {
-      ...reload.router.runtime
+      toolTimeoutMs: reload.router.runtime.toolTimeoutMs,
+      sweepIntervalMs: reload.router.runtime.sweepIntervalMs,
+      restartBackoffMs: reload.router.runtime.restartBackoffMs,
+      restartBackoffMaxMs: reload.router.runtime.restartBackoffMaxMs ?? DEFAULT_RESTART_BACKOFF_MAX_MS,
+      processSampleIntervalMs: reload.router.runtime.processSampleIntervalMs ?? DEFAULT_PROCESS_SAMPLE_INTERVAL_MS,
+      processShutdownGraceMs: reload.router.runtime.processShutdownGraceMs ?? DEFAULT_PROCESS_SHUTDOWN_GRACE_MS,
+      processKillGraceMs: reload.router.runtime.processKillGraceMs ?? DEFAULT_PROCESS_KILL_GRACE_MS,
+      workerOrphanIdleTimeoutMs: reload.router.runtime.workerOrphanIdleTimeoutMs ?? DEFAULT_WORKER_ORPHAN_IDLE_TIMEOUT_MS,
+      daemonIdleTimeoutMs: reload.router.runtime.daemonIdleTimeoutMs ?? DEFAULT_DAEMON_IDLE_TIMEOUT_MS
     }
   };
 }
@@ -367,8 +380,8 @@ function readOptionalMcpPath(value) {
   if (parsed.includes("?") || parsed.includes("#")) {
     throw new Error("mcpPath must be a pathname without query or hash");
   }
-  if (parsed === "/health") {
-    throw new Error("mcpPath '/health' is reserved");
+  if (parsed === "/health" || parsed === "/control") {
+    throw new Error(`mcpPath '${parsed}' is reserved`);
   }
   return parsed;
 }
@@ -379,7 +392,7 @@ function readOptionalHost(value) {
   }
   const normalized = host.toLowerCase().replace(/^\[|\]$/g, "");
   if (normalized !== "localhost" && normalized !== "::1" && !(isIP(normalized) === 4 && normalized.startsWith("127."))) {
-    throw new Error("fff-routerd v1 is machine-local; host must be localhost, 127.0.0.0/8, or ::1");
+    throw new Error("fff-routerd is machine-local; host must be localhost, 127.0.0.0/8, or ::1");
   }
   return host;
 }
@@ -522,9 +535,29 @@ function normalizeDaemonFileConfig(raw, env) {
   const limits = fileConfig.limits == null ? null : expectObject(fileConfig.limits, "limits");
   const runtime = fileConfig.runtime == null ? null : expectObject(fileConfig.runtime, "runtime");
   if (ttl) rejectUnknownKeys(ttl, ["gitMs", "nonGitMs"], "ttl");
-  if (limits) rejectUnknownKeys(limits, ["maxWorkers", "maxNonGitWorkers"], "limits");
+  if (limits) {
+    rejectUnknownKeys(
+      limits,
+      ["maxWorkers", "maxNonGitWorkers", "maxWorkerRssBytes", "maxTotalWorkerRssBytes"],
+      "limits"
+    );
+  }
   if (runtime) {
-    rejectUnknownKeys(runtime, ["toolTimeoutMs", "sweepIntervalMs", "restartBackoffMs"], "runtime");
+    rejectUnknownKeys(
+      runtime,
+      [
+        "toolTimeoutMs",
+        "sweepIntervalMs",
+        "restartBackoffMs",
+        "restartBackoffMaxMs",
+        "processSampleIntervalMs",
+        "processShutdownGraceMs",
+        "processKillGraceMs",
+        "workerOrphanIdleTimeoutMs",
+        "daemonIdleTimeoutMs"
+      ],
+      "runtime"
+    );
   }
   const normalizedEnv = { ...env, HOME: userHome(env) };
   const allowlist = readOptionalStringArray(fileConfig.allowlist, "allowlist") ?? defaults.allowlist;
@@ -535,13 +568,36 @@ function normalizeDaemonFileConfig(raw, env) {
   const ttlGitMs = readOptionalNonNegativeInteger(ttl?.gitMs, "ttl.gitMs") ?? defaults.ttl.gitMs;
   const ttlNonGitMs = readOptionalNonNegativeInteger(ttl?.nonGitMs, "ttl.nonGitMs") ?? defaults.ttl.nonGitMs;
   const maxWorkers = readOptionalPositiveInteger(limits?.maxWorkers, "limits.maxWorkers") ?? defaults.limits.maxWorkers;
-  const maxNonGitWorkers = readOptionalPositiveInteger(limits?.maxNonGitWorkers, "limits.maxNonGitWorkers") ?? defaults.limits.maxNonGitWorkers;
+  const maxNonGitWorkers = readOptionalNonNegativeInteger(limits?.maxNonGitWorkers, "limits.maxNonGitWorkers") ?? defaults.limits.maxNonGitWorkers;
   if (maxNonGitWorkers > maxWorkers) {
     throw new Error("limits.maxNonGitWorkers must not exceed limits.maxWorkers");
+  }
+  const maxWorkerRssBytes = readOptionalPositiveInteger(limits?.maxWorkerRssBytes, "limits.maxWorkerRssBytes") ?? defaults.limits.maxWorkerRssBytes;
+  const maxTotalWorkerRssBytes = readOptionalPositiveInteger(limits?.maxTotalWorkerRssBytes, "limits.maxTotalWorkerRssBytes") ?? defaults.limits.maxTotalWorkerRssBytes;
+  if (maxTotalWorkerRssBytes < maxWorkerRssBytes) {
+    throw new Error("limits.maxTotalWorkerRssBytes must be at least limits.maxWorkerRssBytes");
   }
   const toolTimeoutMs = readOptionalNonNegativeInteger(runtime?.toolTimeoutMs, "runtime.toolTimeoutMs") ?? defaults.runtime.toolTimeoutMs;
   const sweepIntervalMs = readOptionalNonNegativeInteger(runtime?.sweepIntervalMs, "runtime.sweepIntervalMs") ?? defaults.runtime.sweepIntervalMs;
   const restartBackoffMs = readOptionalNonNegativeInteger(runtime?.restartBackoffMs, "runtime.restartBackoffMs") ?? defaults.runtime.restartBackoffMs;
+  const restartBackoffMaxMs = readOptionalNonNegativeInteger(runtime?.restartBackoffMaxMs, "runtime.restartBackoffMaxMs") ?? defaults.runtime.restartBackoffMaxMs;
+  if (restartBackoffMaxMs < restartBackoffMs) {
+    throw new Error("runtime.restartBackoffMaxMs must be at least runtime.restartBackoffMs");
+  }
+  const processSampleIntervalMs = readOptionalNonNegativeInteger(
+    runtime?.processSampleIntervalMs,
+    "runtime.processSampleIntervalMs"
+  ) ?? defaults.runtime.processSampleIntervalMs;
+  const processShutdownGraceMs = readOptionalNonNegativeInteger(
+    runtime?.processShutdownGraceMs,
+    "runtime.processShutdownGraceMs"
+  ) ?? defaults.runtime.processShutdownGraceMs;
+  const processKillGraceMs = readOptionalNonNegativeInteger(runtime?.processKillGraceMs, "runtime.processKillGraceMs") ?? defaults.runtime.processKillGraceMs;
+  const workerOrphanIdleTimeoutMs = readOptionalNonNegativeInteger(
+    runtime?.workerOrphanIdleTimeoutMs,
+    "runtime.workerOrphanIdleTimeoutMs"
+  ) ?? defaults.runtime.workerOrphanIdleTimeoutMs;
+  const daemonIdleTimeoutMs = readOptionalNonNegativeInteger(runtime?.daemonIdleTimeoutMs, "runtime.daemonIdleTimeoutMs") ?? defaults.runtime.daemonIdleTimeoutMs;
   return {
     daemon: {
       host,
@@ -558,12 +614,20 @@ function normalizeDaemonFileConfig(raw, env) {
         },
         limits: {
           maxWorkers,
-          maxNonGitWorkers
+          maxNonGitWorkers,
+          maxWorkerRssBytes,
+          maxTotalWorkerRssBytes
         },
         runtime: {
           toolTimeoutMs,
           sweepIntervalMs,
-          restartBackoffMs
+          restartBackoffMs,
+          restartBackoffMaxMs,
+          processSampleIntervalMs,
+          processShutdownGraceMs,
+          processKillGraceMs,
+          workerOrphanIdleTimeoutMs,
+          daemonIdleTimeoutMs
         }
       }
     }
@@ -641,20 +705,869 @@ function getDaemonPaths(args = {}) {
 }
 
 // lib/fff-router/http-daemon.ts
-import { watch } from "node:fs";
 import { createServer } from "node:http";
 import { isIP as isIP2 } from "node:net";
-import { mkdir as mkdir2, readFile as readFile2, rename, rm, writeFile as writeFile2 } from "node:fs/promises";
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import {
+  existsSync as existsSync7,
+  mkdirSync as mkdirSync4,
+  readFileSync as readFileSync5,
+  renameSync as renameSync2,
+  rmSync as rmSync3,
+  statSync as statSync5,
+  writeFileSync as writeFileSync4
+} from "node:fs";
 
 // lib/fff-router/adapters/fff-mcp-stdio.ts
+import path7 from "node:path";
+
+// lib/fff-router/legacy-mcp-client.ts
+import {
+  closeSync,
+  existsSync as existsSync4,
+  fstatSync,
+  mkdirSync as mkdirSync2,
+  openSync,
+  readFileSync as readFileSync3,
+  readSync,
+  renameSync,
+  rmSync as rmSync2,
+  statSync as statSync2,
+  writeFileSync as writeFileSync2
+} from "node:fs";
+import os4 from "node:os";
 import path5 from "node:path";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+
+// lib/fff-router/process-supervisor.ts
+import {
+  execFile,
+  spawn
+} from "node:child_process";
+import { existsSync as existsSync3, readFileSync as readFileSync2, rmSync } from "node:fs";
+import os3 from "node:os";
+import path4 from "node:path";
+var IS_PERRY = typeof process.versions.perry === "string";
+function parseCpuTime(value) {
+  const dayParts = value.trim().split("-");
+  const day = dayParts.length === 2 ? Number(dayParts[0]) : 0;
+  const time = dayParts.at(-1)?.split(":").map(Number) ?? [];
+  if (time.some((part) => !Number.isFinite(part))) return void 0;
+  const [hours = 0, minutes = 0, seconds = 0] = time.length === 3 ? time : time.length === 2 ? [0, ...time] : [0, 0, time[0] ?? 0];
+  return (((day * 24 + hours) * 60 + minutes) * 60 + seconds) * 1e3;
+}
+function stopDetachedProcess(pid) {
+  if (!pid) return;
+  try {
+    process.kill(process.platform === "win32" ? pid : -pid, "SIGKILL");
+  } catch {
+  }
+}
+async function signalNativeProcessGroup(pid, signal) {
+  const nonce = `${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}`;
+  const statusPath = path4.join(os3.tmpdir(), `.fff-router-signal.${nonce}.status`);
+  const shell = 'status_path="$1"; signal_name="$2"; process_group="$3"; kill "-$signal_name" "-$process_group" 2>/dev/null; code=$?; printf "%s\\n" "$code" >"$status_path"';
+  const child = spawn(
+    "/bin/sh",
+    ["-c", shell, "fff-router-signal", statusPath, signal.replace(/^SIG/, ""), String(pid)],
+    { detached: false, stdio: "ignore" }
+  );
+  const deadline = Date.now() + 2e3;
+  try {
+    while (!existsSync3(statusPath)) {
+      if (Date.now() >= deadline) {
+        try {
+          if (child.pid) process.kill(child.pid, "SIGKILL");
+        } catch {
+        }
+        throw new Error(`timed out sending ${signal} to process group ${pid}`);
+      }
+      await wait(10);
+    }
+    const exitCode = Number(readFileSync2(statusPath, "utf8").trim());
+    if (exitCode !== 0 && isProcessAlive(pid)) {
+      throw new Error(`failed to send ${signal} to process group ${pid}`);
+    }
+  } finally {
+    rmSync(statusPath, { force: true });
+  }
+}
+async function terminateNativeProcessGroup(pid, shutdownGraceMs, killGraceMs) {
+  await signalNativeProcessGroup(pid, "SIGTERM");
+  const termDeadline = Date.now() + Math.max(0, shutdownGraceMs);
+  while (isProcessAlive(pid) && Date.now() < termDeadline) await wait(10);
+  await signalNativeProcessGroup(pid, "SIGKILL");
+  const killDeadline = Date.now() + Math.max(0, killGraceMs);
+  while (isProcessAlive(pid) && Date.now() < killDeadline) await wait(10);
+  if (isProcessAlive(pid)) {
+    throw new Error(`failed to terminate supervised process group ${pid}`);
+  }
+}
+async function runNativeCommandText(command, args, timeoutMs) {
+  const nonce = `${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}`;
+  const basePath = path4.join(os3.tmpdir(), `.fff-router-command.${nonce}`);
+  const outputPath = `${basePath}.stdout`;
+  const stderrPath = `${basePath}.stderr`;
+  const statusPath = `${basePath}.status`;
+  const shell = 'status_path="$1"; output_path="$2"; stderr_path="$3"; shift 3; "$@" >"$output_path" 2>"$stderr_path"; code=$?; printf "%s\\n" "$code" >"$status_path"';
+  const child = spawn(
+    "/bin/sh",
+    ["-c", shell, "fff-router-command", statusPath, outputPath, stderrPath, command, ...args],
+    { detached: process.platform !== "win32", stdio: "ignore" }
+  );
+  child.unref();
+  const deadline = Date.now() + timeoutMs;
+  try {
+    while (!existsSync3(statusPath)) {
+      if (Date.now() >= deadline) {
+        stopDetachedProcess(child.pid);
+        return "";
+      }
+      await wait(25);
+    }
+    const exitCode = Number(readFileSync2(statusPath, "utf8").trim());
+    return exitCode === 0 && existsSync3(outputPath) ? readFileSync2(outputPath, "utf8") : "";
+  } catch {
+    return "";
+  } finally {
+    rmSync(outputPath, { force: true });
+    rmSync(stderrPath, { force: true });
+    rmSync(statusPath, { force: true });
+  }
+}
+async function psOutput() {
+  const args = ["-axo", "pid=,ppid=,rss=,time="];
+  if (IS_PERRY) {
+    return await runNativeCommandText("ps", args, 2e3);
+  }
+  return await new Promise((resolve, reject) => {
+    execFile("ps", args, (error2, stdout) => {
+      if (error2) reject(error2);
+      else resolve(stdout);
+    });
+  }).catch(() => "");
+}
+async function sampleWithPs(pid) {
+  const processes = /* @__PURE__ */ new Map();
+  for (const line of (await psOutput()).split("\n")) {
+    const match = line.trim().match(/^(\d+)\s+(\d+)\s+(\d+)\s+(.+)$/);
+    if (!match) continue;
+    const processPid = Number(match[1]);
+    processes.set(processPid, {
+      ppid: Number(match[2]),
+      rssKiB: Number(match[3]),
+      ...parseCpuTime(match[4] ?? "") !== void 0 ? { cpuTimeMs: parseCpuTime(match[4] ?? "") } : {}
+    });
+  }
+  if (!processes.has(pid)) return null;
+  const pending = [pid];
+  const visited = /* @__PURE__ */ new Set();
+  let rssKiB = 0;
+  let cpuTimeMs = 0;
+  let measuredCpu = false;
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (visited.has(current)) continue;
+    const details = processes.get(current);
+    if (!details) continue;
+    visited.add(current);
+    rssKiB += details.rssKiB;
+    if (details.cpuTimeMs !== void 0) {
+      cpuTimeMs += details.cpuTimeMs;
+      measuredCpu = true;
+    }
+    for (const [candidate, candidateDetails] of processes) {
+      if (candidateDetails.ppid === current) pending.push(candidate);
+    }
+  }
+  return {
+    sampledAt: Date.now(),
+    rssBytes: rssKiB * 1024,
+    processCount: visited.size,
+    ...measuredCpu ? { cpuTimeMs } : {}
+  };
+}
+function parseLinuxProcStatCpuTime(value) {
+  const commandEnd = value.lastIndexOf(")");
+  if (commandEnd < 0) return void 0;
+  const fields = value.slice(commandEnd + 1).trim().split(/\s+/);
+  const userTicks = Number(fields[11]);
+  const systemTicks = Number(fields[12]);
+  if (!Number.isFinite(userTicks) || !Number.isFinite(systemTicks)) return void 0;
+  return (userTicks + systemTicks) * 1e3 / 100;
+}
+async function sampleLinuxProc(pid) {
+  const pending = [pid];
+  const visited = /* @__PURE__ */ new Set();
+  let rssKiB = 0;
+  let threads = 0;
+  let cpuTimeMs = 0;
+  let measuredCpu = false;
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (visited.has(current)) continue;
+    visited.add(current);
+    try {
+      const status = readFileSync2(`/proc/${current}/status`, "utf8");
+      const statPath = `/proc/${current}/stat`;
+      const processStat = existsSync3(statPath) ? readFileSync2(statPath, "utf8") : "";
+      const processRssKiB = Number(status.match(/^VmRSS:\s+(\d+)\s+kB$/m)?.[1]);
+      const processThreads = Number(status.match(/^Threads:\s+(\d+)$/m)?.[1]);
+      if (Number.isFinite(processRssKiB)) rssKiB += processRssKiB;
+      if (Number.isFinite(processThreads)) threads += processThreads;
+      const processCpuTimeMs = parseLinuxProcStatCpuTime(processStat);
+      if (processCpuTimeMs !== void 0) {
+        cpuTimeMs += processCpuTimeMs;
+        measuredCpu = true;
+      }
+      const childrenPath = `/proc/${current}/task/${current}/children`;
+      const children = existsSync3(childrenPath) ? readFileSync2(childrenPath, "utf8") : "";
+      for (const child of children.trim().split(/\s+/)) {
+        const childPid = Number(child);
+        if (Number.isInteger(childPid) && childPid > 0) pending.push(childPid);
+      }
+    } catch {
+      if (current === pid) return null;
+    }
+  }
+  return {
+    sampledAt: Date.now(),
+    rssBytes: rssKiB * 1024,
+    processCount: visited.size,
+    ...measuredCpu ? { cpuTimeMs } : {},
+    ...threads > 0 ? { threads } : {}
+  };
+}
+async function sampleProcessResources(pid) {
+  return process.platform === "linux" ? await sampleLinuxProc(pid) ?? await sampleWithPs(pid) : await sampleWithPs(pid);
+}
+function isMissingProcessError(error2) {
+  return typeof error2 === "object" && error2 !== null && "code" in error2 && error2.code === "ESRCH";
+}
+function isProcessAlive(pid) {
+  if (process.platform === "linux") {
+    const statPath = `/proc/${pid}/stat`;
+    if (!existsSync3(statPath)) return false;
+    try {
+      const stat = readFileSync2(statPath, "utf8");
+      const commandEnd = stat.lastIndexOf(")");
+      if (commandEnd >= 0 && stat.slice(commandEnd + 1).trimStart().startsWith("Z "))
+        return false;
+    } catch {
+      return false;
+    }
+  }
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, Math.max(0, ms)));
+}
+var ProcessSupervisor = class {
+  constructor(options) {
+    this.options = options;
+    const detached = process.platform !== "win32";
+    this.sample = options.sample ?? sampleProcessResources;
+    this.exitPromise = new Promise((resolve) => {
+      this.resolveExit = resolve;
+    });
+    const spawnProcess = options.spawnProcess ?? ((command, args, spawnOptions) => spawn(command, args, spawnOptions));
+    this.child = spawnProcess(options.command, options.args, {
+      cwd: options.cwd,
+      env: options.env,
+      detached,
+      stdio: "pipe",
+      windowsHide: true
+    });
+    this.spawned = IS_PERRY ? this.child.pid ? Promise.resolve() : Promise.reject(new Error(`failed to spawn ${options.command}`)) : new Promise((resolve, reject) => {
+      this.child.once("spawn", resolve);
+      this.child.once("error", reject);
+    });
+    this.child.stderr.setEncoding("utf8");
+    this.child.stderr.on("data", (chunk) => {
+      this.stderrTail = `${this.stderrTail}${chunk}`.slice(-(options.maxStderrBytes ?? 64 * 1024));
+    });
+    this.child.once("exit", (code, signal) => this.recordExit({ code, signal }));
+    this.child.once("error", (error2) => {
+      if (!this.exited) {
+        this.recordExit({ code: null, signal: null, reason: `spawn error: ${error2.message}` });
+      }
+    });
+    if (IS_PERRY) this.scheduleExitPoll();
+    if (options.sampleIntervalMs > 0) this.scheduleSample();
+  }
+  options;
+  child;
+  spawned;
+  telemetry = {
+    resources: null,
+    terminationReason: null
+  };
+  exitPromise;
+  resolveExit;
+  closeHandlers = /* @__PURE__ */ new Set();
+  resourceHandlers = /* @__PURE__ */ new Set();
+  terminationHandlers = /* @__PURE__ */ new Set();
+  sample;
+  sampleTimer = null;
+  exitPollTimer = null;
+  sampling = false;
+  stderrTail = "";
+  overRssSamples = 0;
+  closePromise = null;
+  exited = false;
+  get pid() {
+    return this.child.pid ?? null;
+  }
+  getStderrTail() {
+    return this.stderrTail.trimEnd();
+  }
+  getResourceUsage() {
+    return this.telemetry.resources ? { ...this.telemetry.resources } : null;
+  }
+  getTerminationReason() {
+    return this.telemetry.terminationReason ?? void 0;
+  }
+  onClose(handler) {
+    this.closeHandlers.add(handler);
+    return () => this.closeHandlers.delete(handler);
+  }
+  onResourceSample(handler) {
+    if (this.telemetry.resources) handler();
+    if (!this.exited) this.resourceHandlers.add(handler);
+    return () => this.resourceHandlers.delete(handler);
+  }
+  onTermination(handler) {
+    if (this.telemetry.terminationReason) handler();
+    if (!this.exited) this.terminationHandlers.add(handler);
+    return () => this.terminationHandlers.delete(handler);
+  }
+  selectTerminationReason(reason) {
+    if (!reason || this.telemetry.terminationReason) return;
+    this.telemetry.terminationReason = reason;
+    for (const handler of this.terminationHandlers) handler();
+  }
+  scheduleExitPoll() {
+    if (!IS_PERRY || this.exited || this.exitPollTimer) return;
+    this.exitPollTimer = setTimeout(() => {
+      this.exitPollTimer = null;
+      const pid = this.pid;
+      if (!this.exited && pid && !isProcessAlive(pid)) {
+        this.recordExit({ code: null, signal: null });
+      }
+      this.scheduleExitPoll();
+    }, 250);
+  }
+  scheduleSample() {
+    if (this.exited || this.options.sampleIntervalMs <= 0 || this.sampleTimer) return;
+    this.sampleTimer = setTimeout(
+      () => {
+        this.sampleTimer = null;
+        void this.sampleNow().catch(() => null).finally(() => this.scheduleSample());
+      },
+      Math.max(250, this.options.sampleIntervalMs)
+    );
+  }
+  recordExit(exit) {
+    if (this.exited) return;
+    this.exited = true;
+    if (this.sampleTimer) clearTimeout(this.sampleTimer);
+    this.sampleTimer = null;
+    if (this.exitPollTimer) clearTimeout(this.exitPollTimer);
+    this.exitPollTimer = null;
+    this.selectTerminationReason(exit.reason);
+    const resolvedExit = {
+      code: exit.code,
+      signal: exit.signal,
+      reason: this.telemetry.terminationReason ?? exit.reason
+    };
+    this.resolveExit(resolvedExit);
+    for (const handler of this.closeHandlers) handler(resolvedExit);
+    this.closeHandlers.clear();
+    this.resourceHandlers.clear();
+    this.terminationHandlers.clear();
+  }
+  async sampleNow() {
+    const pid = this.pid;
+    if (!pid || this.exited || this.sampling) return this.telemetry.resources;
+    this.sampling = true;
+    try {
+      const usage = await this.sample(pid);
+      if (!usage) return this.telemetry.resources;
+      this.telemetry.resources = usage;
+      for (const handler of this.resourceHandlers) handler();
+      const maxRssBytes = this.options.maxRssBytes;
+      if (maxRssBytes && usage.rssBytes > maxRssBytes) {
+        this.overRssSamples += 1;
+        if (this.overRssSamples >= (this.options.maxRssSamples ?? 2)) {
+          void this.terminate(
+            `worker RSS ${usage.rssBytes} exceeded ${maxRssBytes} bytes for ${this.overRssSamples} samples`
+          );
+        }
+      } else {
+        this.overRssSamples = 0;
+      }
+      return usage;
+    } finally {
+      this.sampling = false;
+    }
+  }
+  async signal(signal) {
+    const pid = this.pid;
+    if (!pid || this.exited) return;
+    if (IS_PERRY && process.platform !== "win32") {
+      await signalNativeProcessGroup(pid, signal);
+      return;
+    }
+    try {
+      if (process.platform !== "win32") process.kill(-pid, signal);
+      else this.child.kill(signal);
+    } catch (error2) {
+      if (!isMissingProcessError(error2)) throw error2;
+    }
+  }
+  async exitedWithin(timeoutMs) {
+    if (this.exited) return true;
+    return await Promise.race([
+      this.exitPromise.then(() => true),
+      wait(timeoutMs).then(() => this.exited)
+    ]);
+  }
+  async terminate(reason = "supervisor shutdown") {
+    if (this.closePromise) return await this.closePromise;
+    this.selectTerminationReason(reason);
+    this.closePromise = (async () => {
+      const pid = this.pid;
+      if (IS_PERRY && process.platform !== "win32" && pid) {
+        await terminateNativeProcessGroup(
+          pid,
+          this.options.shutdownGraceMs,
+          this.options.killGraceMs
+        );
+        if (!this.exited) this.recordExit({ code: null, signal: "SIGKILL" });
+        return;
+      }
+      if (this.exited) return;
+      this.child.stdin.end();
+      if (await this.exitedWithin(this.options.shutdownGraceMs)) return;
+      await this.signal("SIGTERM");
+      if (await this.exitedWithin(this.options.killGraceMs)) return;
+      await this.signal("SIGKILL");
+      if (!await this.exitedWithin(this.options.killGraceMs)) {
+        throw new Error(`failed to terminate supervised process ${this.pid ?? "unknown"}`);
+      }
+    })();
+    return await this.closePromise;
+  }
+  async close() {
+    await this.terminate("supervisor shutdown");
+  }
+  async waitForExit() {
+    return await this.exitPromise;
+  }
+};
+
+// lib/fff-router/legacy-mcp-client.ts
+var IS_PERRY2 = typeof process.versions.perry === "string";
+var DEFAULT_MAX_MESSAGE_BYTES = 16 * 1024 * 1024;
+function isRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function wait2(ms) {
+  return new Promise((resolve) => setTimeout(resolve, Math.max(0, ms)));
+}
+var LegacyMcpClientBase = class {
+  constructor(options, supervisor) {
+    this.options = options;
+    this.supervisor = supervisor;
+    this.supervisor.onClose((exit) => {
+      const details = this.getRecentStderr();
+      const reason = exit.reason ?? this.supervisor.getTerminationReason();
+      this.rejectAll(
+        new Error(
+          `fff-mcp exited${reason ? `: ${reason}` : ""}${details ? `; recent stderr: ${details}` : ""}`
+        )
+      );
+      this.onTransportClosed();
+      for (const handler of this.closeHandlers) handler(reason);
+      this.closeHandlers.clear();
+    });
+  }
+  options;
+  supervisor;
+  pending = /* @__PURE__ */ new Map();
+  closeHandlers = /* @__PURE__ */ new Set();
+  nextId = 0;
+  stdoutBuffer = "";
+  closed = false;
+  get pid() {
+    return this.supervisor.pid;
+  }
+  get supervision() {
+    return this.supervisor.telemetry;
+  }
+  getResourceUsage() {
+    return this.supervisor.getResourceUsage();
+  }
+  getTerminationReason() {
+    return this.supervisor.getTerminationReason();
+  }
+  onClose(handler) {
+    this.closeHandlers.add(handler);
+    return () => this.closeHandlers.delete(handler);
+  }
+  onResourceSample(handler) {
+    return this.supervisor.onResourceSample(handler);
+  }
+  onTermination(handler) {
+    return this.supervisor.onTermination(handler);
+  }
+  getRecentStderr() {
+    return this.supervisor.getStderrTail();
+  }
+  onTransportClosed() {
+  }
+  async prepareTransport() {
+  }
+  closeTransport() {
+  }
+  rejectAll(error2) {
+    for (const pending of this.pending.values()) {
+      if (pending.timer) clearTimeout(pending.timer);
+      pending.reject(error2);
+    }
+    this.pending.clear();
+  }
+  failTransport(message) {
+    const error2 = new Error(message);
+    this.rejectAll(error2);
+    void this.supervisor.terminate(message);
+  }
+  handleLine(line) {
+    if (!line.trim()) return;
+    let message;
+    try {
+      message = JSON.parse(line);
+    } catch {
+      this.failTransport("fff-mcp wrote malformed JSON-RPC to stdout");
+      return;
+    }
+    if (!isRecord(message) || typeof message.id !== "number") return;
+    const pending = this.pending.get(message.id);
+    if (!pending) return;
+    this.pending.delete(message.id);
+    if (pending.timer) clearTimeout(pending.timer);
+    if (isRecord(message.error)) {
+      const text = typeof message.error.message === "string" ? message.error.message : "MCP request failed";
+      pending.reject(new Error(text));
+    } else {
+      pending.resolve(message.result);
+    }
+  }
+  handleStdout(chunk) {
+    this.stdoutBuffer += chunk;
+    if (Buffer.byteLength(this.stdoutBuffer, "utf8") > (this.options.maxMessageBytes ?? DEFAULT_MAX_MESSAGE_BYTES)) {
+      this.failTransport("fff-mcp stdout message exceeded the supervisor limit");
+      return;
+    }
+    const lines = this.stdoutBuffer.split(/\r?\n/);
+    this.stdoutBuffer = lines.pop() ?? "";
+    for (const line of lines) this.handleLine(line);
+  }
+  async request(method, params, timeoutMs = 0) {
+    const id = ++this.nextId;
+    const response = new Promise((resolve, reject) => {
+      const pending = { resolve, reject };
+      if (timeoutMs > 0) {
+        pending.timer = setTimeout(() => {
+          this.pending.delete(id);
+          reject(new Error(`fff-mcp ${method} timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+      }
+      this.pending.set(id, pending);
+    });
+    try {
+      await this.writeMessage({ jsonrpc: "2.0", id, method, params });
+    } catch (caught) {
+      const pending = this.pending.get(id);
+      this.pending.delete(id);
+      if (pending?.timer) clearTimeout(pending.timer);
+      pending?.reject(caught instanceof Error ? caught : new Error(String(caught)));
+    }
+    return await response;
+  }
+  async connect() {
+    await this.supervisor.spawned;
+    await this.prepareTransport();
+    const initialized = await this.request(
+      "initialize",
+      {
+        protocolVersion: "2025-11-25",
+        capabilities: {},
+        clientInfo: { name: "fff-router-supervisor", version: "2.0.0" }
+      },
+      this.options.initializeTimeoutMs ?? 1e4
+    );
+    if (!isRecord(initialized) || typeof initialized.protocolVersion !== "string") {
+      throw new Error("fff-mcp returned an invalid initialize response");
+    }
+    const notification = this.writeMessage({
+      jsonrpc: "2.0",
+      method: "notifications/initialized"
+    });
+    if (!IS_PERRY2) await notification;
+  }
+  async callTool(name, args) {
+    return await this.request("tools/call", { name, arguments: args });
+  }
+  async close() {
+    if (this.closed) return;
+    this.closed = true;
+    const transportClose = this.closeTransport();
+    if (!IS_PERRY2) await transportClose;
+    await this.supervisor.close();
+    this.rejectAll(new Error("fff-mcp client is closed"));
+  }
+};
+var LegacyMcpClient = class extends LegacyMcpClientBase {
+  constructor(options) {
+    const supervisor = new ProcessSupervisor({ ...options, maxStderrBytes: 64 * 1024 });
+    super(options, supervisor);
+    this.supervisor.child.stdout.setEncoding("utf8");
+    this.supervisor.child.stdout.on("data", (chunk) => this.handleStdout(chunk));
+  }
+  async writeMessage(message) {
+    if (this.closed || this.supervisor.child.stdin.destroyed) {
+      throw new Error("fff-mcp client is closed");
+    }
+    const line = `${JSON.stringify(message)}
+`;
+    if (this.supervisor.child.stdin.write(line)) return;
+    await new Promise((resolve, reject) => {
+      const onDrain = () => {
+        cleanup();
+        resolve();
+      };
+      const onError = (error2) => {
+        cleanup();
+        reject(error2);
+      };
+      const cleanup = () => {
+        this.supervisor.child.stdin.off("drain", onDrain);
+        this.supervisor.child.stdin.off("error", onError);
+      };
+      this.supervisor.child.stdin.once("drain", onDrain);
+      this.supervisor.child.stdin.once("error", onError);
+    });
+  }
+};
+var FileBackedLegacyMcpClient = class extends LegacyMcpClientBase {
+  directory;
+  readyPath;
+  requestPrefix;
+  responsePrefix;
+  stderrPath;
+  requestSequence = 1;
+  responseSequence = 1;
+  pollTimer = null;
+  transportExited = false;
+  constructor(options) {
+    if (process.platform === "win32") {
+      throw new Error("file-backed fff-mcp transport requires a POSIX host");
+    }
+    const nonce = `${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}`;
+    const directory = path5.join(os4.tmpdir(), `.fff-router-mcp.${nonce}`);
+    const requestFifoPath = path5.join(directory, "request.fifo");
+    const requestPrefix = path5.join(directory, "request");
+    const responseFifoPath = path5.join(directory, "response.fifo");
+    const responsePrefix = path5.join(directory, "response");
+    const stderrPath = path5.join(directory, "stderr.log");
+    const readyPath = path5.join(directory, "ready");
+    mkdirSync2(directory, { mode: 448 });
+    const wrapper = [
+      'request_fifo="$1"',
+      'request_prefix="$2"',
+      'response_fifo="$3"',
+      'response_prefix="$4"',
+      'stderr_path="$5"',
+      'ready_path="$6"',
+      "shift 6",
+      "umask 077",
+      'rm -f "$request_fifo" "$response_fifo" "$ready_path"',
+      'mkfifo "$request_fifo" "$response_fifo" || exit 111',
+      '( exec 3>"$request_fifo"; sequence=1; while :; do request="${request_prefix}.${sequence}.jsonl"; if [ -f "$request" ]; then if cat "$request" >&3; then rm -f "$request"; sequence=$((sequence + 1)); else exit 112; fi; else sleep 0.02; fi; done ) & request_spool_pid=$!',
+      '( sequence=0; while IFS= read -r line; do sequence=$((sequence + 1)); temporary="${response_prefix}.${sequence}.tmp"; final="${response_prefix}.${sequence}.jsonl"; if printf "%s\\n" "$line" >"$temporary"; then mv "$temporary" "$final"; fi; done <"$response_fifo" ) & response_spool_pid=$!',
+      ': >"$ready_path"',
+      '"$@" <"$request_fifo" >"$response_fifo" 2>>"$stderr_path"',
+      "code=$?",
+      'kill "$request_spool_pid" "$response_spool_pid" 2>/dev/null || true',
+      'wait "$request_spool_pid" "$response_spool_pid" 2>/dev/null || true',
+      'exit "$code"'
+    ].join("; ");
+    let supervisor;
+    try {
+      supervisor = new ProcessSupervisor({
+        ...options,
+        command: "/bin/sh",
+        args: [
+          "-c",
+          wrapper,
+          "fff-router-mcp-transport",
+          requestFifoPath,
+          requestPrefix,
+          responseFifoPath,
+          responsePrefix,
+          stderrPath,
+          readyPath,
+          options.command,
+          ...options.args
+        ],
+        maxStderrBytes: 64 * 1024
+      });
+    } catch (caught) {
+      rmSync2(directory, { recursive: true, force: true });
+      throw caught;
+    }
+    super(options, supervisor);
+    this.directory = directory;
+    this.readyPath = readyPath;
+    this.requestPrefix = requestPrefix;
+    this.responsePrefix = responsePrefix;
+    this.stderrPath = stderrPath;
+  }
+  getRecentStderr() {
+    try {
+      const fd = openSync(this.stderrPath, "r");
+      try {
+        const size = fstatSync(fd).size;
+        const length = Math.min(size, 64 * 1024);
+        const buffer = Buffer.alloc(length);
+        readSync(fd, buffer, 0, length, Math.max(0, size - length));
+        return buffer.toString("utf8").trimEnd() || super.getRecentStderr();
+      } finally {
+        closeSync(fd);
+      }
+    } catch {
+      return super.getRecentStderr();
+    }
+  }
+  cleanup() {
+    if (this.pollTimer) clearTimeout(this.pollTimer);
+    this.pollTimer = null;
+    rmSync2(this.directory, { recursive: true, force: true });
+  }
+  onTransportClosed() {
+    this.transportExited = true;
+    this.cleanup();
+  }
+  capStderr() {
+    try {
+      const details = statSync2(this.stderrPath);
+      if (details.size <= 64 * 1024) return;
+      const fd = openSync(this.stderrPath, "r");
+      let tail;
+      try {
+        tail = Buffer.alloc(64 * 1024);
+        readSync(fd, tail, 0, tail.byteLength, details.size - tail.byteLength);
+      } finally {
+        closeSync(fd);
+      }
+      writeFileSync2(this.stderrPath, tail, { mode: 384 });
+    } catch {
+    }
+  }
+  pollResponse() {
+    if (this.closed) return;
+    try {
+      this.capStderr();
+      for (let handled = 0; handled < 256; handled += 1) {
+        const responsePath = `${this.responsePrefix}.${this.responseSequence}.jsonl`;
+        if (!existsSync4(responsePath)) break;
+        const size = statSync2(responsePath).size;
+        if (size > (this.options.maxMessageBytes ?? DEFAULT_MAX_MESSAGE_BYTES)) {
+          this.failTransport("fff-mcp stdout message exceeded the supervisor limit");
+          return;
+        }
+        const line = readFileSync3(responsePath, "utf8");
+        rmSync2(responsePath, { force: true });
+        this.responseSequence += 1;
+        this.handleStdout(line);
+      }
+    } catch (caught) {
+      this.failTransport(
+        `failed to read fff-mcp response transport: ${caught instanceof Error ? caught.message : String(caught)}`
+      );
+    }
+  }
+  scheduleResponsePoll() {
+    if (this.closed || this.transportExited || this.pollTimer) return;
+    this.pollTimer = setTimeout(
+      () => {
+        this.pollTimer = null;
+        this.pollResponse();
+        this.scheduleResponsePoll();
+      },
+      Math.max(5, this.options.filePollIntervalMs ?? 20)
+    );
+  }
+  async prepareTransport() {
+    const deadline = Date.now() + (this.options.initializeTimeoutMs ?? 1e4);
+    while (true) {
+      try {
+        if (existsSync4(this.readyPath) && statSync2(this.readyPath).isFile()) break;
+      } catch {
+      }
+      if (this.transportExited) {
+        const details = this.supervisor.getStderrTail();
+        throw new Error(
+          `fff-mcp transport exited before its request spool became ready${details ? `: ${details}` : ""}`
+        );
+      }
+      if (Date.now() >= deadline) {
+        const details = this.supervisor.getStderrTail();
+        throw new Error(
+          `fff-mcp request spool did not become ready${details ? `: ${details}` : ""}`
+        );
+      }
+      await wait2(10);
+    }
+    this.scheduleResponsePoll();
+  }
+  writeMessage(message) {
+    if (this.closed || this.transportExited) {
+      throw new Error("fff-mcp client is closed");
+    }
+    const line = `${JSON.stringify(message)}
+`;
+    if (Buffer.byteLength(line, "utf8") > (this.options.maxMessageBytes ?? DEFAULT_MAX_MESSAGE_BYTES)) {
+      throw new Error("fff-mcp request message exceeded the supervisor limit");
+    }
+    const requestPath = `${this.requestPrefix}.${this.requestSequence}.jsonl`;
+    const temporaryPath = `${requestPath}.${process.pid}.tmp`;
+    writeFileSync2(temporaryPath, line, { encoding: "utf8", mode: 384, flag: "wx" });
+    renameSync(temporaryPath, requestPath);
+    this.requestSequence += 1;
+  }
+  closeTransport() {
+    if (this.pollTimer) clearTimeout(this.pollTimer);
+    this.pollTimer = null;
+  }
+  async close() {
+    try {
+      await super.close();
+    } finally {
+      this.cleanup();
+    }
+  }
+};
+function createLegacyMcpClient(options) {
+  return IS_PERRY2 ? new FileBackedLegacyMcpClient(options) : new LegacyMcpClient(options);
+}
 
 // lib/fff-router/adapters/common.ts
-import path4 from "node:path";
-import picomatch from "picomatch";
+import path6 from "node:path";
 function normalizeRelativePath(relativePath) {
   return relativePath.replace(/\\/g, "/");
 }
@@ -662,7 +1575,7 @@ function matchesSingleEntry(entry, candidatePath) {
   if (entry.fileRestriction) {
     return candidatePath === entry.fileRestriction;
   }
-  return candidatePath === entry.within || candidatePath.startsWith(entry.within + path4.sep);
+  return candidatePath === entry.within || candidatePath.startsWith(entry.within + path6.sep);
 }
 function pathWithinScope(request, candidatePath) {
   if (matchesSingleEntry(
@@ -692,25 +1605,78 @@ function matchesExtension(extensions, relativePath) {
     return true;
   }
   return extensions.some(
-    (extension2) => normalizeRelativePath(relativePath).endsWith(`.${extension2}`)
+    (extension) => normalizeRelativePath(relativePath).endsWith(`.${extension}`)
   );
 }
-function matchesGlob(glob2, relativePath) {
-  if (!glob2) {
+function matchesGlob(glob, relativePath) {
+  if (!glob) {
     return true;
   }
-  return picomatch(glob2, {
-    dot: true,
-    basename: !glob2.includes("/")
-  })(normalizeRelativePath(relativePath));
+  return matchGlob(glob, normalizeRelativePath(relativePath));
+}
+function escapeRegexCharacter(character) {
+  return /[\\^$.*+?()[\]{}|]/.test(character) ? `\\${character}` : character;
+}
+function globSource(glob) {
+  let source = "";
+  for (let index = 0; index < glob.length; index += 1) {
+    const character = glob[index] ?? "";
+    if (character === "*") {
+      if (glob[index + 1] === "*") {
+        index += 1;
+        if (glob[index + 1] === "/") {
+          index += 1;
+          source += "(?:.*/)?";
+        } else {
+          source += ".*";
+        }
+      } else {
+        source += "[^/]*";
+      }
+      continue;
+    }
+    if (character === "?") {
+      source += "[^/]";
+      continue;
+    }
+    if (character === "[") {
+      const close = glob.indexOf("]", index + 1);
+      if (close > index + 1) {
+        let body = glob.slice(index + 1, close);
+        if (body.startsWith("!")) body = `^${body.slice(1)}`;
+        source += `[${body.replace(/\\/g, "\\\\")}]`;
+        index = close;
+        continue;
+      }
+    }
+    if (character === "{") {
+      const close = glob.indexOf("}", index + 1);
+      if (close > index + 1) {
+        const alternatives = glob.slice(index + 1, close).split(",");
+        if (alternatives.length > 1 && alternatives.every((entry) => !/[{}]/.test(entry))) {
+          source += `(?:${alternatives.map(globSource).join("|")})`;
+          index = close;
+          continue;
+        }
+      }
+    }
+    source += escapeRegexCharacter(character);
+  }
+  return source;
+}
+function matchGlob(glob, relativePath) {
+  const negated = glob.startsWith("!");
+  const expression = negated ? glob.slice(1) : glob;
+  const basename = !expression.includes("/");
+  const candidate = basename ? relativePath.split("/").at(-1) ?? relativePath : relativePath;
+  const matches = new RegExp(`^${globSource(expression)}$`, "u").test(candidate);
+  return negated ? !matches : matches;
 }
 function matchesExcludePaths(excludePaths, relativePath) {
   const normalized = normalizeRelativePath(relativePath);
   return !excludePaths.some((excludePath) => {
     if (/[*?[\]{}!]/.test(excludePath)) {
-      return picomatch(excludePath, { dot: true, basename: !excludePath.includes("/") })(
-        normalized
-      );
+      return matchGlob(excludePath, normalized);
     }
     return normalized === excludePath || normalized.startsWith(`${excludePath}/`);
   });
@@ -738,23 +1704,6 @@ function discoverFffMcpCommand() {
   }
   return resolution.command;
 }
-async function closeBestEffort(close, timeoutMs) {
-  let timeout = null;
-  try {
-    await Promise.race([
-      Promise.resolve().then(close).catch(() => {
-      }),
-      new Promise((resolve) => {
-        timeout = setTimeout(resolve, timeoutMs);
-        timeout.unref?.();
-      })
-    ]);
-  } finally {
-    if (timeout) {
-      clearTimeout(timeout);
-    }
-  }
-}
 function inheritedStringEnv() {
   return Object.fromEntries(
     Object.entries(process.env).filter(
@@ -767,10 +1716,10 @@ function normalizeRelative(relativePath) {
 }
 var GLOB_META_PATTERN = /[*?[\]{}!]/;
 var UNSAFE_SCOPE_PATH_PATTERN = /[\s,*?[\]{}!]/;
-function compileFffMcpGlobConstraint(glob2) {
-  const normalized = normalizeRelative(glob2);
+function compileFffMcpGlobConstraint(glob) {
+  const normalized = normalizeRelative(glob);
   if (!normalized.includes("/") || normalized.startsWith("**/") || normalized.endsWith("/") || GLOB_META_PATTERN.test(normalized)) {
-    return glob2;
+    return glob;
   }
   return `**/${normalized}`;
 }
@@ -779,13 +1728,13 @@ function formatExcludeConstraint(excludePath) {
 }
 function encodeWithinEntryToken(entry, persistenceRoot) {
   if (entry.fileRestriction) {
-    const relativeFile = normalizeRelative(path5.relative(persistenceRoot, entry.fileRestriction));
+    const relativeFile = normalizeRelative(path7.relative(persistenceRoot, entry.fileRestriction));
     if (!relativeFile || relativeFile === "." || UNSAFE_SCOPE_PATH_PATTERN.test(relativeFile)) {
       return null;
     }
     return `**/${relativeFile}`;
   }
-  const baseRelative = normalizeRelative(path5.relative(persistenceRoot, entry.basePath));
+  const baseRelative = normalizeRelative(path7.relative(persistenceRoot, entry.basePath));
   if (!baseRelative || baseRelative === "." || UNSAFE_SCOPE_PATH_PATTERN.test(baseRelative)) {
     return null;
   }
@@ -843,8 +1792,8 @@ function buildConstraintTokens(request) {
   if (request.glob) {
     tokens.push(compileFffMcpGlobConstraint(request.glob));
   }
-  for (const extension2 of request.extensions) {
-    tokens.push(`*.${extension2}`);
+  for (const extension of request.extensions) {
+    tokens.push(`*.${extension}`);
   }
   for (const excludePath of request.excludePaths) {
     tokens.push(formatExcludeConstraint(excludePath));
@@ -912,7 +1861,7 @@ function parseFindFilesOutput(text, persistenceRoot) {
       continue;
     }
     items.push({
-      path: path5.join(persistenceRoot, relativePath),
+      path: path7.join(persistenceRoot, relativePath),
       relativePath
     });
   }
@@ -1042,7 +1991,7 @@ function parseTextMatchOutput(text, persistenceRoot) {
           continue;
         }
         currentMatch = {
-          path: path5.join(persistenceRoot, currentPath),
+          path: path7.join(persistenceRoot, currentPath),
           relativePath: currentPath,
           line: lineNumber,
           text: content,
@@ -1395,61 +2344,45 @@ function createFffMcpStdioAdapter(options = {}) {
   return {
     backendId: "fff-mcp",
     async startRuntime(args) {
-      const transportParams = {
+      const clientOptions = {
         command: (options.resolveCommand ?? discoverFffMcpCommand)(),
-        args: [args.persistenceRoot, "--idle-timeout-secs", "0", "--no-update-check"],
+        args: [
+          args.persistenceRoot,
+          "--idle-timeout-secs",
+          String(Math.ceil((args.supervision?.orphanIdleTimeoutMs ?? 30 * 60 * 1e3) / 1e3)),
+          "--no-update-check"
+        ],
         cwd: args.persistenceRoot,
         env: inheritedStringEnv(),
-        stderr: "pipe"
+        sampleIntervalMs: args.supervision?.sampleIntervalMs ?? 5e3,
+        ...args.supervision?.maxRssBytes ? { maxRssBytes: args.supervision.maxRssBytes } : {},
+        shutdownGraceMs: args.supervision?.shutdownGraceMs ?? 500,
+        killGraceMs: args.supervision?.killGraceMs ?? 1e3
       };
-      const transport = options.createTransport?.(transportParams) ?? new StdioClientTransport(transportParams);
-      const client = options.createClient?.() ?? new Client(
-        { name: "fff-router-fff-mcp", version: "1.0.0" },
-        { capabilities: {} }
-      );
+      const client = options.createClient?.(clientOptions) ?? createLegacyMcpClient(clientOptions);
       try {
-        await client.connect(transport);
+        await client.connect();
       } catch (error2) {
-        const closeTimeoutMs = options.closeTimeoutMs ?? 500;
-        await closeBestEffort(() => client.close(), closeTimeoutMs);
-        await closeBestEffort(() => transport.close(), closeTimeoutMs);
+        await Promise.resolve(client.close()).catch(() => {
+        });
         throw error2;
       }
-      let closed = false;
-      const closeHandlers = /* @__PURE__ */ new Set();
-      const markClosed = () => {
-        if (closed) {
-          return;
-        }
-        closed = true;
-        for (const handler of closeHandlers) {
-          handler();
-        }
-      };
-      const previousOnClose = transport.onclose;
-      transport.onclose = () => {
-        markClosed();
-        previousOnClose?.();
-      };
       const runtime = {
         id: `fff-mcp::${args.persistenceRoot}`,
         get pid() {
-          return transport.pid ?? null;
+          return client.pid;
         },
-        onClose(handler) {
-          closeHandlers.add(handler);
-          return () => {
-            closeHandlers.delete(handler);
-          };
-        },
+        supervision: client.supervision,
+        onClose: (handler) => client.onClose(handler),
+        onResourceSample: (handler) => client.onResourceSample(handler),
+        onTermination: (handler) => client.onTermination(handler),
+        getResourceUsage: () => client.getResourceUsage(),
+        getTerminationReason: () => client.getTerminationReason(),
         async close() {
-          markClosed();
-          const closeTimeoutMs = options.closeTimeoutMs ?? 500;
-          await closeBestEffort(() => client.close(), closeTimeoutMs);
-          await closeBestEffort(() => transport.close(), closeTimeoutMs);
+          await client.close();
         },
         async callTool(name, args2) {
-          const response = await client.callTool({ name, arguments: args2 });
+          const response = await client.callTool(name, args2);
           const text = response.content?.find((entry) => entry.type === "text")?.text;
           if (response.isError || typeof text !== "string") {
             throw new Error(text || `fff-mcp ${name} call failed`);
@@ -1517,7 +2450,7 @@ function createFffMcpStdioAdapter(options = {}) {
 }
 
 // lib/fff-router/coordinator.ts
-import path9 from "node:path";
+import path11 from "node:path";
 
 // lib/fff-router/cursor.ts
 import { createHash as createHash2 } from "node:crypto";
@@ -1591,26 +2524,21 @@ function decodeCursor(args) {
 }
 
 // lib/fff-router/resolve-path.ts
-import fs from "node:fs/promises";
-import path6 from "node:path";
+import { existsSync as existsSync5, realpathSync, statSync as statSync3 } from "node:fs";
+import path8 from "node:path";
 function searchPathError(code, message) {
   return { ok: false, error: { code, message } };
 }
-async function pathExists(candidatePath) {
-  try {
-    await fs.access(candidatePath);
-    return true;
-  } catch {
-    return false;
-  }
+function pathExists(candidatePath) {
+  return existsSync5(candidatePath);
 }
 async function discoverGitRoot(realPath, statType) {
-  let current = statType === "directory" ? realPath : path6.dirname(realPath);
+  let current = statType === "directory" ? realPath : path8.dirname(realPath);
   while (true) {
-    if (await pathExists(path6.join(current, ".git"))) {
+    if (pathExists(path8.join(current, ".git"))) {
       return current;
     }
-    const parent = path6.dirname(current);
+    const parent = path8.dirname(current);
     if (parent === current) {
       return null;
     }
@@ -1630,9 +2558,12 @@ function resolveStatType(stats) {
   );
 }
 async function resolveSearchPath(searchPath) {
+  if (!pathExists(searchPath)) {
+    return searchPathError("SEARCH_PATH_NOT_FOUND", `search_path '${searchPath}' does not exist`);
+  }
   let realPath;
   try {
-    realPath = await fs.realpath(searchPath);
+    realPath = realpathSync(searchPath);
   } catch (error2) {
     const code = error2.code;
     if (code === "ENOENT") {
@@ -1642,7 +2573,7 @@ async function resolveSearchPath(searchPath) {
   }
   let stats;
   try {
-    stats = await fs.stat(realPath);
+    stats = statSync3(realPath);
   } catch {
     return searchPathError(
       "SEARCH_PATH_REALPATH_FAILED",
@@ -1664,8 +2595,8 @@ async function resolveSearchPath(searchPath) {
 }
 
 // lib/fff-router/resolve-within.ts
-import fs2 from "node:fs/promises";
-import path7 from "node:path";
+import { realpathSync as realpathSync2, statSync as statSync4 } from "node:fs";
+import path9 from "node:path";
 function invalid2(message) {
   return {
     ok: false,
@@ -1675,12 +2606,12 @@ function invalid2(message) {
     }
   };
 }
-function withinNotFound(within2) {
+function withinNotFound(within) {
   return {
     ok: false,
     error: {
       code: "WITHIN_NOT_FOUND",
-      message: `within '${within2}' does not exist`
+      message: `within '${within}' does not exist`
     }
   };
 }
@@ -1698,7 +2629,7 @@ function validateAbsolutePath(candidate, field) {
   if (trimmed === "") {
     return invalid2(`${field} must be a non-empty path`);
   }
-  if (!path7.isAbsolute(trimmed)) {
+  if (!path9.isAbsolute(trimmed)) {
     return invalid2(`${field} must be absolute`);
   }
   return { ok: true, value: trimmed };
@@ -1713,23 +2644,23 @@ function resolveStatType2(stats) {
   return invalid2("within must point to a regular file or directory");
 }
 async function validateResolvedWithinEntry(candidate) {
-  const within2 = validateAbsolutePath(candidate, "within");
-  if (!within2.ok) {
-    return within2;
+  const within = validateAbsolutePath(candidate, "within");
+  if (!within.ok) {
+    return within;
   }
   let resolvedWithin;
   try {
-    resolvedWithin = await fs2.realpath(within2.value);
+    resolvedWithin = realpathSync2(within.value);
   } catch (error2) {
     const code = error2.code;
     if (code === "ENOENT") {
-      return withinNotFound(within2.value);
+      return withinNotFound(within.value);
     }
-    return internalError(`failed to canonicalize within '${within2.value}'`);
+    return internalError(`failed to canonicalize within '${within.value}'`);
   }
   let stats;
   try {
-    stats = await fs2.stat(resolvedWithin);
+    stats = statSync4(resolvedWithin);
   } catch {
     return internalError(`failed to stat resolved within '${resolvedWithin}'`);
   }
@@ -1750,7 +2681,7 @@ async function validateResolvedWithinEntry(candidate) {
     ok: true,
     value: {
       resolvedWithin,
-      basePath: path7.dirname(resolvedWithin),
+      basePath: path9.dirname(resolvedWithin),
       fileRestriction: resolvedWithin
     }
   };
@@ -1780,7 +2711,7 @@ async function validateResolvedWithinPaths(args) {
 }
 
 // lib/fff-router/routing.ts
-import path8 from "node:path";
+import path10 from "node:path";
 function invalidConfig(message) {
   return {
     ok: false,
@@ -1802,10 +2733,10 @@ function outsideAllowedScope(realPath) {
 function normalizeAllowlistedPrefixes(config) {
   const normalized = /* @__PURE__ */ new Set();
   for (const entry of config.allowlistedNonGitPrefixes) {
-    if (!path8.isAbsolute(entry.prefix)) {
+    if (!path10.isAbsolute(entry.prefix)) {
       return invalidConfig("allowlisted non-git prefixes must be absolute paths");
     }
-    normalized.add(path8.normalize(entry.prefix));
+    normalized.add(path10.normalize(entry.prefix));
   }
   return {
     ok: true,
@@ -1814,22 +2745,22 @@ function normalizeAllowlistedPrefixes(config) {
 }
 function longestMatchingPrefix(realPath, prefixes) {
   for (const prefix of prefixes) {
-    if (realPath === prefix || realPath.startsWith(prefix + path8.sep)) {
+    if (realPath === prefix || realPath.startsWith(prefix + path10.sep)) {
       return prefix;
     }
   }
   return null;
 }
 function deriveFirstChildRoot(prefix, realPath) {
-  const relative = path8.relative(prefix, realPath);
-  if (!relative || relative.startsWith("..") || path8.isAbsolute(relative)) {
+  const relative = path10.relative(prefix, realPath);
+  if (!relative || relative.startsWith("..") || path10.isAbsolute(relative)) {
     return null;
   }
-  const firstSegment = relative.split(path8.sep)[0];
+  const firstSegment = relative.split(path10.sep)[0];
   if (!firstSegment) {
     return null;
   }
-  return path8.join(prefix, firstSegment);
+  return path10.join(prefix, firstSegment);
 }
 function deriveRoutingTarget(args) {
   if (args.gitRoot) {
@@ -1837,7 +2768,7 @@ function deriveRoutingTarget(args) {
       ok: true,
       value: {
         rootType: "git",
-        persistenceRoot: path8.normalize(args.gitRoot),
+        persistenceRoot: path10.normalize(args.gitRoot),
         searchScope: args.realPath,
         ttlMs: args.config.ttl.gitMs
       }
@@ -1880,6 +2811,13 @@ function error(code, message, retryable) {
     error: { code, message, ...retryable !== void 0 ? { retryable } : {} }
   };
 }
+function daemonRssBytes() {
+  try {
+    return process.memoryUsage().rss;
+  } catch {
+    return 0;
+  }
+}
 function isStaleWorkerMessage(message) {
   return /\b(Not connected|EPIPE|ECONNRESET|EOF)\b/i.test(message) || /\b(transport|stdio|stream)\b.*\b(closed|ended|destroyed|disconnected)\b/i.test(message);
 }
@@ -1893,7 +2831,6 @@ async function withTimeout(promise, timeoutMs) {
       promise,
       new Promise((_resolve, reject) => {
         timer = setTimeout(() => reject(new WorkerCallTimeoutError(timeoutMs)), timeoutMs);
-        timer.unref?.();
       })
     ]);
   } finally {
@@ -1904,13 +2841,13 @@ async function withTimeout(promise, timeoutMs) {
 }
 function translateExcludePaths(validatedWithin, persistenceRoot, excludePaths) {
   const baseRelative = normalizeRelativePath(
-    path9.relative(persistenceRoot, validatedWithin.basePath)
+    path11.relative(persistenceRoot, validatedWithin.basePath)
   );
   if (!baseRelative || baseRelative === ".") {
     return excludePaths;
   }
   return excludePaths.map(
-    (excludePath) => normalizeRelativePath(path9.join(baseRelative, excludePath))
+    (excludePath) => normalizeRelativePath(path11.join(baseRelative, excludePath))
   );
 }
 function buildBackendRequest(args) {
@@ -1948,7 +2885,7 @@ function toPublicResult(args) {
   const recommendation = args.result.summary?.readRecommendation;
   const readRecommendation = recommendation ? {
     path: recommendation.relativePath,
-    absolutePath: path9.join(args.target.persistenceRoot, recommendation.relativePath),
+    absolutePath: path11.join(args.target.persistenceRoot, recommendation.relativePath),
     ...recommendation.reason ? { reason: recommendation.reason } : {}
   } : void 0;
   const displayText = args.result.renderedCompact ? args.result.renderedCompact.split(/\r?\n/).filter((line) => !/^cursor:\s*/.test(line.trim())).concat(nextCursor ? [`cursor: ${nextCursor}`] : []).join("\n") : void 0;
@@ -1972,7 +2909,7 @@ function toPublicResult(args) {
       tool: "find_files",
       ...common,
       items: args.result.items.map((item) => ({
-        path: normalizeRelativePath(path9.relative(args.target.persistenceRoot, item.path)),
+        path: normalizeRelativePath(path11.relative(args.target.persistenceRoot, item.path)),
         absolutePath: item.path
       }))
     };
@@ -1985,7 +2922,7 @@ function toPublicResult(args) {
         throw new Error("fff-mcp returned a file item for grep");
       }
       return {
-        path: normalizeRelativePath(path9.relative(args.target.persistenceRoot, item.path)),
+        path: normalizeRelativePath(path11.relative(args.target.persistenceRoot, item.path)),
         absolutePath: item.path,
         line: item.line,
         text: item.text,
@@ -2009,8 +2946,8 @@ var RouterServiceImpl = class {
   validateWithin;
   resolvePath;
   writeDiagnostic;
-  async resolveTarget(within2) {
-    const validatedWithin = await this.validateWithin({ withinPaths: within2 });
+  async resolveTarget(within) {
+    const validatedWithin = await this.validateWithin({ withinPaths: within });
     if (!validatedWithin.ok) {
       return validatedWithin;
     }
@@ -2057,7 +2994,14 @@ var RouterServiceImpl = class {
       rootType: target.rootType,
       ttlMs: target.ttlMs,
       start: async () => await this.deps.adapter.startRuntime({
-        persistenceRoot: target.persistenceRoot
+        persistenceRoot: target.persistenceRoot,
+        supervision: {
+          sampleIntervalMs: this.deps.configRef.current.runtime.processSampleIntervalMs,
+          maxRssBytes: this.deps.configRef.current.limits.maxWorkerRssBytes,
+          shutdownGraceMs: this.deps.configRef.current.runtime.processShutdownGraceMs,
+          killGraceMs: this.deps.configRef.current.runtime.processKillGraceMs,
+          orphanIdleTimeoutMs: this.deps.configRef.current.runtime.workerOrphanIdleTimeoutMs
+        }
       })
     });
   }
@@ -2201,10 +3145,10 @@ var RouterServiceImpl = class {
       }
     };
   }
-  async warm(within2) {
+  async warm(within) {
     const diagnostics = [];
     const seen = /* @__PURE__ */ new Set();
-    for (const candidate of within2) {
+    for (const candidate of within) {
       const routed = await this.resolveTarget([candidate]);
       if (!routed.ok) {
         return routed;
@@ -2227,10 +3171,10 @@ var RouterServiceImpl = class {
     }
     return { ok: true, value: diagnostics };
   }
-  async evict(within2) {
+  async evict(within) {
     const evicted = [];
     const seen = /* @__PURE__ */ new Set();
-    for (const candidate of within2) {
+    for (const candidate of within) {
       const routed = await this.resolveTarget([candidate]);
       if (!routed.ok) {
         return routed;
@@ -2247,9 +3191,16 @@ var RouterServiceImpl = class {
     return { ok: true, value: { evicted } };
   }
   status() {
+    const workerResources = this.deps.workerPool.getResourceSummary();
+    const daemonRss = daemonRssBytes();
     return {
       workers: this.deps.workerPool.getDiagnostics(),
-      limits: this.deps.configRef.current.limits
+      limits: this.deps.configRef.current.limits,
+      resources: {
+        ...workerResources,
+        daemonRssBytes: daemonRss,
+        totalRssBytes: daemonRss + workerResources.workerRssBytes
+      }
     };
   }
   async close() {
@@ -2260,159 +3211,604 @@ function createRouterService(deps) {
   return new RouterServiceImpl(deps);
 }
 
-// lib/fff-router/mcp-server.ts
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-
 // lib/fff-router/mcp-tools.ts
-import path11 from "node:path";
-import * as z2 from "zod/v4";
+import path13 from "node:path";
 
 // lib/fff-router/public-api.ts
-import path10 from "node:path";
-import * as z from "zod/v4";
+import path12 from "node:path";
 var MAX_RESULTS = 50;
 var MAX_CONTEXT_LINES = 5;
 var MAX_PATTERNS = 20;
 var MAX_FILTERS = 30;
 var MAX_WITHIN_PATHS = 10;
 var MAX_QUERY_LENGTH = 1024;
-var extension = z.string().min(1).max(64).refine(
-  (value) => /^[A-Za-z0-9][A-Za-z0-9._+-]*$/.test(value.trim().replace(/^\./, "")),
-  "extensions must be literal suffixes without path or glob syntax"
-);
-var relativeFilter = z.string().min(1).max(512).refine(
-  (value) => !path10.posix.isAbsolute(value.trim().replace(/\\/g, "/").replace(/^\.\//, "")),
-  "path filters must be relative"
-).refine(
-  (value) => !value.trim().replace(/\\/g, "/").replace(/^\.\//, "").split("/").some((segment) => segment === "" || segment === "." || segment === ".."),
-  "path filters must not contain empty, current-directory, or parent-directory segments"
-);
-var glob = relativeFilter.refine(
-  (value) => !value.trim().startsWith("!"),
-  "glob is an include filter; use excludePaths for exclusions"
-);
-var within = z.union([
-  z.string().min(1).max(4096).refine((value) => value.trim().length > 0),
-  z.array(
-    z.string().min(1).max(4096).refine((value) => value.trim().length > 0)
-  ).min(1).max(MAX_WITHIN_PATHS)
-]);
-var commonShape = {
-  within,
-  glob: glob.optional(),
-  extensions: z.array(extension).max(MAX_FILTERS).optional().default([]),
-  excludePaths: z.array(relativeFilter).max(MAX_FILTERS).optional().default([]),
-  limit: z.number().int().min(1).max(MAX_RESULTS).optional().default(20),
-  cursor: z.string().min(1).max(4096).nullable().optional().default(null)
+var ProtocolValidationError = class extends Error {
+  constructor(issues) {
+    super(issues.map((issue) => `${issue.path.join(".") || "value"}: ${issue.message}`).join("; "));
+    this.issues = issues;
+  }
+  issues;
 };
-var findFilesInputSchema = z.strictObject({
-  query: z.string().min(1).max(MAX_QUERY_LENGTH).refine((value) => value.trim().length > 0, "query must not be blank"),
-  ...commonShape
-});
-var grepInputSchema = z.strictObject({
-  patterns: z.array(
-    z.string().min(1).max(MAX_QUERY_LENGTH).refine((value) => value.trim().length > 0, "patterns must not be blank")
-  ).min(1).max(MAX_PATTERNS),
-  literal: z.boolean().optional().default(true),
-  contextLines: z.number().int().min(0).max(MAX_CONTEXT_LINES).optional().default(0),
-  ...commonShape
-});
-var fileHitSchema = z.object({
-  path: z.string(),
-  absolutePath: z.string()
-});
-var textHitSchema = z.object({
-  ...fileHitSchema.shape,
-  line: z.number().int().min(1),
-  text: z.string(),
-  column: z.number().int().min(0).optional(),
-  contextBefore: z.array(z.string()).optional(),
-  contextAfter: z.array(z.string()).optional(),
-  isDefinition: z.boolean().optional(),
-  definitionBody: z.array(z.string()).optional()
-});
-var searchResultStatsSchema = z.object({
-  resultCount: z.number().int().min(0),
-  upstreamShownCount: z.number().int().min(0).optional(),
-  upstreamTotalCount: z.number().int().min(0).optional(),
-  coldStart: z.boolean(),
-  workerId: z.string().min(1),
-  workerGeneration: z.number().int().min(1)
-});
-var readRecommendationSchema = z.object({
-  path: z.string(),
-  absolutePath: z.string(),
-  reason: z.string().optional()
-});
-var searchResultBaseShape = {
-  root: z.string(),
-  backend: z.literal("fff-mcp"),
-  nextCursor: z.string().nullable(),
-  stats: searchResultStatsSchema,
-  readRecommendation: readRecommendationSchema.optional(),
-  displayText: z.string().optional()
+function runtimeSchema(jsonSchema, validate) {
+  const schema = { ...jsonSchema };
+  Object.defineProperties(schema, {
+    // Runtime helpers must not leak into tools/list JSON Schema or create a
+    // self-reference when the response is serialized.
+    jsonSchema: { value: schema, enumerable: false },
+    safeParse: { value: validate, enumerable: false },
+    parse: {
+      enumerable: false,
+      value(value) {
+        const result = validate(value);
+        if (!result.success) {
+          throw new ProtocolValidationError(result.error.issues);
+        }
+        return result.data;
+      }
+    }
+  });
+  return schema;
+}
+function valid(data) {
+  return { success: true, data };
+}
+function invalidValue(pathValue, message) {
+  return { success: false, error: { issues: [{ path: pathValue, message }] } };
+}
+function isRecord2(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function rejectUnknownFields(value, allowed) {
+  const unknown = Object.keys(value).find((key) => !allowed.includes(key));
+  return unknown ? invalidValue([unknown], "unknown field") : valid(void 0);
+}
+function readBoundedString(value, field, options) {
+  if (typeof value !== "string") {
+    return invalidValue([field], "must be a string");
+  }
+  const normalized = options.trim ? value.trim() : value;
+  if (!options.allowBlank && normalized.length === 0) {
+    return invalidValue([field], "must not be blank");
+  }
+  if (normalized.length > options.max) {
+    return invalidValue([field], `must contain at most ${options.max} characters`);
+  }
+  return valid(normalized);
+}
+function readStringArray(value, field, options) {
+  if (!Array.isArray(value)) {
+    return invalidValue([field], "must be an array");
+  }
+  if (value.length < (options.minItems ?? 0)) {
+    return invalidValue([field], `must contain at least ${options.minItems ?? 0} item(s)`);
+  }
+  if (value.length > options.maxItems) {
+    return invalidValue([field], `must contain at most ${options.maxItems} item(s)`);
+  }
+  const output = [];
+  for (let index = 0; index < value.length; index += 1) {
+    const parsed = readBoundedString(value[index], `${field}.${index}`, {
+      max: options.maxLength,
+      trim: true
+    });
+    if (!parsed.success) {
+      return parsed;
+    }
+    output.push(parsed.data);
+  }
+  return valid(output);
+}
+function readWithinInput(value) {
+  if (typeof value === "string") {
+    return readBoundedString(value, "within", { max: 4096, trim: true });
+  }
+  return readStringArray(value, "within", {
+    minItems: 1,
+    maxItems: MAX_WITHIN_PATHS,
+    maxLength: 4096
+  });
+}
+function normalizeRelativeFilter(value, field) {
+  const normalized = value.trim().replace(/\\/g, "/").replace(/^\.\//, "");
+  if (path12.posix.isAbsolute(normalized)) {
+    return invalidValue([field], "path filters must be relative");
+  }
+  if (normalized.split("/").some((segment) => segment === "" || segment === "." || segment === "..")) {
+    return invalidValue(
+      [field],
+      "path filters must not contain empty, current-directory, or parent-directory segments"
+    );
+  }
+  return valid(normalized);
+}
+function readRelativeFilters(value, field) {
+  if (value === void 0) {
+    return valid([]);
+  }
+  const values = readStringArray(value, field, { maxItems: MAX_FILTERS, maxLength: 512 });
+  if (!values.success) {
+    return values;
+  }
+  const normalized = [];
+  for (let index = 0; index < values.data.length; index += 1) {
+    const parsed = normalizeRelativeFilter(values.data[index], `${field}.${index}`);
+    if (!parsed.success) {
+      return parsed;
+    }
+    normalized.push(parsed.data);
+  }
+  return valid([...new Set(normalized)]);
+}
+function readExtensions(value) {
+  if (value === void 0) {
+    return valid([]);
+  }
+  const values = readStringArray(value, "extensions", {
+    maxItems: MAX_FILTERS,
+    maxLength: 64
+  });
+  if (!values.success) {
+    return values;
+  }
+  const normalized = [];
+  for (let index = 0; index < values.data.length; index += 1) {
+    const extension = values.data[index].replace(/^\./, "");
+    if (!/^[A-Za-z0-9][A-Za-z0-9._+-]*$/.test(extension)) {
+      return invalidValue(
+        ["extensions", index],
+        "extensions must be literal suffixes without path or glob syntax"
+      );
+    }
+    normalized.push(extension);
+  }
+  return valid([...new Set(normalized)]);
+}
+function readInteger(value, field, options) {
+  if (value === void 0) {
+    return valid(options.fallback);
+  }
+  if (!Number.isInteger(value) || value < options.min || value > options.max) {
+    return invalidValue([field], `must be an integer between ${options.min} and ${options.max}`);
+  }
+  return valid(value);
+}
+function readCursor(value) {
+  if (value === void 0 || value === null) {
+    return valid(null);
+  }
+  return readBoundedString(value, "cursor", { max: 4096, trim: false });
+}
+var JSON_SCHEMA_2020_12 = "https://json-schema.org/draft/2020-12/schema";
+var withinJsonSchema = {
+  oneOf: [
+    { type: "string", minLength: 1, maxLength: 4096 },
+    {
+      type: "array",
+      minItems: 1,
+      maxItems: MAX_WITHIN_PATHS,
+      items: { type: "string", minLength: 1, maxLength: 4096 }
+    }
+  ]
 };
-var findFilesResultSchema = z.object({
-  tool: z.literal("find_files"),
-  ...searchResultBaseShape,
-  items: z.array(fileHitSchema)
+var commonJsonSchemaProperties = {
+  within: withinJsonSchema,
+  glob: { type: "string", minLength: 1, maxLength: 512 },
+  extensions: {
+    type: "array",
+    maxItems: MAX_FILTERS,
+    items: { type: "string", minLength: 1, maxLength: 64 },
+    default: []
+  },
+  excludePaths: {
+    type: "array",
+    maxItems: MAX_FILTERS,
+    items: { type: "string", minLength: 1, maxLength: 512 },
+    default: []
+  },
+  limit: { type: "integer", minimum: 1, maximum: MAX_RESULTS, default: 20 },
+  cursor: { type: ["string", "null"], minLength: 1, maxLength: 4096, default: null }
+};
+function parseCommonInput(record) {
+  const within = readWithinInput(record.within);
+  if (!within.success) return within;
+  const extensions = readExtensions(record.extensions);
+  if (!extensions.success) return extensions;
+  const excludePaths = readRelativeFilters(record.excludePaths, "excludePaths");
+  if (!excludePaths.success) return excludePaths;
+  const limit = readInteger(record.limit, "limit", { min: 1, max: MAX_RESULTS, fallback: 20 });
+  if (!limit.success) return limit;
+  const cursor = readCursor(record.cursor);
+  if (!cursor.success) return cursor;
+  let globValue;
+  if (record.glob !== void 0) {
+    const globString = readBoundedString(record.glob, "glob", { max: 512, trim: true });
+    if (!globString.success) return globString;
+    const glob = normalizeRelativeFilter(globString.data, "glob");
+    if (!glob.success) return glob;
+    if (glob.data.startsWith("!")) {
+      return invalidValue(["glob"], "glob is an include filter; use excludePaths for exclusions");
+    }
+    globValue = glob.data;
+  }
+  return valid({
+    within: within.data,
+    ...globValue ? { glob: globValue } : {},
+    extensions: extensions.data,
+    excludePaths: excludePaths.data,
+    limit: limit.data,
+    cursor: cursor.data
+  });
+}
+function parseFindFilesInput(value) {
+  if (!isRecord2(value)) return invalidValue([], "request must be an object");
+  const known = rejectUnknownFields(value, [
+    "query",
+    "within",
+    "glob",
+    "extensions",
+    "excludePaths",
+    "limit",
+    "cursor"
+  ]);
+  if (!known.success) return known;
+  const query = readBoundedString(value.query, "query", { max: MAX_QUERY_LENGTH, trim: true });
+  if (!query.success) return query;
+  const common = parseCommonInput(value);
+  return common.success ? valid({ query: query.data, ...common.data }) : common;
+}
+function parseGrepInput(value) {
+  if (!isRecord2(value)) return invalidValue([], "request must be an object");
+  const known = rejectUnknownFields(value, [
+    "patterns",
+    "literal",
+    "contextLines",
+    "within",
+    "glob",
+    "extensions",
+    "excludePaths",
+    "limit",
+    "cursor"
+  ]);
+  if (!known.success) return known;
+  const patterns = readStringArray(value.patterns, "patterns", {
+    minItems: 1,
+    maxItems: MAX_PATTERNS,
+    maxLength: MAX_QUERY_LENGTH
+  });
+  if (!patterns.success) return patterns;
+  if (value.literal !== void 0 && typeof value.literal !== "boolean") {
+    return invalidValue(["literal"], "must be a boolean");
+  }
+  const contextLines = readInteger(value.contextLines, "contextLines", {
+    min: 0,
+    max: MAX_CONTEXT_LINES,
+    fallback: 0
+  });
+  if (!contextLines.success) return contextLines;
+  const common = parseCommonInput(value);
+  if (!common.success) return common;
+  return valid({
+    patterns: patterns.data,
+    literal: value.literal === void 0 ? true : value.literal,
+    contextLines: contextLines.data,
+    ...common.data
+  });
+}
+var findFilesInputSchema = runtimeSchema(
+  {
+    $schema: JSON_SCHEMA_2020_12,
+    type: "object",
+    additionalProperties: false,
+    required: ["query", "within"],
+    properties: {
+      query: { type: "string", minLength: 1, maxLength: MAX_QUERY_LENGTH },
+      ...commonJsonSchemaProperties
+    }
+  },
+  parseFindFilesInput
+);
+var grepInputSchema = runtimeSchema(
+  {
+    $schema: JSON_SCHEMA_2020_12,
+    type: "object",
+    additionalProperties: false,
+    required: ["patterns", "within"],
+    properties: {
+      patterns: {
+        type: "array",
+        minItems: 1,
+        maxItems: MAX_PATTERNS,
+        items: { type: "string", minLength: 1, maxLength: MAX_QUERY_LENGTH }
+      },
+      literal: { type: "boolean", default: true },
+      contextLines: {
+        type: "integer",
+        minimum: 0,
+        maximum: MAX_CONTEXT_LINES,
+        default: 0
+      },
+      ...commonJsonSchemaProperties
+    }
+  },
+  parseGrepInput
+);
+var fileHitJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["path", "absolutePath"],
+  properties: { path: { type: "string" }, absolutePath: { type: "string" } }
+};
+var textHitJsonSchema = {
+  type: "object",
+  required: ["path", "absolutePath", "line", "text"],
+  properties: {
+    ...fileHitJsonSchema.properties,
+    line: { type: "integer", minimum: 1 },
+    text: { type: "string" },
+    column: { type: "integer", minimum: 0 },
+    contextBefore: { type: "array", items: { type: "string" } },
+    contextAfter: { type: "array", items: { type: "string" } },
+    isDefinition: { type: "boolean" },
+    definitionBody: { type: "array", items: { type: "string" } }
+  }
+};
+var searchResultStatsJsonSchema = {
+  type: "object",
+  required: ["resultCount", "coldStart", "workerId", "workerGeneration"],
+  properties: {
+    resultCount: { type: "integer", minimum: 0 },
+    upstreamShownCount: { type: "integer", minimum: 0 },
+    upstreamTotalCount: { type: "integer", minimum: 0 },
+    coldStart: { type: "boolean" },
+    workerId: { type: "string", minLength: 1 },
+    workerGeneration: { type: "integer", minimum: 1 }
+  }
+};
+function validateFileHit(value, pathPrefix) {
+  if (!isRecord2(value)) return invalidValue(pathPrefix, "must be an object");
+  if (typeof value.path !== "string")
+    return invalidValue([...pathPrefix, "path"], "must be a string");
+  if (typeof value.absolutePath !== "string") {
+    return invalidValue([...pathPrefix, "absolutePath"], "must be a string");
+  }
+  return valid(void 0);
+}
+function validateStats(value) {
+  if (!isRecord2(value)) return invalidValue(["stats"], "must be an object");
+  if (!Number.isInteger(value.resultCount) || value.resultCount < 0) {
+    return invalidValue(["stats", "resultCount"], "must be a non-negative integer");
+  }
+  if (typeof value.coldStart !== "boolean")
+    return invalidValue(["stats", "coldStart"], "must be a boolean");
+  if (typeof value.workerId !== "string" || value.workerId.length === 0) {
+    return invalidValue(["stats", "workerId"], "must be a non-empty string");
+  }
+  if (!Number.isInteger(value.workerGeneration) || value.workerGeneration < 1) {
+    return invalidValue(["stats", "workerGeneration"], "must be a positive integer");
+  }
+  return valid(void 0);
+}
+function validateSearchResultBase(value, expectedTool) {
+  if (!isRecord2(value)) return invalidValue([], "result must be an object");
+  if (value.tool !== expectedTool) return invalidValue(["tool"], `must equal '${expectedTool}'`);
+  if (typeof value.root !== "string") return invalidValue(["root"], "must be a string");
+  if (value.backend !== "fff-mcp") return invalidValue(["backend"], "must equal 'fff-mcp'");
+  if (value.nextCursor !== null && typeof value.nextCursor !== "string") {
+    return invalidValue(["nextCursor"], "must be a string or null");
+  }
+  const stats = validateStats(value.stats);
+  if (!stats.success) return stats;
+  if (!Array.isArray(value.items)) return invalidValue(["items"], "must be an array");
+  return valid(value);
+}
+var findFilesResultJsonSchema = {
+  $schema: JSON_SCHEMA_2020_12,
+  type: "object",
+  required: ["tool", "root", "backend", "items", "nextCursor", "stats"],
+  properties: {
+    tool: { const: "find_files" },
+    root: { type: "string" },
+    backend: { const: "fff-mcp" },
+    items: { type: "array", items: fileHitJsonSchema },
+    nextCursor: { type: ["string", "null"] },
+    stats: searchResultStatsJsonSchema
+  }
+};
+var grepResultJsonSchema = {
+  $schema: JSON_SCHEMA_2020_12,
+  type: "object",
+  required: ["tool", "root", "backend", "items", "nextCursor", "stats"],
+  properties: {
+    tool: { const: "grep" },
+    root: { type: "string" },
+    backend: { const: "fff-mcp" },
+    items: { type: "array", items: textHitJsonSchema },
+    nextCursor: { type: ["string", "null"] },
+    stats: searchResultStatsJsonSchema
+  }
+};
+var findFilesResultSchema = runtimeSchema(
+  findFilesResultJsonSchema,
+  (value) => {
+    const base = validateSearchResultBase(value, "find_files");
+    if (!base.success) return base;
+    const items = base.data.items;
+    for (let index = 0; index < items.length; index += 1) {
+      const item = validateFileHit(items[index], ["items", index]);
+      if (!item.success) return item;
+    }
+    return valid(value);
+  }
+);
+var grepResultSchema = runtimeSchema(grepResultJsonSchema, (value) => {
+  const base = validateSearchResultBase(value, "grep");
+  if (!base.success) return base;
+  const items = base.data.items;
+  for (let index = 0; index < items.length; index += 1) {
+    const item = validateFileHit(items[index], ["items", index]);
+    if (!item.success) return item;
+    const record = items[index];
+    if (!Number.isInteger(record.line) || record.line < 1) {
+      return invalidValue(["items", index, "line"], "must be a positive integer");
+    }
+    if (typeof record.text !== "string") {
+      return invalidValue(["items", index, "text"], "must be a string");
+    }
+  }
+  return valid(value);
 });
-var grepResultSchema = z.object({
-  tool: z.literal("grep"),
-  ...searchResultBaseShape,
-  items: z.array(textHitSchema)
+var publicToolResultSchema = runtimeSchema(
+  { oneOf: [findFilesResultJsonSchema, grepResultJsonSchema] },
+  (value) => isRecord2(value) && value.tool === "find_files" ? findFilesResultSchema.safeParse(value) : grepResultSchema.safeParse(value)
+);
+function validateWorkerDiagnostic(value, index) {
+  if (!isRecord2(value)) return invalidValue(["workers", index], "must be an object");
+  if (typeof value.root !== "string")
+    return invalidValue(["workers", index, "root"], "must be a string");
+  if (value.rootType !== "git" && value.rootType !== "non-git") {
+    return invalidValue(["workers", index, "rootType"], "must be 'git' or 'non-git'");
+  }
+  if (!["starting", "ready", "draining", "dead"].includes(String(value.state))) {
+    return invalidValue(["workers", index, "state"], "invalid worker state");
+  }
+  if (!Number.isInteger(value.generation) || value.generation < 1) {
+    return invalidValue(["workers", index, "generation"], "must be a positive integer");
+  }
+  if (!Number.isInteger(value.activeLeases) || value.activeLeases < 0) {
+    return invalidValue(["workers", index, "activeLeases"], "must be a non-negative integer");
+  }
+  return valid(void 0);
+}
+var workerDiagnosticJsonSchema = {
+  type: "object",
+  required: [
+    "root",
+    "rootType",
+    "state",
+    "generation",
+    "activeLeases",
+    "lastUsedAt",
+    "failureCount"
+  ],
+  properties: {
+    root: { type: "string" },
+    rootType: { enum: ["git", "non-git"] },
+    state: { enum: ["starting", "ready", "draining", "dead"] },
+    workerId: { type: "string" },
+    pid: { type: ["integer", "null"] },
+    generation: { type: "integer", minimum: 1 },
+    activeLeases: { type: "integer", minimum: 0 },
+    startedAt: { type: "number", minimum: 0 },
+    lastUsedAt: { type: "number", minimum: 0 },
+    lastCallAt: { type: "number", minimum: 0 },
+    lastSuccessAt: { type: "number", minimum: 0 },
+    lastError: { type: "string" },
+    lastErrorAt: { type: "number", minimum: 0 },
+    failureCount: { type: "integer", minimum: 0 },
+    retryAfter: { type: "number", minimum: 0 },
+    resources: {
+      type: "object",
+      properties: {
+        sampledAt: { type: "number", minimum: 0 },
+        rssBytes: { type: "integer", minimum: 0 },
+        cpuTimeMs: { type: "number", minimum: 0 },
+        threads: { type: "integer", minimum: 0 },
+        processCount: { type: "integer", minimum: 1 }
+      }
+    },
+    terminationReason: { type: "string" }
+  }
+};
+var routerStatusJsonSchema = {
+  $schema: JSON_SCHEMA_2020_12,
+  type: "object",
+  required: ["workers", "limits"],
+  properties: {
+    workers: { type: "array", items: workerDiagnosticJsonSchema },
+    limits: {
+      type: "object",
+      required: ["maxWorkers", "maxNonGitWorkers"],
+      properties: {
+        maxWorkers: { type: "integer", minimum: 1 },
+        maxNonGitWorkers: { type: "integer", minimum: 0 },
+        maxWorkerRssBytes: { type: "integer", minimum: 1 },
+        maxTotalWorkerRssBytes: { type: "integer", minimum: 1 }
+      }
+    },
+    resources: {
+      type: "object",
+      properties: {
+        sampledAt: { type: "number", minimum: 0 },
+        daemonRssBytes: { type: "integer", minimum: 0 },
+        workerRssBytes: { type: "integer", minimum: 0 },
+        totalRssBytes: { type: "integer", minimum: 0 },
+        measuredWorkers: { type: "integer", minimum: 0 }
+      }
+    }
+  }
+};
+var routerStatusSchema = runtimeSchema(routerStatusJsonSchema, (value) => {
+  if (!isRecord2(value)) return invalidValue([], "status must be an object");
+  if (!Array.isArray(value.workers)) return invalidValue(["workers"], "must be an array");
+  for (let index = 0; index < value.workers.length; index += 1) {
+    const worker = validateWorkerDiagnostic(value.workers[index], index);
+    if (!worker.success) return worker;
+  }
+  if (!isRecord2(value.limits)) return invalidValue(["limits"], "must be an object");
+  if (!Number.isInteger(value.limits.maxWorkers) || value.limits.maxWorkers < 1) {
+    return invalidValue(["limits", "maxWorkers"], "must be a positive integer");
+  }
+  if (!Number.isInteger(value.limits.maxNonGitWorkers) || value.limits.maxNonGitWorkers < 0) {
+    return invalidValue(["limits", "maxNonGitWorkers"], "must be a non-negative integer");
+  }
+  return valid(value);
 });
-var publicToolResultSchema = z.discriminatedUnion("tool", [
-  findFilesResultSchema,
-  grepResultSchema
-]);
-var workerDiagnosticSchema = z.object({
-  root: z.string(),
-  rootType: z.enum(["git", "non-git"]),
-  state: z.enum(["starting", "ready", "draining", "dead"]),
-  workerId: z.string().optional(),
-  pid: z.number().int().nullable().optional(),
-  generation: z.number().int().min(1),
-  activeLeases: z.number().int().min(0),
-  startedAt: z.number().min(0).optional(),
-  lastUsedAt: z.number().min(0),
-  lastCallAt: z.number().min(0).optional(),
-  lastSuccessAt: z.number().min(0).optional(),
-  lastError: z.string().optional(),
-  lastErrorAt: z.number().min(0).optional(),
-  failureCount: z.number().int().min(0),
-  retryAfter: z.number().min(0).optional()
-});
-var routerStatusSchema = z.object({
-  workers: z.array(workerDiagnosticSchema),
-  limits: z.object({
-    maxWorkers: z.number().int().min(1),
-    maxNonGitWorkers: z.number().int().min(0)
-  })
-});
-var warmResultSchema = z.object({ workers: z.array(workerDiagnosticSchema) });
-var evictResultSchema = z.object({ evicted: z.array(z.string()) });
+var warmResultJsonSchema = {
+  type: "object",
+  required: ["workers"],
+  properties: { workers: { type: "array", items: workerDiagnosticJsonSchema } }
+};
+var warmResultSchema = runtimeSchema(
+  warmResultJsonSchema,
+  (value) => {
+    if (!isRecord2(value) || !Array.isArray(value.workers)) {
+      return invalidValue(["workers"], "must be an array");
+    }
+    for (let index = 0; index < value.workers.length; index += 1) {
+      const worker = validateWorkerDiagnostic(value.workers[index], index);
+      if (!worker.success) return worker;
+    }
+    return valid(value);
+  }
+);
+var evictResultJsonSchema = {
+  type: "object",
+  required: ["evicted"],
+  properties: { evicted: { type: "array", items: { type: "string" } } }
+};
+var evictResultSchema = runtimeSchema(
+  evictResultJsonSchema,
+  (value) => isRecord2(value) && Array.isArray(value.evicted) && value.evicted.every((item) => typeof item === "string") ? valid(value) : invalidValue(["evicted"], "must be an array of strings")
+);
 var PUBLIC_TOOL_DEFINITIONS = [
   {
     name: "find_files",
     description: "Fuzzy-search file names and paths using a shared warm fff-mcp index. within must be one or more absolute paths under the same repository or configured non-Git root.",
-    inputSchema: findFilesInputSchema
+    inputSchema: findFilesInputSchema,
+    outputSchema: findFilesResultJsonSchema
   },
   {
     name: "grep",
     description: "Search file contents through a shared warm fff-mcp index. Multiple patterns use OR semantics; literal matching is the safe default and regex matching must be selected explicitly.",
-    inputSchema: grepInputSchema
+    inputSchema: grepInputSchema,
+    outputSchema: grepResultJsonSchema
   }
 ];
 function invalid3(message) {
   return { ok: false, error: { code: "INVALID_REQUEST", message } };
 }
-function formatZodError(error2) {
-  return error2.issues.map((issue) => {
-    const field = issue.path.length > 0 ? issue.path.join(".") : "request";
-    return `${field}: ${issue.message}`;
-  }).join("; ");
+function formatValidationError(error2) {
+  return error2.issues.map((issue) => `${issue.path.length > 0 ? issue.path.join(".") : "request"}: ${issue.message}`).join("; ");
 }
 function normalizeWithin(value, env) {
   const values = Array.isArray(value) ? value : [value];
@@ -2420,69 +3816,44 @@ function normalizeWithin(value, env) {
   const seen = /* @__PURE__ */ new Set();
   for (const entry of values) {
     const expanded = expandHomePath(entry.trim(), env);
-    if (!expanded.ok) {
-      return invalid3(expanded.error.message);
-    }
-    if (!path10.isAbsolute(expanded.value)) {
+    if (!expanded.ok) return invalid3(expanded.error.message);
+    if (!path12.isAbsolute(expanded.value)) {
       return invalid3("within paths must be absolute on the daemon wire protocol");
     }
-    const clean = path10.normalize(expanded.value);
-    if (seen.has(clean)) {
-      return invalid3(`within contains duplicate path '${clean}'`);
-    }
+    const clean = path12.normalize(expanded.value);
+    if (seen.has(clean)) return invalid3(`within contains duplicate path '${clean}'`);
     seen.add(clean);
     normalized.push(clean);
   }
   return { ok: true, value: normalized };
 }
-function rejectWildcardOnlyRegex(patterns, literal2) {
-  if (literal2) {
-    return { ok: true, value: void 0 };
-  }
+function rejectWildcardOnlyRegex(patterns, literal) {
+  if (literal) return { ok: true, value: void 0 };
   const wildcardOnly = /^(?:[.^$]*(?:[.][*+?]|[*+])[.^$]*|[.^$\s]*|\.\*[+?]?|\.\+[?]?|[.*?])$/;
   const rejected = patterns.find((pattern) => wildcardOnly.test(pattern.trim()));
   return rejected ? invalid3(`regex '${rejected}' matches everything; provide a concrete expression`) : { ok: true, value: void 0 };
 }
 function normalizePublicToolInput(tool, input, env = process.env) {
-  const schema = tool === "find_files" ? findFilesInputSchema : grepInputSchema;
-  const parsed = schema.safeParse(input);
-  if (!parsed.success) {
-    return invalid3(formatZodError(parsed.error));
-  }
+  const parsed = tool === "find_files" ? findFilesInputSchema.safeParse(input) : grepInputSchema.safeParse(input);
+  if (!parsed.success) return invalid3(formatValidationError(parsed.error));
   const resolvedWithin = normalizeWithin(parsed.data.within, env);
-  if (!resolvedWithin.ok) {
-    return resolvedWithin;
-  }
+  if (!resolvedWithin.ok) return resolvedWithin;
   const common = {
     within: resolvedWithin.value,
-    ...parsed.data.glob ? { glob: parsed.data.glob.trim().replace(/\\/g, "/").replace(/^\.\//, "") } : {},
-    extensions: [
-      ...new Set(parsed.data.extensions.map((value) => value.trim().replace(/^\./, "")))
-    ],
-    excludePaths: [
-      ...new Set(
-        parsed.data.excludePaths.map(
-          (value) => value.trim().replace(/\\/g, "/").replace(/^\.\//, "")
-        )
-      )
-    ],
+    ...parsed.data.glob ? { glob: parsed.data.glob } : {},
+    extensions: parsed.data.extensions,
+    excludePaths: parsed.data.excludePaths,
     limit: parsed.data.limit,
     cursor: parsed.data.cursor
   };
   if (tool === "find_files") {
     const data2 = parsed.data;
-    const request2 = {
-      tool,
-      query: data2.query.trim(),
-      ...common
-    };
+    const request2 = { tool, query: data2.query, ...common };
     return { ok: true, value: request2 };
   }
   const data = parsed.data;
   const concreteRegex = rejectWildcardOnlyRegex(data.patterns, data.literal);
-  if (!concreteRegex.ok) {
-    return concreteRegex;
-  }
+  if (!concreteRegex.ok) return concreteRegex;
   const request = {
     tool,
     patterns: [...new Set(data.patterns)],
@@ -2494,32 +3865,77 @@ function normalizePublicToolInput(tool, input, env = process.env) {
 }
 
 // lib/fff-router/mcp-tools.ts
-var absoluteWithin = z2.string().min(1).refine((value) => path11.isAbsolute(value), "within paths must be absolute");
-var adminWithinSchema = z2.strictObject({
-  within: z2.union([absoluteWithin, z2.array(absoluteWithin).min(1).max(32)])
-});
+var adminWithinJsonSchema = {
+  $schema: "https://json-schema.org/draft/2020-12/schema",
+  type: "object",
+  additionalProperties: false,
+  required: ["within"],
+  properties: {
+    within: {
+      oneOf: [
+        { type: "string", minLength: 1 },
+        {
+          type: "array",
+          minItems: 1,
+          maxItems: 32,
+          items: { type: "string", minLength: 1 }
+        }
+      ]
+    }
+  }
+};
+var READ_ONLY_ANNOTATIONS = {
+  readOnlyHint: true,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: false
+};
 var MCP_TOOLS = [
-  ...PUBLIC_TOOL_DEFINITIONS,
+  ...PUBLIC_TOOL_DEFINITIONS.map((tool) => ({
+    name: tool.name,
+    description: tool.description,
+    inputSchema: tool.inputSchema.jsonSchema,
+    outputSchema: tool.outputSchema,
+    annotations: READ_ONLY_ANNOTATIONS
+  })),
   {
     name: "router_status",
-    description: "Show the shared fff-routerd worker pool and health state.",
-    inputSchema: z2.strictObject({})
+    description: "Show the shared fff-routerd worker pool, resource usage, and health state.",
+    inputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      additionalProperties: false
+    },
+    outputSchema: routerStatusJsonSchema,
+    annotations: READ_ONLY_ANNOTATIONS
   },
   {
     name: "router_warm",
     description: "Start and retain warm fff-mcp workers for one or more absolute paths.",
-    inputSchema: adminWithinSchema
+    inputSchema: adminWithinJsonSchema,
+    outputSchema: warmResultJsonSchema,
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false
+    }
   },
   {
     name: "router_evict",
     description: "Drain and remove fff-mcp workers for one or more absolute paths.",
-    inputSchema: adminWithinSchema
+    inputSchema: adminWithinJsonSchema,
+    outputSchema: evictResultJsonSchema,
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false
+    }
   }
 ];
 function formatResult(result) {
-  if (result.displayText) {
-    return result.displayText;
-  }
+  if (result.displayText) return result.displayText;
   if (result.tool === "find_files") {
     return result.items.length > 0 ? result.items.map((item) => item.path).join("\n") : "0 results.";
   }
@@ -2528,32 +3944,50 @@ function formatResult(result) {
 }
 function errorResponse(code, message) {
   return {
+    resultType: "complete",
     isError: true,
-    content: [
-      {
-        type: "text",
-        text: JSON.stringify({ ok: false, code, message })
-      }
-    ]
+    content: [{ type: "text", text: JSON.stringify({ ok: false, code, message }) }]
   };
 }
 function successResponse(text, structuredContent) {
   return {
+    resultType: "complete",
     isError: false,
     content: [{ type: "text", text }],
     structuredContent
   };
 }
 function normalizeAdminWithin(input) {
-  const parsed = adminWithinSchema.parse(input);
-  const values = Array.isArray(parsed.within) ? parsed.within : [parsed.within];
-  return values.map((value) => path11.normalize(value));
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new ProtocolValidationError([{ path: [], message: "request must be an object" }]);
+  }
+  const record = input;
+  const unknown = Object.keys(record).find((key) => key !== "within");
+  if (unknown) {
+    throw new ProtocolValidationError([{ path: [unknown], message: "unknown field" }]);
+  }
+  const values = Array.isArray(record.within) ? record.within : [record.within];
+  if (values.length === 0 || values.length > 32) {
+    throw new ProtocolValidationError([
+      { path: ["within"], message: "must contain between 1 and 32 paths" }
+    ]);
+  }
+  return values.map((value, index) => {
+    if (typeof value !== "string" || value.length === 0 || !path13.isAbsolute(value)) {
+      throw new ProtocolValidationError([
+        { path: ["within", index], message: "within paths must be absolute" }
+      ]);
+    }
+    return path13.normalize(value);
+  });
 }
 function listMcpTools() {
   return MCP_TOOLS.map((tool) => ({
     name: tool.name,
     description: tool.description,
-    inputSchema: z2.toJSONSchema(tool.inputSchema)
+    inputSchema: tool.inputSchema,
+    outputSchema: tool.outputSchema,
+    annotations: tool.annotations
   }));
 }
 async function executeMcpTool(args) {
@@ -2562,52 +3996,38 @@ async function executeMcpTool(args) {
       case "find_files":
       case "grep": {
         const normalized = normalizePublicToolInput(args.name, args.input, args.env);
-        if (!normalized.ok) {
-          return errorResponse(normalized.error.code, normalized.error.message);
-        }
+        if (!normalized.ok) return errorResponse(normalized.error.code, normalized.error.message);
         const result = await args.service.execute(normalized.value);
-        if (!result.ok) {
-          return errorResponse(result.error.code, result.error.message);
-        }
-        return successResponse(
-          formatResult(result.value),
-          result.value
-        );
+        if (!result.ok) return errorResponse(result.error.code, result.error.message);
+        return successResponse(formatResult(result.value), result.value);
       }
       case "router_status": {
+        if (!args.input || typeof args.input !== "object" || Array.isArray(args.input)) {
+          return errorResponse("INVALID_REQUEST", "request must be an object");
+        }
+        if (Object.keys(args.input).length > 0) {
+          return errorResponse("INVALID_REQUEST", "router_status accepts no arguments");
+        }
         const status = args.service.status();
-        return successResponse(
-          JSON.stringify(status, null, 2),
-          status
-        );
+        return successResponse(JSON.stringify(status, null, 2), status);
       }
       case "router_warm": {
         const result = await args.service.warm(normalizeAdminWithin(args.input));
-        if (!result.ok) {
-          return errorResponse(result.error.code, result.error.message);
-        }
+        if (!result.ok) return errorResponse(result.error.code, result.error.message);
         const payload = { workers: result.value };
-        return successResponse(
-          JSON.stringify(payload, null, 2),
-          payload
-        );
+        return successResponse(JSON.stringify(payload, null, 2), payload);
       }
       case "router_evict": {
         const result = await args.service.evict(normalizeAdminWithin(args.input));
-        if (!result.ok) {
-          return errorResponse(result.error.code, result.error.message);
-        }
-        return successResponse(
-          JSON.stringify(result.value, null, 2),
-          result.value
-        );
+        if (!result.ok) return errorResponse(result.error.code, result.error.message);
+        return successResponse(JSON.stringify(result.value, null, 2), result.value);
       }
     }
   } catch (caught) {
-    if (caught instanceof z2.ZodError) {
+    if (caught instanceof ProtocolValidationError) {
       return errorResponse(
         "INVALID_REQUEST",
-        caught.issues.map((issue) => issue.message).join("; ")
+        caught.issues.map((issue) => `${issue.path.join(".") || "request"}: ${issue.message}`).join("; ")
       );
     }
     return errorResponse(
@@ -2617,69 +4037,209 @@ async function executeMcpTool(args) {
   }
 }
 var MCP_INPUT_SCHEMAS = {
-  find_files: findFilesInputSchema,
-  grep: grepInputSchema,
-  router_status: z2.strictObject({}),
-  router_warm: adminWithinSchema,
-  router_evict: adminWithinSchema
+  find_files: findFilesInputSchema.jsonSchema,
+  grep: grepInputSchema.jsonSchema,
+  router_status: MCP_TOOLS.find((tool) => tool.name === "router_status").inputSchema,
+  router_warm: adminWithinJsonSchema,
+  router_evict: adminWithinJsonSchema
 };
 
 // lib/fff-router/mcp-server.ts
+var MCP_PROTOCOL_VERSION = "2026-07-28";
+var MCP_PROTOCOL_VERSIONS = [MCP_PROTOCOL_VERSION];
+function isRecord3(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function jsonRpcError(id, code, message, data) {
+  return {
+    jsonrpc: "2.0",
+    id,
+    error: { code, message, ...data === void 0 ? {} : { data } }
+  };
+}
+function serverMeta() {
+  return {
+    "io.modelcontextprotocol/serverInfo": {
+      name: "fff-router",
+      version: PACKAGE_VERSION
+    }
+  };
+}
+function completeResult(result) {
+  return { resultType: "complete", ...result, _meta: serverMeta() };
+}
+function validateModernRequest(value) {
+  const id = isRecord3(value) && (typeof value.id === "string" || typeof value.id === "number") ? value.id : null;
+  if (!isRecord3(value) || value.jsonrpc !== "2.0" || typeof value.method !== "string") {
+    return { ok: false, response: jsonRpcError(id, -32600, "Invalid Request") };
+  }
+  if (!(typeof value.id === "string" || typeof value.id === "number") && value.id !== void 0) {
+    return {
+      ok: false,
+      response: jsonRpcError(null, -32600, "Invalid Request: id must be a string or number")
+    };
+  }
+  if (!isRecord3(value.params)) {
+    return { ok: false, response: jsonRpcError(id, -32602, "params must be an object") };
+  }
+  const meta = value.params._meta;
+  if (!isRecord3(meta)) {
+    return { ok: false, response: jsonRpcError(id, -32602, "params._meta is required") };
+  }
+  const requestedVersion = meta["io.modelcontextprotocol/protocolVersion"];
+  if (requestedVersion !== MCP_PROTOCOL_VERSION) {
+    return {
+      ok: false,
+      response: jsonRpcError(id, -32022, "Unsupported protocol version", {
+        supported: [...MCP_PROTOCOL_VERSIONS],
+        ...typeof requestedVersion === "string" ? { requested: requestedVersion } : {}
+      })
+    };
+  }
+  if (!isRecord3(meta["io.modelcontextprotocol/clientCapabilities"])) {
+    return {
+      ok: false,
+      response: jsonRpcError(
+        id,
+        -32602,
+        "params._meta.io.modelcontextprotocol/clientCapabilities is required"
+      )
+    };
+  }
+  return { ok: true, request: value };
+}
 function createMcpServer(args) {
   if (!args.service && !args.handler) {
     throw new Error("createMcpServer requires a RouterService or MCP tool handler");
   }
   async function callTool(name, input) {
-    if (args.handler) {
-      return await args.handler(name, input);
-    }
-    return await executeMcpTool({
-      service: args.service,
-      name,
-      input,
-      env: args.env
-    });
+    if (args.handler) return await args.handler(name, input);
+    return await executeMcpTool({ service: args.service, name, input, env: args.env });
   }
-  function toSdkServer() {
-    const server = new McpServer({
-      name: "fff-router",
-      version: PACKAGE_VERSION
-    });
-    for (const tool of MCP_TOOLS) {
-      server.registerTool(
-        tool.name,
-        {
-          description: tool.description,
-          inputSchema: MCP_INPUT_SCHEMAS[tool.name].shape
-        },
-        async (input) => await callTool(tool.name, input)
-      );
+  async function handleRequest(message) {
+    const validated = validateModernRequest(message);
+    if (!validated.ok) return validated.response;
+    const request = validated.request;
+    if (request.id === void 0) {
+      return null;
     }
-    return server;
+    const id = request.id;
+    switch (request.method) {
+      case "server/discover":
+        return {
+          jsonrpc: "2.0",
+          id,
+          result: completeResult({
+            supportedVersions: [...MCP_PROTOCOL_VERSIONS],
+            capabilities: { tools: {} },
+            instructions: "Use find_files to discover relevant files and grep for exact identifiers. All searches are read-only and scoped to an absolute repository path.",
+            ttlMs: 3e5,
+            cacheScope: "private"
+          })
+        };
+      case "tools/list": {
+        const cursor = request.params?.cursor;
+        if (cursor !== void 0 && cursor !== null) {
+          return jsonRpcError(id, -32602, "tools/list does not have another page");
+        }
+        return {
+          jsonrpc: "2.0",
+          id,
+          result: completeResult({
+            tools: listMcpTools(),
+            ttlMs: 3e5,
+            cacheScope: "private"
+          })
+        };
+      }
+      case "tools/call": {
+        const name = request.params?.name;
+        if (typeof name !== "string") {
+          return jsonRpcError(id, -32602, "tools/call params.name must be a string");
+        }
+        const known = listMcpTools().some((tool) => tool.name === name);
+        if (!known) return jsonRpcError(id, -32602, `Unknown tool '${name}'`);
+        const input = request.params?.arguments;
+        if (input !== void 0 && !isRecord3(input)) {
+          return jsonRpcError(id, -32602, "tools/call params.arguments must be an object");
+        }
+        const result = await callTool(name, input ?? {});
+        return {
+          jsonrpc: "2.0",
+          id,
+          result: { ...result, _meta: serverMeta() }
+        };
+      }
+      case "initialize":
+        return jsonRpcError(
+          id,
+          -32601,
+          `This server implements stateless MCP ${MCP_PROTOCOL_VERSION}; use server/discover instead of initialize`
+        );
+      default:
+        return jsonRpcError(id, -32601, `Method not found: ${request.method}`);
+    }
   }
   return {
     listTools: async () => listMcpTools(),
     callTool,
-    toSdkServer,
+    handleRequest,
     async connectStdio(options = {}) {
-      const transport = new StdioServerTransport();
-      transport.onclose = options.onClose;
-      const server = toSdkServer();
-      await server.connect(transport);
-      return { server, transport };
+      let buffered = "";
+      let chain = Promise.resolve();
+      let settled = false;
+      const done = new Promise((resolve, reject) => {
+        const finish = () => {
+          if (settled) return;
+          settled = true;
+          options.onClose?.();
+          resolve();
+        };
+        process.stdin.setEncoding("utf8");
+        process.stdin.on("data", (chunk) => {
+          buffered += chunk;
+          const lines = buffered.split(/\r?\n/);
+          buffered = lines.pop() ?? "";
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            chain = chain.then(async () => {
+              let response;
+              try {
+                response = await handleRequest(JSON.parse(line));
+              } catch (caught) {
+                response = jsonRpcError(
+                  null,
+                  -32700,
+                  caught instanceof SyntaxError ? "Parse error" : caught instanceof Error ? caught.message : String(caught)
+                );
+              }
+              if (response) process.stdout.write(`${JSON.stringify(response)}
+`);
+            });
+          }
+        });
+        process.stdin.once("end", () => void chain.then(finish, reject));
+        process.stdin.once("error", reject);
+        process.stdin.resume();
+      });
+      return { done, close: () => process.stdin.pause() };
     }
   };
 }
 
 // lib/fff-router/local-auth.ts
 import { randomBytes, timingSafeEqual } from "node:crypto";
-import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
+import { chmodSync, existsSync as existsSync6, mkdirSync as mkdirSync3, readFileSync as readFileSync4, writeFileSync as writeFileSync3 } from "node:fs";
 function validToken(value) {
   return /^[A-Za-z0-9_-]{32,}$/.test(value);
 }
 async function readDaemonAuthToken(env = process.env) {
+  const tokenPath = getDaemonPaths({ env }).authTokenPath;
+  if (!existsSync6(tokenPath)) {
+    return null;
+  }
   try {
-    const token = (await readFile(getDaemonPaths({ env }).authTokenPath, "utf8")).trim();
+    const token = readFileSync4(tokenPath, "utf8").trim();
     return validToken(token) ? token : null;
   } catch {
     return null;
@@ -2687,20 +4247,20 @@ async function readDaemonAuthToken(env = process.env) {
 }
 async function ensureDaemonAuthToken(env = process.env) {
   const paths = getDaemonPaths({ env });
-  await mkdir(paths.dir, { recursive: true, mode: 448 });
+  mkdirSync3(paths.dir, { recursive: true, mode: 448 });
   if (process.platform !== "win32") {
-    await chmod(paths.dir, 448);
+    chmodSync(paths.dir, 448);
   }
   const existing = await readDaemonAuthToken(env);
   if (existing) {
     if (process.platform !== "win32") {
-      await chmod(paths.authTokenPath, 384);
+      chmodSync(paths.authTokenPath, 384);
     }
     return existing;
   }
   const token = randomBytes(32).toString("base64url");
   try {
-    await writeFile(paths.authTokenPath, `${token}
+    writeFileSync3(paths.authTokenPath, `${token}
 `, { flag: "wx", mode: 384 });
     return token;
   } catch (caught) {
@@ -2729,7 +4289,7 @@ function unavailable(message, retryable = true) {
     error: { code: "WORKER_UNAVAILABLE", message, retryable }
   };
 }
-async function closeBestEffort2(runtime) {
+async function closeBestEffort(runtime) {
   if (!runtime) {
     return;
   }
@@ -2740,55 +4300,79 @@ var WorkerPool = class {
   constructor(options) {
     this.options = options;
     this.now = options.now ?? Date.now;
-    this.sweepTimer = this.createSweepTimer(options.sweepIntervalMs);
+    this.scheduleSweep();
   }
   options;
   entries = /* @__PURE__ */ new Map();
   deadDiagnostics = [];
   now;
-  sweepTimer;
+  sweepTimer = null;
   generation = 0;
   closed = false;
-  createSweepTimer(intervalMs) {
-    const timer = setInterval(() => void this.sweep(), Math.max(100, intervalMs));
-    timer.unref?.();
-    return timer;
+  scheduleSweep() {
+    if (this.closed || this.sweepTimer) return;
+    this.sweepTimer = setTimeout(
+      () => {
+        this.sweepTimer = null;
+        void this.sweep().catch(() => {
+        }).finally(() => this.scheduleSweep());
+      },
+      Math.max(100, this.options.sweepIntervalMs)
+    );
   }
   updateOptions(options, ttl) {
-    if (!this.closed && options.sweepIntervalMs !== this.options.sweepIntervalMs) {
-      clearInterval(this.sweepTimer);
-      this.sweepTimer = this.createSweepTimer(options.sweepIntervalMs);
-    }
+    const reschedule = !this.closed && options.sweepIntervalMs !== this.options.sweepIntervalMs;
     this.options = { ...options, now: this.options.now };
+    if (reschedule) {
+      if (this.sweepTimer) clearTimeout(this.sweepTimer);
+      this.sweepTimer = null;
+      this.scheduleSweep();
+    }
     if (ttl) {
       for (const entry of this.entries.values()) {
         entry.ttlMs = entry.rootType === "git" ? ttl.gitMs : ttl.nonGitMs;
       }
     }
   }
-  toDiagnostic(entry) {
+  toDiagnostic(entry, state = entry.state) {
+    const resources = entry.supervision?.resources ?? entry.runtime?.getResourceUsage?.() ?? entry.lastResources ?? null;
+    const terminationReason = entry.supervision?.terminationReason ?? entry.runtime?.getTerminationReason?.() ?? entry.terminationReason;
     return {
       root: entry.root,
       rootType: entry.rootType,
-      state: entry.state,
-      ...entry.runtime?.id ? { workerId: entry.runtime.id } : {},
-      ...entry.runtime?.pid !== void 0 ? { pid: entry.runtime.pid } : {},
+      state,
+      workerId: entry.runtime?.id,
+      pid: entry.runtime?.pid,
       generation: entry.generation,
       activeLeases: entry.activeLeases,
-      ...entry.startedAt !== void 0 ? { startedAt: entry.startedAt } : {},
+      startedAt: entry.startedAt,
       lastUsedAt: entry.lastUsedAt,
-      ...entry.lastCallAt !== void 0 ? { lastCallAt: entry.lastCallAt } : {},
-      ...entry.lastSuccessAt !== void 0 ? { lastSuccessAt: entry.lastSuccessAt } : {},
-      ...entry.lastError !== void 0 ? { lastError: entry.lastError } : {},
-      ...entry.lastErrorAt !== void 0 ? { lastErrorAt: entry.lastErrorAt } : {},
+      lastCallAt: entry.lastCallAt,
+      lastSuccessAt: entry.lastSuccessAt,
+      lastError: entry.lastError,
+      lastErrorAt: entry.lastErrorAt,
       failureCount: entry.failureCount,
-      ...entry.retryAfter !== void 0 ? { retryAfter: entry.retryAfter } : {}
+      retryAfter: entry.retryAfter,
+      resources: resources ?? void 0,
+      terminationReason
     };
   }
+  restartDelay(failureCount) {
+    const exponential = this.options.restartBackoffMs * 2 ** Math.max(0, failureCount - 1);
+    return Math.min(exponential, this.options.restartBackoffMaxMs ?? 6e4);
+  }
   rememberDead(entry) {
-    const diagnostic = this.toDiagnostic({ ...entry, state: "dead" });
+    const diagnostic = this.toDiagnostic(entry, "dead");
     this.deadDiagnostics.unshift(diagnostic);
     this.deadDiagnostics.splice(this.options.maxDeadDiagnostics ?? 32);
+  }
+  detachRuntimeObservers(entry) {
+    entry.detachClose?.();
+    entry.detachResourceSample?.();
+    entry.detachTermination?.();
+    entry.detachClose = void 0;
+    entry.detachResourceSample = void 0;
+    entry.detachTermination = void 0;
   }
   activeEntries(rootType) {
     return [...this.entries.values()].filter(
@@ -2800,7 +4384,7 @@ var WorkerPool = class {
     if (!candidate) {
       return void 0;
     }
-    candidate.detachClose?.();
+    this.detachRuntimeObservers(candidate);
     candidate.state = "draining";
     this.entries.delete(candidate.root);
     return candidate.runtime;
@@ -2849,22 +4433,44 @@ var WorkerPool = class {
       ttlMs: spec.ttlMs,
       createdAt: now,
       lastUsedAt: now,
-      failureCount: previousFailures
+      startedAt: void 0,
+      lastCallAt: void 0,
+      lastSuccessAt: void 0,
+      lastError: void 0,
+      lastErrorAt: void 0,
+      failureCount: previousFailures,
+      retryAfter: void 0,
+      runtime: void 0,
+      supervision: null,
+      lastResources: void 0,
+      terminationReason: void 0,
+      startup: void 0,
+      detachClose: void 0,
+      detachResourceSample: void 0,
+      detachTermination: void 0
     };
     entry.startup = Promise.resolve().then(spec.start).then(async (runtime) => {
       const current = this.entries.get(spec.root);
       if (this.closed || current?.token !== entry.token) {
-        await closeBestEffort2(runtime);
+        await closeBestEffort(runtime);
         throw new Error(`worker for '${spec.root}' was evicted during startup`);
       }
       const draining = entry.state === "draining";
       entry.runtime = runtime;
+      entry.supervision = runtime.supervision ?? null;
       entry.startup = void 0;
       entry.state = draining ? "draining" : "ready";
       entry.startedAt = this.now();
       entry.retryAfter = void 0;
-      entry.detachClose = runtime.onClose?.(() => {
-        this.markUnexpectedClose(spec.root, entry.token);
+      entry.detachClose = runtime.onClose?.((reason) => {
+        this.markUnexpectedClose(spec.root, entry.token, reason);
+      });
+      entry.detachResourceSample = runtime.onResourceSample?.(() => {
+        const resources = entry.supervision?.resources ?? runtime.getResourceUsage?.();
+        if (resources) entry.lastResources = { ...resources };
+      });
+      entry.detachTermination = runtime.onTermination?.(() => {
+        entry.terminationReason = entry.supervision?.terminationReason ?? runtime.getTerminationReason?.() ?? entry.terminationReason;
       });
       return runtime;
     }).catch((error2) => {
@@ -2876,27 +4482,28 @@ var WorkerPool = class {
         entry.lastError = error2 instanceof Error ? error2.message : String(error2);
         entry.lastErrorAt = now2;
         entry.failureCount += 1;
-        entry.retryAfter = now2 + this.options.restartBackoffMs * entry.failureCount;
+        entry.retryAfter = now2 + this.restartDelay(entry.failureCount);
       }
       throw error2;
     });
     this.entries.set(spec.root, entry);
     return entry;
   }
-  markUnexpectedClose(root, token) {
+  markUnexpectedClose(root, token, reason) {
     const entry = this.entries.get(root);
     if (!entry || entry.token !== token || entry.state === "draining") {
       return;
     }
     const now = this.now();
-    entry.detachClose?.();
-    entry.detachClose = void 0;
-    entry.runtime = void 0;
+    const resources = entry.supervision?.resources ?? entry.runtime?.getResourceUsage?.();
+    if (resources) entry.lastResources = resources;
+    entry.terminationReason = reason ?? entry.supervision?.terminationReason ?? entry.runtime?.getTerminationReason?.() ?? entry.terminationReason;
+    this.detachRuntimeObservers(entry);
     entry.state = "dead";
-    entry.lastError = "fff-mcp worker exited unexpectedly";
+    entry.lastError = entry.terminationReason ?? "fff-mcp worker exited unexpectedly";
     entry.lastErrorAt = now;
     entry.failureCount += 1;
-    entry.retryAfter = now + this.options.restartBackoffMs * entry.failureCount;
+    entry.retryAfter = now + this.restartDelay(entry.failureCount);
   }
   async acquire(spec) {
     if (this.closed) {
@@ -2932,7 +4539,7 @@ var WorkerPool = class {
         {
           ...spec,
           start: async () => {
-            await Promise.all(runtimesToClose.map(closeBestEffort2));
+            await Promise.all(runtimesToClose.map(closeBestEffort));
             return await start();
           }
         },
@@ -2999,10 +4606,13 @@ var WorkerPool = class {
     entry.activeLeases = Math.max(0, entry.activeLeases - 1);
     entry.lastUsedAt = this.now();
     if (entry.activeLeases === 0 && entry.state === "draining") {
-      entry.detachClose?.();
+      this.detachRuntimeObservers(entry);
       this.entries.delete(root);
       this.rememberDead(entry);
-      await closeBestEffort2(entry.runtime);
+      await closeBestEffort(entry.runtime);
+    }
+    if (entry.activeLeases === 0 && this.options.maxTotalWorkerRssBytes) {
+      void this.sweep();
     }
   }
   async invalidate(root, generation, reason) {
@@ -3015,10 +4625,10 @@ var WorkerPool = class {
     entry.failureCount += 1;
     entry.state = "draining";
     if (entry.activeLeases === 0) {
-      entry.detachClose?.();
+      this.detachRuntimeObservers(entry);
       this.entries.delete(root);
       this.rememberDead(entry);
-      await closeBestEffort2(entry.runtime);
+      await closeBestEffort(entry.runtime);
     }
   }
   async evict(root) {
@@ -3028,10 +4638,10 @@ var WorkerPool = class {
     }
     entry.state = "draining";
     if (entry.activeLeases === 0) {
-      entry.detachClose?.();
+      this.detachRuntimeObservers(entry);
       this.entries.delete(root);
       this.rememberDead(entry);
-      await closeBestEffort2(entry.runtime);
+      await closeBestEffort(entry.runtime);
     }
     return true;
   }
@@ -3062,7 +4672,27 @@ var WorkerPool = class {
       }
       capacityClosures.push(runtime);
     }
-    await Promise.all(capacityClosures.map(closeBestEffort2));
+    const totalLimit = this.options.maxTotalWorkerRssBytes;
+    if (totalLimit) {
+      let totalRss = this.activeEntries().reduce(
+        (total, entry) => total + (entry.supervision?.resources?.rssBytes ?? entry.runtime?.getResourceUsage?.()?.rssBytes ?? 0),
+        0
+      );
+      while (totalRss > totalLimit) {
+        const candidate = this.activeEntries().filter((entry) => entry.activeLeases === 0 && entry.state === "ready").sort((left, right) => {
+          const rssDelta = (right.supervision?.resources?.rssBytes ?? right.runtime?.getResourceUsage?.()?.rssBytes ?? 0) - (left.supervision?.resources?.rssBytes ?? left.runtime?.getResourceUsage?.()?.rssBytes ?? 0);
+          return rssDelta || left.lastUsedAt - right.lastUsedAt;
+        })[0];
+        if (!candidate) break;
+        const rss = candidate.supervision?.resources?.rssBytes ?? candidate.runtime?.getResourceUsage?.()?.rssBytes ?? 0;
+        this.detachRuntimeObservers(candidate);
+        candidate.state = "draining";
+        this.entries.delete(candidate.root);
+        if (candidate.runtime) capacityClosures.push(candidate.runtime);
+        totalRss = Math.max(0, totalRss - rss);
+      }
+    }
+    await Promise.all(capacityClosures.map(closeBestEffort));
   }
   getDiagnostics() {
     return [
@@ -3070,19 +4700,34 @@ var WorkerPool = class {
       ...this.deadDiagnostics
     ];
   }
+  getResourceSummary() {
+    const samples = this.activeEntries().map((entry) => entry.supervision?.resources ?? entry.runtime?.getResourceUsage?.() ?? null).filter((sample) => sample !== null);
+    return {
+      sampledAt: samples.reduce((latest, sample) => Math.max(latest, sample.sampledAt), 0),
+      workerRssBytes: samples.reduce((total, sample) => total + sample.rssBytes, 0),
+      measuredWorkers: samples.length
+    };
+  }
+  getLiveWorkerCount() {
+    return this.activeEntries().length;
+  }
+  getActiveLeaseCount() {
+    return this.activeEntries().reduce((total, entry) => total + entry.activeLeases, 0);
+  }
   async closeAll() {
     if (this.closed) {
       return;
     }
     this.closed = true;
-    clearInterval(this.sweepTimer);
+    if (this.sweepTimer) clearTimeout(this.sweepTimer);
+    this.sweepTimer = null;
     const entries = [...this.entries.values()];
     this.entries.clear();
     for (const entry of entries) {
-      entry.detachClose?.();
+      this.detachRuntimeObservers(entry);
       entry.state = "draining";
     }
-    await Promise.all(entries.map((entry) => closeBestEffort2(entry.runtime)));
+    await Promise.all(entries.map((entry) => closeBestEffort(entry.runtime)));
     await Promise.all(entries.map((entry) => entry.startup?.catch(() => {
     })));
   }
@@ -3090,39 +4735,128 @@ var WorkerPool = class {
 
 // lib/fff-router/http-daemon.ts
 var MAX_REQUEST_BODY_BYTES = 1024 * 1024;
+var IS_PERRY3 = typeof process.versions.perry === "string";
+var DAEMON_CONTROL_PATH = "/control";
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+function isRecord4(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function requestId(value) {
+  if (!isRecord4(value)) return null;
+  return typeof value.id === "string" || typeof value.id === "number" ? value.id : null;
+}
+function sendJson(res, status, value) {
+  res.writeHead(status, { "content-type": "application/json" });
+  res.end(JSON.stringify(value));
+}
+function sendMcpError(res, status, id, code, message, data) {
+  sendJson(res, status, jsonRpcError(id, code, message, data));
+}
+function headerValue(req, name) {
+  const value = req.headers[name.toLowerCase()];
+  return typeof value === "string" ? value : Array.isArray(value) ? value[0] ?? null : null;
+}
+function decodeMcpHeader(value) {
+  if (!value.startsWith("=?base64?")) return /^[\x20-\x7e]+$/.test(value) ? value : null;
+  if (!value.endsWith("?=")) return null;
+  try {
+    const encoded = value.slice("=?base64?".length, -2);
+    if (!encoded || !/^[A-Za-z0-9+/]*={0,2}$/.test(encoded)) return null;
+    return Buffer.from(encoded, "base64").toString("utf8");
+  } catch {
+    return null;
+  }
+}
+function isAllowedOrigin(origin, config) {
+  try {
+    const parsed = new URL(origin);
+    const host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+    const configured = config.host.toLowerCase().replace(/^\[|\]$/g, "");
+    return (parsed.protocol === "http:" || parsed.protocol === "https:") && (host === "localhost" || host === "::1" || host === configured || isIP2(host) === 4 && host.startsWith("127."));
+  } catch {
+    return false;
+  }
+}
+function validateMcpHttpHeaders(req, body) {
+  const id = requestId(body);
+  if (!isRecord4(body)) {
+    return { ok: false, status: 400, response: jsonRpcError(id, -32600, "Invalid Request") };
+  }
+  const protocolHeader = headerValue(req, "mcp-protocol-version");
+  const methodHeader = headerValue(req, "mcp-method");
+  const bodyMethod = body.method;
+  const params = isRecord4(body.params) ? body.params : null;
+  const meta = params && isRecord4(params._meta) ? params._meta : null;
+  const bodyVersion = meta?.["io.modelcontextprotocol/protocolVersion"];
+  if (!protocolHeader || !methodHeader) {
+    return {
+      ok: false,
+      status: 400,
+      response: jsonRpcError(
+        id,
+        -32020,
+        "Header mismatch: MCP-Protocol-Version and Mcp-Method are required"
+      )
+    };
+  }
+  if (protocolHeader !== bodyVersion || methodHeader !== bodyMethod) {
+    return {
+      ok: false,
+      status: 400,
+      response: jsonRpcError(
+        id,
+        -32020,
+        "Header mismatch: request metadata does not match the JSON-RPC body"
+      )
+    };
+  }
+  if (protocolHeader !== MCP_PROTOCOL_VERSION) {
+    return {
+      ok: false,
+      status: 400,
+      response: jsonRpcError(id, -32022, "Unsupported protocol version", {
+        supported: [MCP_PROTOCOL_VERSION],
+        requested: protocolHeader
+      })
+    };
+  }
+  if (bodyMethod === "tools/call") {
+    const nameHeader = headerValue(req, "mcp-name");
+    const decodedName = nameHeader ? decodeMcpHeader(nameHeader) : null;
+    if (!nameHeader || decodedName === null || decodedName !== params?.name) {
+      return {
+        ok: false,
+        status: 400,
+        response: jsonRpcError(id, -32020, "Header mismatch: Mcp-Name does not match params.name")
+      };
+    }
+  }
+  return { ok: true };
+}
 function assertLocalHost(host) {
   const normalized = host.toLowerCase().replace(/^\[|\]$/g, "");
   if (normalized !== "localhost" && normalized !== "::1" && !(isIP2(normalized) === 4 && normalized.startsWith("127."))) {
     throw new Error("fff-routerd only binds to a local loopback address");
   }
 }
-async function readJsonBody(req) {
-  const chunks = [];
-  let size = 0;
-  for await (const chunk of req) {
-    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    size += buffer.byteLength;
-    if (size > MAX_REQUEST_BODY_BYTES) {
-      throw new Error(`request body exceeds ${MAX_REQUEST_BODY_BYTES} bytes`);
-    }
-    chunks.push(buffer);
-  }
-  return chunks.length === 0 ? void 0 : JSON.parse(Buffer.concat(chunks).toString("utf8"));
-}
 async function writeDaemonMetadata(pathValue, metadata) {
   const temporaryPath = `${pathValue}.${process.pid}.tmp`;
-  await writeFile2(temporaryPath, `${JSON.stringify(metadata, null, 2)}
+  writeFileSync4(temporaryPath, `${JSON.stringify(metadata, null, 2)}
 `, {
     mode: 384
   });
-  await rename(temporaryPath, pathValue);
+  renameSync2(temporaryPath, pathValue);
 }
 function poolOptions(config) {
   return {
     maxWorkers: config.limits.maxWorkers,
     maxNonGitWorkers: config.limits.maxNonGitWorkers,
     sweepIntervalMs: config.runtime.sweepIntervalMs,
-    restartBackoffMs: config.runtime.restartBackoffMs
+    restartBackoffMs: config.runtime.restartBackoffMs,
+    restartBackoffMaxMs: config.runtime.restartBackoffMaxMs,
+    maxTotalWorkerRssBytes: config.limits.maxTotalWorkerRssBytes
   };
 }
 function createDefaultService(args) {
@@ -3132,8 +4866,19 @@ function createDefaultService(args) {
     workerPool: args.workerPool
   });
 }
-function shouldReloadForWatchEvent(filename) {
-  return !filename || filename === "config.json" || filename === "config.jsonc";
+async function policyConfigSignature(paths) {
+  const signatures = [paths.jsonPath, paths.jsoncPath].map((pathValue) => {
+    if (!existsSync7(pathValue)) {
+      return `${pathValue}:missing`;
+    }
+    try {
+      const details = statSync5(pathValue);
+      return `${pathValue}:${details.mtimeMs}:${details.size}`;
+    } catch {
+      return `${pathValue}:missing`;
+    }
+  });
+  return signatures.join("|");
 }
 function buildMetadata(args) {
   return {
@@ -3141,6 +4886,7 @@ function buildMetadata(args) {
     host: args.config.host,
     port: args.port,
     mcpPath: args.config.mcpPath,
+    controlPath: DAEMON_CONTROL_PATH,
     protocolVersion: DAEMON_PROTOCOL_VERSION,
     packageVersion: PACKAGE_VERSION,
     daemonSourceFingerprint: getDaemonSourceFingerprint({ env: args.env }),
@@ -3174,10 +4920,18 @@ async function startHttpDaemon(args = {}) {
   const policyConfigPaths = getDaemonPolicyConfigPaths({ env });
   const startedAt = Date.now();
   let metadata = null;
-  let watcher = null;
-  let watcherReloadTimer = null;
+  let configPollTimer = null;
+  let configPollRunning = false;
+  let idleTimer = null;
+  let rescheduleIdleCheck = () => {
+  };
   let reloadChain = Promise.resolve();
   let closing = false;
+  let lastActivityAt = startedAt;
+  let resolveDone;
+  const done = new Promise((resolve) => {
+    resolveDone = resolve;
+  });
   const warmConfiguredRoots = (roots) => {
     if (roots.length === 0) {
       return;
@@ -3193,6 +4947,7 @@ async function startHttpDaemon(args = {}) {
       if (closing) {
         throw new Error("fff-routerd is closing");
       }
+      lastActivityAt = Date.now();
       const nextConfig = override?.loadConfig ? override.loadConfig() : loadReloadConfig({ env });
       const nextMetadata = buildMetadata({
         env,
@@ -3209,13 +4964,14 @@ async function startHttpDaemon(args = {}) {
       await writeDaemonMetadata(paths.metadataPath, nextMetadata);
       metadata = nextMetadata;
       warmConfiguredRoots(nextConfig.router.warmRoots);
+      rescheduleIdleCheck();
     });
     reloadChain = nextReload.catch(() => {
     });
     return await nextReload;
   };
-  await mkdir2(paths.dir, { recursive: true, mode: 448 });
-  await mkdir2(policyConfigPaths.dir, { recursive: true, mode: 448 });
+  mkdirSync4(paths.dir, { recursive: true, mode: 448 });
+  mkdirSync4(policyConfigPaths.dir, { recursive: true, mode: 448 });
   const authToken = await ensureDaemonAuthToken(env);
   const server = createServer(async (req, res) => {
     const url = new URL(
@@ -3225,6 +4981,7 @@ async function startHttpDaemon(args = {}) {
     if (url.pathname === "/health") {
       res.writeHead(200, { "content-type": "application/json" });
       const authorized = isAuthorized(req.headers.authorization, authToken);
+      if (authorized) lastActivityAt = Date.now();
       res.end(
         JSON.stringify({
           ok: true,
@@ -3234,8 +4991,15 @@ async function startHttpDaemon(args = {}) {
       );
       return;
     }
-    if (url.pathname !== config.mcpPath) {
+    const isMcpRequest = url.pathname === config.mcpPath;
+    const isControlRequest = url.pathname === DAEMON_CONTROL_PATH;
+    if (!isMcpRequest && !isControlRequest) {
       res.writeHead(404).end("Not found");
+      return;
+    }
+    const origin = headerValue(req, "origin");
+    if (origin && !isAllowedOrigin(origin, config)) {
+      sendMcpError(res, 403, null, -32020, "Origin is not allowed");
       return;
     }
     if (!isAuthorized(req.headers.authorization, authToken)) {
@@ -3246,58 +5010,144 @@ async function startHttpDaemon(args = {}) {
       res.end(JSON.stringify({ error: "unauthorized" }));
       return;
     }
-    const transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: void 0
-    });
-    const mcpServer = createMcpServer({ service, env }).toSdkServer();
-    let cleanedUp = false;
-    const cleanup = () => {
-      if (cleanedUp) {
+    lastActivityAt = Date.now();
+    if (req.method !== "POST") {
+      res.writeHead(405, { allow: "POST" }).end();
+      return;
+    }
+    const contentType = headerValue(req, "content-type") ?? "";
+    if (!contentType.toLowerCase().startsWith("application/json")) {
+      sendMcpError(res, 415, null, -32600, "Content-Type must be application/json");
+      return;
+    }
+    const accept = (headerValue(req, "accept") ?? "").toLowerCase();
+    if (isMcpRequest && (!accept.includes("application/json") || !accept.includes("text/event-stream"))) {
+      sendMcpError(
+        res,
+        406,
+        null,
+        -32600,
+        "Accept must include application/json and text/event-stream"
+      );
+      return;
+    }
+    try {
+      const parsedBody = await new Promise((resolve, reject) => {
+        const chunks = [];
+        let size = 0;
+        let tooLarge = false;
+        let settled = false;
+        req.on("data", (chunk) => {
+          if (settled) return;
+          const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+          size += buffer.byteLength;
+          if (size > MAX_REQUEST_BODY_BYTES) {
+            tooLarge = true;
+            return;
+          }
+          chunks.push(buffer);
+        });
+        req.on("end", () => {
+          if (settled) return;
+          settled = true;
+          if (tooLarge) {
+            reject(new Error(`request body exceeds ${MAX_REQUEST_BODY_BYTES} bytes`));
+            return;
+          }
+          try {
+            resolve(
+              chunks.length === 0 ? void 0 : JSON.parse(Buffer.concat(chunks).toString("utf8"))
+            );
+          } catch (caught) {
+            reject(caught);
+          }
+        });
+        req.on("error", (caught) => {
+          if (settled) return;
+          settled = true;
+          reject(caught);
+        });
+        req.on("aborted", () => {
+          if (settled) return;
+          settled = true;
+          reject(new Error("request body was aborted"));
+        });
+      });
+      if (isControlRequest) {
+        if (!isRecord4(parsedBody) || typeof parsedBody.action !== "string") {
+          sendJson(res, 400, { ok: false, error: "control action is required" });
+          return;
+        }
+        switch (parsedBody.action) {
+          case "reload":
+            await reload({ clearRuntimes: parsedBody.clearRuntimes === true });
+            sendJson(res, 200, { ok: true, action: "reload" });
+            return;
+          case "shutdown":
+            res.setHeader("connection", "close");
+            sendJson(res, 202, { ok: true, action: "shutdown" });
+            setTimeout(() => void closeDaemon(), 0);
+            return;
+          default:
+            sendJson(res, 400, { ok: false, error: "unsupported control action" });
+            return;
+        }
+      }
+      const headers = validateMcpHttpHeaders(req, parsedBody);
+      if (!headers.ok) {
+        sendJson(res, headers.status, headers.response);
         return;
       }
-      cleanedUp = true;
-      void transport.close();
-      void mcpServer.close();
-    };
-    res.once("close", cleanup);
-    res.once("finish", cleanup);
-    try {
-      await mcpServer.connect(transport);
-      const parsedBody = req.method === "POST" ? await readJsonBody(req) : void 0;
-      await transport.handleRequest(req, res, parsedBody);
-      if (res.writableEnded || res.destroyed) {
-        cleanup();
+      const response = await createMcpServer({ service, env }).handleRequest(parsedBody);
+      if (!response) {
+        res.writeHead(202).end();
+        return;
       }
+      const status = "error" in response && response.error.code === -32601 ? 404 : 200;
+      if (closing) res.setHeader("connection", "close");
+      sendJson(res, status, response);
     } catch (caught) {
       if (!res.headersSent) {
-        res.writeHead(500, { "content-type": "application/json" });
-        res.end(
-          JSON.stringify({
-            jsonrpc: "2.0",
-            error: {
-              code: -32603,
-              message: caught instanceof Error ? caught.message : String(caught)
-            },
-            id: null
-          })
+        const parseError = caught instanceof SyntaxError;
+        sendMcpError(
+          res,
+          parseError ? 400 : 500,
+          null,
+          parseError ? -32700 : -32603,
+          parseError ? "Parse error" : caught instanceof Error ? caught.message : String(caught)
         );
       }
-      cleanup();
     }
   });
   try {
-    await new Promise((resolve, reject) => {
+    if (IS_PERRY3) {
+      let listenError = null;
       const onError = (caught) => {
-        server.off("listening", onListening);
-        reject(caught);
-      };
-      const onListening = () => {
-        server.off("error", onError);
-        resolve();
+        listenError = caught;
       };
       server.once("error", onError);
-      server.listen(config.port, config.host, onListening);
-    });
+      server.listen(config.port, config.host);
+      const deadline = Date.now() + 5e3;
+      while (!server.listening && !listenError && Date.now() < deadline) {
+        await sleep(10);
+      }
+      server.off("error", onError);
+      if (listenError) throw listenError;
+      if (!server.listening) throw new Error("daemon HTTP listener did not become ready");
+    } else {
+      await new Promise((resolve, reject) => {
+        const onError = (caught) => {
+          server.off("listening", onListening);
+          reject(caught);
+        };
+        const onListening = () => {
+          server.off("error", onError);
+          resolve();
+        };
+        server.once("error", onError);
+        server.listen(config.port, config.host, onListening);
+      });
+    }
   } catch (caught) {
     await service.close();
     await workerPool.closeAll();
@@ -3315,24 +5165,75 @@ async function startHttpDaemon(args = {}) {
   await writeDaemonMetadata(paths.metadataPath, metadata);
   warmConfiguredRoots(initialReloadConfig.router.warmRoots);
   if (args.watchConfig !== false) {
-    watcher = watch(policyConfigPaths.dir, (_eventType, filename) => {
-      if (closing || !shouldReloadForWatchEvent(filename?.toString())) {
+    let signature = await policyConfigSignature(policyConfigPaths);
+    const scheduleConfigPoll = () => {
+      if (closing || configPollRunning || configPollTimer) return;
+      configPollTimer = setTimeout(() => {
+        configPollTimer = null;
+        if (closing) return;
+        configPollRunning = true;
+        void policyConfigSignature(policyConfigPaths).then(async (nextSignature) => {
+          if (nextSignature === signature) return;
+          signature = nextSignature;
+          await reload();
+        }).catch((caught) => {
+          console.error("fff-routerd config reload failed:", caught);
+        }).finally(() => {
+          configPollRunning = false;
+          scheduleConfigPoll();
+        });
+      }, 1e3);
+    };
+    scheduleConfigPoll();
+  }
+  let closePromise = null;
+  const closeDaemon = async () => {
+    if (closePromise) return await closePromise;
+    closePromise = (async () => {
+      closing = true;
+      if (configPollTimer) clearTimeout(configPollTimer);
+      if (idleTimer) clearTimeout(idleTimer);
+      await reloadChain.catch(() => {
+      });
+      const serverClosed = IS_PERRY3 ? (async () => {
+        server.close();
+        const deadline = Date.now() + 5e3;
+        while (server.listening && Date.now() < deadline) await sleep(10);
+      })() : new Promise((resolve) => server.close(() => resolve()));
+      await Promise.all([
+        serverClosed,
+        service.close().catch(() => {
+        }),
+        workerPool.closeAll().catch(() => {
+        })
+      ]);
+      try {
+        rmSync3(paths.metadataPath, { force: true });
+      } catch {
+      }
+      resolveDone();
+    })();
+    return await closePromise;
+  };
+  rescheduleIdleCheck = () => {
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = null;
+    const idleTimeoutMs = configRef.current.runtime.daemonIdleTimeoutMs ?? 0;
+    if (closing || idleTimeoutMs <= 0) return;
+    const elapsedMs = Date.now() - lastActivityAt;
+    const activeLeases = workerPool.getActiveLeaseCount();
+    const delayMs = activeLeases ? Math.max(25, Math.min(1e3, Math.floor(idleTimeoutMs / 4))) : Math.max(25, Math.min(6e4, idleTimeoutMs - elapsedMs));
+    idleTimer = setTimeout(() => {
+      idleTimer = null;
+      const currentTimeoutMs = configRef.current.runtime.daemonIdleTimeoutMs ?? 0;
+      if (!closing && currentTimeoutMs > 0 && workerPool.getActiveLeaseCount() === 0 && Date.now() - lastActivityAt >= currentTimeoutMs) {
+        void closeDaemon();
         return;
       }
-      if (watcherReloadTimer) {
-        clearTimeout(watcherReloadTimer);
-      }
-      watcherReloadTimer = setTimeout(() => {
-        watcherReloadTimer = null;
-        void reload().catch((caught) => {
-          console.error("fff-routerd config reload failed:", caught);
-        });
-      }, 50);
-    });
-    watcher.on("error", (caught) => {
-      console.error("fff-routerd config watcher error:", caught);
-    });
-  }
+      rescheduleIdleCheck();
+    }, delayMs);
+  };
+  rescheduleIdleCheck();
   return {
     server,
     get metadata() {
@@ -3347,62 +5248,64 @@ async function startHttpDaemon(args = {}) {
       })}${metadata.mcpPath}`;
     },
     reload,
-    async close() {
-      closing = true;
-      if (watcherReloadTimer) {
-        clearTimeout(watcherReloadTimer);
-      }
-      watcher?.close();
-      await reloadChain.catch(() => {
-      });
-      await new Promise((resolve) => server.close(() => resolve()));
-      await service.close().catch(() => {
-      });
-      await workerPool.closeAll().catch(() => {
-      });
-      await rm(paths.metadataPath, { force: true }).catch(() => {
-      });
-    }
+    done,
+    close: closeDaemon
   };
 }
 
+// lib/fff-router/http-json.ts
+var IS_PERRY4 = typeof process.versions.perry === "string";
+var MAX_RESPONSE_BYTES = 32 * 1024 * 1024;
+
 // lib/fff-router/daemon-autostart.ts
-var moduleDir2 = path12.dirname(fileURLToPath2(import.meta.url));
+var moduleDir2 = path14.dirname(fileURLToPath2(import.meta.url));
 
 // lib/fff-router/daemon-cli.ts
+var IS_PERRY5 = typeof process.versions.perry === "string";
 async function runForegroundDaemon(env = process.env) {
   const daemon = await startHttpDaemon({ env });
   let shuttingDown = false;
+  let shutdownError;
   const shutdown = async () => {
     if (shuttingDown) {
       return;
     }
     shuttingDown = true;
     const hardExit = setTimeout(() => process.exit(1), 5e3);
-    hardExit.unref?.();
     try {
       await daemon.close();
       clearTimeout(hardExit);
-      process.exit(0);
     } catch (caught) {
+      clearTimeout(hardExit);
       console.error("fff-routerd shutdown failed:", caught);
-      process.exit(1);
+      shutdownError = caught;
     }
   };
-  process.once("SIGINT", () => void shutdown());
-  process.once("SIGTERM", () => void shutdown());
-  process.on("SIGHUP", () => {
+  const onSigint = () => void shutdown();
+  const onSigterm = () => void shutdown();
+  const onSighup = () => {
     void daemon.reload().catch((caught) => {
       console.error("fff-routerd reload failed:", caught);
     });
-  });
-  process.on("SIGUSR2", () => {
+  };
+  const onSigusr2 = () => {
     void daemon.reload({ clearRuntimes: true }).catch((caught) => {
       console.error("fff-routerd worker eviction failed:", caught);
     });
-  });
-  await new Promise(() => {
-  });
+  };
+  process.once("SIGINT", onSigint);
+  process.once("SIGTERM", onSigterm);
+  process.on("SIGHUP", onSighup);
+  process.on("SIGUSR2", onSigusr2);
+  try {
+    await daemon.done;
+  } finally {
+    process.off("SIGINT", onSigint);
+    process.off("SIGTERM", onSigterm);
+    process.off("SIGHUP", onSighup);
+    process.off("SIGUSR2", onSigusr2);
+  }
+  if (shutdownError) throw shutdownError;
 }
 async function main(argv, env = process.env) {
   const command = argv[0] ?? "run";
@@ -3416,15 +5319,25 @@ async function main(argv, env = process.env) {
     );
     return 0;
   }
+  if (command === "--version" || command === "-v") {
+    process.stdout.write(`${PACKAGE_VERSION}
+`);
+    return 0;
+  }
   throw new Error("fff-routerd only accepts 'run'; use 'fff --help' for client commands");
 }
 
 // bin/fff-routerd.ts
-main(process.argv.slice(2), process.env).then((exitCode) => {
+var mainKeepalive = setInterval(() => {
+}, 1e3);
+try {
+  const exitCode = await main(process.argv.slice(2), process.env);
   if (exitCode !== 0) {
     process.exit(exitCode);
   }
-}).catch((error2) => {
+} catch (error2) {
   console.error("fff-routerd failed:", error2);
   process.exit(1);
-});
+} finally {
+  clearInterval(mainKeepalive);
+}

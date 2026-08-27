@@ -1,7 +1,15 @@
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
-import { access, chmod, mkdir, rename, rm, writeFile } from "node:fs/promises";
-import { constants as fsConstants } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline/promises";
@@ -16,6 +24,9 @@ const FFF_MCP_REPO = "dmtrKovalenko/fff";
 const FFF_ROUTER_GITHUB_PACKAGE_JSON =
   "https://raw.githubusercontent.com/unstableneutron/fff-router/main/package.json";
 const FFF_ROUTER_GITHUB_SPEC = "github:unstableneutron/fff-router";
+const NETWORK_TIMEOUT_MS = 30_000;
+const CURL_MAX_TIME_SECONDS = 60;
+const IS_PERRY = typeof (process.versions as Record<string, string | undefined>).perry === "string";
 
 type FffMcpRelease = {
   tag: string;
@@ -121,6 +132,31 @@ function parseFffMcpVersion(text: string): string | null {
 }
 
 async function readInstalledFffMcpVersion(binaryPath: string): Promise<string | null> {
+  if (!existsSync(binaryPath)) {
+    return null;
+  }
+  const manifestPath = path.join(path.dirname(binaryPath), ".fff-mcp-install.json");
+  if (existsSync(manifestPath)) {
+    try {
+      const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as {
+        version?: unknown;
+      };
+      if (typeof manifest.version === "string") {
+        const version = parseFffMcpVersion(manifest.version);
+        if (version) {
+          return version;
+        }
+      }
+    } catch {
+      // Fall through to probing an unmanaged or corrupt installation on Node.
+    }
+  }
+  // Perry does not currently deliver child-process completion callbacks reliably
+  // for short-lived commands. Managed native installs always have the manifest
+  // above, so an unmanaged binary is treated as unknown and safely reinstalled.
+  if (IS_PERRY) {
+    return null;
+  }
   try {
     const { stdout, stderr } = await execFileAsync(binaryPath, ["--version"], { timeout: 5_000 });
     return parseFffMcpVersion(`${stdout}\n${stderr}`);
@@ -129,13 +165,123 @@ async function readInstalledFffMcpVersion(binaryPath: string): Promise<string | 
   }
 }
 
-async function fetchJson(url: string): Promise<unknown> {
-  const response = await fetch(url, {
-    headers: {
-      accept: "application/vnd.github+json, application/json",
-      "user-agent": "fff-routerd-update",
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function stopDetachedProcess(pid: number | undefined): void {
+  if (!pid) return;
+  try {
+    process.kill(process.platform === "win32" ? pid : -pid, "SIGKILL");
+  } catch {
+    // The command already exited.
+  }
+}
+
+async function nativeCurlToFile(
+  url: string,
+  destinationPath: string,
+  headers: Record<string, string>,
+): Promise<boolean> {
+  const nonce = `${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}`;
+  const statusPath = `${destinationPath}.${nonce}.status`;
+  const stderrPath = `${destinationPath}.${nonce}.stderr`;
+  rmSync(statusPath, { force: true });
+  rmSync(stderrPath, { force: true });
+  const command =
+    'status_path="$1"; stderr_path="$2"; shift 2; "$@" 2>"$stderr_path"; code=$?; printf "%s\\n" "$code" >"$status_path"';
+  const curlArgs = [
+    "--fail-with-body",
+    "--location",
+    "--silent",
+    "--show-error",
+    "--connect-timeout",
+    "10",
+    "--max-time",
+    String(CURL_MAX_TIME_SECONDS),
+    "--proto",
+    "=https",
+    ...Object.entries(headers).flatMap(([name, value]) => ["--header", `${name}: ${value}`]),
+    "--output",
+    destinationPath,
+    url,
+  ];
+  const child = spawn(
+    "/bin/sh",
+    ["-c", command, "fff-router-curl", statusPath, stderrPath, "curl", ...curlArgs],
+    {
+      detached: process.platform !== "win32",
+      stdio: "ignore",
     },
+  );
+  child.unref();
+  const deadline = Date.now() + (CURL_MAX_TIME_SECONDS + 10) * 1_000;
+
+  try {
+    let exitCode: number | null = null;
+    while (exitCode === null) {
+      if (existsSync(statusPath)) {
+        const parsed = Number(readFileSync(statusPath, "utf8").trim());
+        if (Number.isInteger(parsed)) {
+          exitCode = parsed;
+          break;
+        }
+      }
+      if (Date.now() >= deadline) {
+        stopDetachedProcess(child.pid);
+        throw new Error(`curl GET ${url} timed out`);
+      }
+      await wait(25);
+    }
+    if (exitCode === 0) {
+      return true;
+    }
+    if (exitCode === 127) {
+      return false;
+    }
+    const stderr = existsSync(stderrPath) ? readFileSync(stderrPath, "utf8").trim() : "";
+    throw new Error(`curl GET ${url} failed with exit ${exitCode}: ${stderr || "unknown error"}`);
+  } finally {
+    rmSync(statusPath, { force: true });
+    rmSync(stderrPath, { force: true });
+  }
+}
+
+async function nativeCurlText(
+  url: string,
+  headers: Record<string, string>,
+): Promise<string | null> {
+  if (!IS_PERRY) return null;
+  const outputPath = path.join(
+    os.tmpdir(),
+    `.fff-router-fetch.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}`,
+  );
+  try {
+    return (await nativeCurlToFile(url, outputPath, headers))
+      ? readFileSync(outputPath, "utf8")
+      : null;
+  } finally {
+    rmSync(outputPath, { force: true });
+  }
+}
+
+async function fetchResponse(url: string, headers: Record<string, string>): Promise<Response> {
+  return await fetch(url, {
+    headers,
+    signal: AbortSignal.timeout(NETWORK_TIMEOUT_MS),
   });
+}
+
+async function fetchJson(url: string): Promise<unknown> {
+  const headers = {
+    accept: "application/vnd.github+json, application/json",
+    "user-agent": "fff-routerd-update",
+  };
+  const nativeText = await nativeCurlText(url, headers);
+  if (nativeText !== null) {
+    return JSON.parse(nativeText) as unknown;
+  }
+  const response = await fetchResponse(url, headers);
   if (!response.ok) {
     throw new Error(`GET ${url} failed with status ${response.status}`);
   }
@@ -143,9 +289,12 @@ async function fetchJson(url: string): Promise<unknown> {
 }
 
 async function fetchText(url: string): Promise<string> {
-  const response = await fetch(url, {
-    headers: { "user-agent": "fff-routerd-update" },
-  });
+  const headers = { "user-agent": "fff-routerd-update" };
+  const nativeText = await nativeCurlText(url, headers);
+  if (nativeText !== null) {
+    return nativeText;
+  }
+  const response = await fetchResponse(url, headers);
   if (!response.ok) {
     throw new Error(`GET ${url} failed with status ${response.status}`);
   }
@@ -227,10 +376,10 @@ export async function checkFffMcpUpdate(
   try {
     target = args.target ?? detectFffMcpTarget();
     binaryPath = fffMcpBinaryPath(env, target);
-    const [currentVersion, latest] = await Promise.all([
-      (args.readInstalledVersion ?? readInstalledFffMcpVersion)(binaryPath),
-      (args.getLatestRelease ?? getLatestFffMcpRelease)(target),
-    ]);
+    const currentVersion = await (args.readInstalledVersion ?? readInstalledFffMcpVersion)(
+      binaryPath,
+    );
+    const latest = await (args.getLatestRelease ?? getLatestFffMcpRelease)(target);
     const common = {
       binaryPath,
       target,
@@ -271,11 +420,15 @@ export async function checkFffMcpUpdate(
 }
 
 async function downloadToFile(url: string, destinationPath: string): Promise<void> {
-  const response = await fetch(url, { headers: { "user-agent": "fff-routerd-update" } });
+  const headers = { "user-agent": "fff-routerd-update" };
+  if (IS_PERRY && (await nativeCurlToFile(url, destinationPath, headers))) {
+    return;
+  }
+  const response = await fetchResponse(url, headers);
   if (!response.ok) {
     throw new Error(`GET ${url} failed with status ${response.status}`);
   }
-  await writeFile(destinationPath, Buffer.from(await response.arrayBuffer()));
+  writeFileSync(destinationPath, Buffer.from(await response.arrayBuffer()));
 }
 
 function extractSha256(text: string): string {
@@ -286,11 +439,8 @@ function extractSha256(text: string): string {
   return match[0].toLowerCase();
 }
 
-async function sha256File(filePath: string): Promise<string> {
-  const { readFile } = await import("node:fs/promises");
-  return createHash("sha256")
-    .update(await readFile(filePath))
-    .digest("hex");
+function sha256File(filePath: string): string {
+  return createHash("sha256").update(readFileSync(filePath)).digest("hex");
 }
 
 export async function installFffMcpUpdate(
@@ -302,21 +452,21 @@ export async function installFffMcpUpdate(
 ): Promise<string> {
   const directory = path.dirname(plan.binaryPath);
   const tempPath = path.join(directory, `.fff-mcp.${process.pid}.${Date.now()}.download`);
-  await mkdir(directory, { recursive: true });
+  mkdirSync(directory, { recursive: true });
   let installed = false;
   try {
     await (deps.downloadToFile ?? downloadToFile)(plan.assetUrl, tempPath);
 
     const expectedDigest = extractSha256(await (deps.fetchText ?? fetchText)(plan.checksumUrl));
-    const actualDigest = await sha256File(tempPath);
+    const actualDigest = sha256File(tempPath);
     if (actualDigest !== expectedDigest) {
       throw new Error(`fff-mcp checksum mismatch: expected ${expectedDigest}, got ${actualDigest}`);
     }
 
-    await chmod(tempPath, 0o755);
-    await rename(tempPath, plan.binaryPath);
+    chmodSync(tempPath, 0o755);
+    renameSync(tempPath, plan.binaryPath);
     installed = true;
-    await writeFile(
+    writeFileSync(
       path.join(directory, ".fff-mcp-install.json"),
       `${JSON.stringify(
         {
@@ -332,7 +482,7 @@ export async function installFffMcpUpdate(
     return plan.binaryPath;
   } finally {
     if (!installed) {
-      await rm(tempPath, { force: true }).catch(() => {});
+      rmSync(tempPath, { force: true });
     }
   }
 }
@@ -353,8 +503,10 @@ async function commandExists(
     for (const extension of commandExtensions(env)) {
       const candidate = path.join(directory, extension ? `${command}${extension}` : command);
       try {
-        await access(candidate, fsConstants.X_OK);
-        return true;
+        const details = statSync(candidate);
+        if (details.isFile() && (process.platform === "win32" || (details.mode & 0o111) !== 0)) {
+          return true;
+        }
       } catch {
         // Keep scanning PATH.
       }

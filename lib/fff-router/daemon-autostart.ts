@@ -1,6 +1,18 @@
 import { spawn as spawnChildProcess } from "node:child_process";
-import { appendFileSync, chmodSync, closeSync, existsSync, mkdirSync, openSync } from "node:fs";
-import { chmod, mkdir, open, readFile, rm, stat } from "node:fs/promises";
+import {
+  appendFileSync,
+  chmodSync,
+  closeSync,
+  existsSync,
+  fstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -13,11 +25,13 @@ import {
   getDaemonPaths,
 } from "./daemon-config";
 import { readDaemonMetadata, type DaemonMetadata } from "./http-daemon";
+import { requestJson } from "./http-json";
 import { bearerHeaders, readDaemonAuthToken } from "./local-auth";
 import { resolveExecutableOnPath as defaultResolveExecutableOnPath } from "./tool-resolution";
 
 type DaemonHealthMismatchKind = "protocol" | "version" | "server" | "reload";
 type VersionCompatibility = "same" | "running-newer";
+type DaemonLaunchSource = "env" | "path" | "packaged" | "native";
 const moduleDir = path.dirname(fileURLToPath(import.meta.url));
 const STARTUP_LOCK_TIMEOUT_MS = 15_000;
 
@@ -65,14 +79,22 @@ export function resolveDaemonLaunchCommand(
   deps: {
     preferPackaged?: boolean;
     resolveExecutableOnPath?: (command: string) => string | null;
+    nativeRuntime?: boolean;
   } = {},
-): { command: string; args: string[]; source: "env" | "path" | "packaged" } {
+): { command: string; args: string[]; source: DaemonLaunchSource } {
   if (env.FFF_ROUTER_DAEMON_BIN) {
     return { command: env.FFF_ROUTER_DAEMON_BIN, args: [], source: "env" };
   }
 
   if (env.FFF_ROUTER_DAEMON_ENTRYPOINT) {
     return { command: process.execPath, args: [env.FFF_ROUTER_DAEMON_ENTRYPOINT], source: "env" };
+  }
+
+  if (
+    deps.nativeRuntime ??
+    Boolean((process.versions as Record<string, string | undefined>).perry)
+  ) {
+    return { command: process.execPath, args: ["__daemon"], source: "native" };
   }
 
   if (!deps.preferPackaged && env.FFF_ROUTER_DAEMON_ALLOW_PATH === "1") {
@@ -93,14 +115,14 @@ export function resolveDaemonLaunchCommand(
 
 async function fetchHealthMetadata(env?: NodeJS.ProcessEnv): Promise<Partial<DaemonMetadata>> {
   const config = getDaemonConfig({ env });
-  const response = await fetch(new URL(`/health`, getDaemonOriginFromConfig(config)), {
+  const response = await requestJson(`${getDaemonOriginFromConfig(config)}/health`, {
     headers: bearerHeaders(await readDaemonAuthToken(env)),
   });
   if (!response.ok) {
     throw new Error(`daemon healthcheck failed with status ${response.status}`);
   }
 
-  const payload = (await response.json()) as {
+  const payload = response.payload as {
     ok?: boolean;
     metadata?: Partial<DaemonMetadata> | null;
   };
@@ -280,36 +302,35 @@ export function shouldReclaimStartupLock(args: {
 
 async function withStartupLock<T>(callback: () => Promise<T>, env?: NodeJS.ProcessEnv): Promise<T> {
   const paths = getDaemonPaths({ env });
-  await mkdir(paths.dir, { recursive: true, mode: 0o700 });
+  mkdirSync(paths.dir, { recursive: true, mode: 0o700 });
   if (process.platform !== "win32") {
-    await chmod(paths.dir, 0o700);
+    chmodSync(paths.dir, 0o700);
   }
   const startedAt = Date.now();
 
   while (true) {
+    let lockFd: number;
     try {
-      const handle = await open(paths.lockPath, "wx");
-      await handle.writeFile(JSON.stringify({ pid: process.pid, createdAt: Date.now() }));
-      try {
-        return await callback();
-      } finally {
-        await handle.close().catch(() => {});
-        await rm(paths.lockPath, { force: true }).catch(() => {});
-      }
+      lockFd = openSync(paths.lockPath, "wx", 0o600);
+      writeFileSync(lockFd, JSON.stringify({ pid: process.pid, createdAt: Date.now() }));
     } catch (error) {
       if (typeof error !== "object" || !error || !("code" in error) || error.code !== "EEXIST") {
         throw error;
       }
 
-      const [contents, lockStat] = await Promise.all([
-        readFile(paths.lockPath, "utf8").catch(() => ""),
-        stat(paths.lockPath).catch(() => null),
-      ]);
+      let contents = "";
+      let lockStat: ReturnType<typeof statSync> | null = null;
+      try {
+        contents = readFileSync(paths.lockPath, "utf8");
+        lockStat = statSync(paths.lockPath);
+      } catch {
+        // The lock may have disappeared between openSync and inspection.
+      }
       if (
         !lockStat ||
         shouldReclaimStartupLock({ contents, mtimeMs: lockStat.mtimeMs, now: Date.now() })
       ) {
-        await rm(paths.lockPath, { force: true }).catch(() => {});
+        rmSync(paths.lockPath, { force: true });
         continue;
       }
 
@@ -318,6 +339,14 @@ async function withStartupLock<T>(callback: () => Promise<T>, env?: NodeJS.Proce
       }
 
       await sleep(50);
+      continue;
+    }
+
+    try {
+      return await callback();
+    } finally {
+      closeSync(lockFd);
+      rmSync(paths.lockPath, { force: true });
     }
   }
 }
@@ -328,14 +357,15 @@ function isRecoverableHealthError(error: unknown): boolean {
   }
 
   const code = typeof error === "object" && error && "code" in error ? String(error.code) : "";
+  const message = error.message.toLowerCase();
   return (
     code === "ECONNREFUSED" ||
     code === "ConnectionRefused" ||
-    error.message.includes("fetch") ||
-    error.message.includes("ECONNREFUSED") ||
-    error.message.includes("ConnectionRefused") ||
-    error.message.includes("Unable to connect") ||
-    error.message.includes("healthcheck failed")
+    message.includes("fetch") ||
+    message.includes("econnrefused") ||
+    message.includes("connectionrefused") ||
+    message.includes("unable to connect") ||
+    message.includes("healthcheck failed")
   );
 }
 
@@ -404,7 +434,7 @@ function shouldPreserveNewerDaemonMismatch(error: unknown, env?: NodeJS.ProcessE
 function spawnDaemon(
   env?: NodeJS.ProcessEnv,
   options?: { preferPackaged?: boolean },
-): { unref: () => void; source: "env" | "path" | "packaged" } {
+): { unref: () => void; source: DaemonLaunchSource } {
   const launchCommand = resolveDaemonLaunchCommand(env ?? process.env, options);
   const paths = getDaemonPaths({ env });
   mkdirSync(paths.dir, { recursive: true, mode: 0o700 });
@@ -440,18 +470,24 @@ function spawnDaemon(
 }
 
 async function readLogTail(pathValue: string, maxBytes = 4096): Promise<string> {
-  let handle: Awaited<ReturnType<typeof open>> | undefined;
+  let fd: number | undefined;
   try {
-    handle = await open(pathValue, "r");
-    const stat = await handle.stat();
-    const length = Math.min(stat.size, maxBytes);
+    fd = openSync(pathValue, "r");
+    const details = fstatSync(fd);
+    const length = Math.min(details.size, maxBytes);
     const buffer = Buffer.alloc(length);
-    await handle.read(buffer, 0, length, Math.max(0, stat.size - length));
+    readSync(fd, buffer, 0, length, Math.max(0, details.size - length));
     return buffer.toString("utf8").trimEnd();
   } catch {
     return "";
   } finally {
-    await handle?.close().catch(() => {});
+    if (fd !== undefined) {
+      try {
+        closeSync(fd);
+      } catch {
+        // Ignore concurrent log rotation/closure.
+      }
+    }
   }
 }
 
@@ -474,6 +510,12 @@ export async function formatDaemonStartupError(
 async function waitForDaemonReady(env?: NodeJS.ProcessEnv): Promise<void> {
   let lastError: unknown;
   for (const delay of [50, 100, 200, 400, 800, 1200]) {
+    const metadata = await readRunningDaemonMetadata(env);
+    if (!metadata || !isProcessAlive(metadata.pid)) {
+      lastError = new Error("daemon metadata is not ready");
+      await sleep(delay);
+      continue;
+    }
     try {
       await checkDaemonHealth(env);
       return;
@@ -550,24 +592,15 @@ export async function ensureDaemonRunningWithDeps(
     spawnDaemon: (
       env?: NodeJS.ProcessEnv,
       options?: { preferPackaged?: boolean },
-    ) => { unref: () => void; source: "env" | "path" | "packaged" };
+    ) => { unref: () => void; source: DaemonLaunchSource };
     waitForDaemonReady: (env?: NodeJS.ProcessEnv) => Promise<void>;
     withStartupLock: (callback: () => Promise<void>, env?: NodeJS.ProcessEnv) => Promise<void>;
+    isProcessAlive?: (pid: number) => boolean;
   },
 ): Promise<void> {
-  try {
-    await deps.checkDaemonHealth(env);
-    return;
-  } catch (error) {
-    if (shouldPreserveNewerDaemonMismatch(error, env)) {
-      return;
-    }
-    if (!isRecoverableHealthError(error) && mismatchKind(error) === null) {
-      throw error;
-    }
-  }
-
-  await deps.withStartupLock(async () => {
+  const processIsAlive = deps.isProcessAlive ?? isProcessAlive;
+  const initialMetadata = await deps.readRunningDaemonMetadata(env);
+  if (initialMetadata && processIsAlive(initialMetadata.pid)) {
     try {
       await deps.checkDaemonHealth(env);
       return;
@@ -575,31 +608,48 @@ export async function ensureDaemonRunningWithDeps(
       if (shouldPreserveNewerDaemonMismatch(error, env)) {
         return;
       }
-      const pid = mismatchPid(error);
+      if (!isRecoverableHealthError(error) && mismatchKind(error) === null) {
+        throw error;
+      }
+    }
+  }
 
-      if (mismatchKind(error) === "reload") {
-        if (pid) {
-          try {
-            await deps.signalProcess(pid, "SIGHUP");
-            await deps.waitForDaemonReady(env);
-            return;
-          } catch {
-            // Fall through to restart/spawn when reload signaling or readiness fails.
+  await deps.withStartupLock(async () => {
+    const lockedMetadata = await deps.readRunningDaemonMetadata(env);
+    if (lockedMetadata && processIsAlive(lockedMetadata.pid)) {
+      try {
+        await deps.checkDaemonHealth(env);
+        return;
+      } catch (error) {
+        if (shouldPreserveNewerDaemonMismatch(error, env)) {
+          return;
+        }
+        const pid = mismatchPid(error);
+
+        if (mismatchKind(error) === "reload") {
+          if (pid) {
+            try {
+              await deps.signalProcess(pid, "SIGHUP");
+              await deps.waitForDaemonReady(env);
+              return;
+            } catch {
+              // Fall through to restart/spawn when reload signaling or readiness fails.
+            }
           }
         }
-      }
 
-      if (
-        mismatchKind(error) === "protocol" ||
-        mismatchKind(error) === "version" ||
-        mismatchKind(error) === "server" ||
-        mismatchKind(error) === "reload"
-      ) {
-        if (pid) {
-          await deps.terminateProcess(pid);
+        if (
+          mismatchKind(error) === "protocol" ||
+          mismatchKind(error) === "version" ||
+          mismatchKind(error) === "server" ||
+          mismatchKind(error) === "reload"
+        ) {
+          if (pid) {
+            await deps.terminateProcess(pid);
+          }
+        } else if (!isRecoverableHealthError(error)) {
+          throw error;
         }
-      } else if (!isRecoverableHealthError(error)) {
-        throw error;
       }
     }
 

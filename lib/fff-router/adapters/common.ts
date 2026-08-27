@@ -1,5 +1,4 @@
 import path from "node:path";
-import picomatch from "picomatch";
 import type { BackendResultItem, BackendSearchRequest } from "./types";
 
 export function normalizeRelativePath(relativePath: string): string {
@@ -68,10 +67,73 @@ export function matchesGlob(glob: string | undefined, relativePath: string): boo
     return true;
   }
 
-  return picomatch(glob, {
-    dot: true,
-    basename: !glob.includes("/"),
-  })(normalizeRelativePath(relativePath));
+  return matchGlob(glob, normalizeRelativePath(relativePath));
+}
+
+function escapeRegexCharacter(character: string): string {
+  return /[\\^$.*+?()[\]{}|]/.test(character) ? `\\${character}` : character;
+}
+
+/**
+ * Compile the bounded public glob syntax without a package runtime. This is
+ * the portable subset used by fff and shell tools: `*`, `**`, `?`, character
+ * classes, and flat brace alternatives. A leading `!` negates the expression.
+ */
+function globSource(glob: string): string {
+  let source = "";
+  for (let index = 0; index < glob.length; index += 1) {
+    const character = glob[index] ?? "";
+    if (character === "*") {
+      if (glob[index + 1] === "*") {
+        index += 1;
+        if (glob[index + 1] === "/") {
+          index += 1;
+          source += "(?:.*/)?";
+        } else {
+          source += ".*";
+        }
+      } else {
+        source += "[^/]*";
+      }
+      continue;
+    }
+    if (character === "?") {
+      source += "[^/]";
+      continue;
+    }
+    if (character === "[") {
+      const close = glob.indexOf("]", index + 1);
+      if (close > index + 1) {
+        let body = glob.slice(index + 1, close);
+        if (body.startsWith("!")) body = `^${body.slice(1)}`;
+        source += `[${body.replace(/\\/g, "\\\\")}]`;
+        index = close;
+        continue;
+      }
+    }
+    if (character === "{") {
+      const close = glob.indexOf("}", index + 1);
+      if (close > index + 1) {
+        const alternatives = glob.slice(index + 1, close).split(",");
+        if (alternatives.length > 1 && alternatives.every((entry) => !/[{}]/.test(entry))) {
+          source += `(?:${alternatives.map(globSource).join("|")})`;
+          index = close;
+          continue;
+        }
+      }
+    }
+    source += escapeRegexCharacter(character);
+  }
+  return source;
+}
+
+function matchGlob(glob: string, relativePath: string): boolean {
+  const negated = glob.startsWith("!");
+  const expression = negated ? glob.slice(1) : glob;
+  const basename = !expression.includes("/");
+  const candidate = basename ? (relativePath.split("/").at(-1) ?? relativePath) : relativePath;
+  const matches = new RegExp(`^${globSource(expression)}$`, "u").test(candidate);
+  return negated ? !matches : matches;
 }
 
 export function matchesExcludePaths(excludePaths: string[], relativePath: string): boolean {
@@ -79,9 +141,7 @@ export function matchesExcludePaths(excludePaths: string[], relativePath: string
 
   return !excludePaths.some((excludePath) => {
     if (/[*?[\]{}!]/.test(excludePath)) {
-      return picomatch(excludePath, { dot: true, basename: !excludePath.includes("/") })(
-        normalized,
-      );
+      return matchGlob(excludePath, normalized);
     }
     return normalized === excludePath || normalized.startsWith(`${excludePath}/`);
   });

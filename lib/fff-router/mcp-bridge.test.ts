@@ -4,6 +4,7 @@ import { runMcpHttpBridge } from "./mcp-bridge";
 describe("HTTP-backed stdio MCP bridge", () => {
   test("forwards MCP calls to one authenticated daemon client", async () => {
     const callMcpTool = vi.fn(async () => ({
+      resultType: "complete" as const,
       isError: false,
       content: [{ type: "text", text: "result" }],
       structuredContent: { tool: "find_files", items: [] },

@@ -54,17 +54,22 @@ describe("fff-mcp compatibility adapter", () => {
 
   test("closes both MCP handles when the client cannot connect", async () => {
     const clientClose = vi.fn(async () => {});
-    const transportClose = vi.fn(async () => {});
     const waitForReady = vi.fn(async () => "ready");
     const adapter = createFffMcpStdioAdapter({
       resolveCommand: () => "/fake/fff-mcp",
-      createTransport: () => ({ close: transportClose }),
       createClient: () => ({
+        pid: 123,
+        supervision: { resources: null, terminationReason: null },
         connect: async () => {
           throw new Error("connect failed");
         },
         close: clientClose,
         callTool: async () => ({}),
+        onClose: () => () => {},
+        onResourceSample: () => () => {},
+        onTermination: () => () => {},
+        getResourceUsage: () => null,
+        getTerminationReason: () => undefined,
       }),
       waitForReady,
     });
@@ -73,7 +78,6 @@ describe("fff-mcp compatibility adapter", () => {
       "connect failed",
     );
     expect(clientClose).toHaveBeenCalledOnce();
-    expect(transportClose).toHaveBeenCalledOnce();
     expect(waitForReady).not.toHaveBeenCalled();
   });
 

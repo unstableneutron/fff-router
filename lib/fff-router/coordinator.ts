@@ -48,6 +48,16 @@ function error(code: RouterError["code"], message: string, retryable?: boolean):
   };
 }
 
+function daemonRssBytes(): number {
+  try {
+    return process.memoryUsage().rss;
+  } catch {
+    // Some restricted containers do not expose the host primitive libuv uses.
+    // Resource telemetry is advisory and must never make search unavailable.
+    return 0;
+  }
+}
+
 function isStaleWorkerMessage(message: string): boolean {
   return (
     /\b(Not connected|EPIPE|ECONNRESET|EOF)\b/i.test(message) ||
@@ -65,7 +75,6 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T
       promise,
       new Promise<never>((_resolve, reject) => {
         timer = setTimeout(() => reject(new WorkerCallTimeoutError(timeoutMs)), timeoutMs);
-        timer.unref?.();
       }),
     ]);
   } finally {
@@ -285,6 +294,13 @@ export class RouterServiceImpl implements RouterService {
       start: async () =>
         await this.deps.adapter.startRuntime({
           persistenceRoot: target.persistenceRoot,
+          supervision: {
+            sampleIntervalMs: this.deps.configRef.current.runtime.processSampleIntervalMs,
+            maxRssBytes: this.deps.configRef.current.limits.maxWorkerRssBytes,
+            shutdownGraceMs: this.deps.configRef.current.runtime.processShutdownGraceMs,
+            killGraceMs: this.deps.configRef.current.runtime.processKillGraceMs,
+            orphanIdleTimeoutMs: this.deps.configRef.current.runtime.workerOrphanIdleTimeoutMs,
+          },
         }),
     });
   }
@@ -509,9 +525,16 @@ export class RouterServiceImpl implements RouterService {
   }
 
   status(): RouterStatus {
+    const workerResources = this.deps.workerPool.getResourceSummary();
+    const daemonRss = daemonRssBytes();
     return {
       workers: this.deps.workerPool.getDiagnostics(),
       limits: this.deps.configRef.current.limits,
+      resources: {
+        ...workerResources,
+        daemonRssBytes: daemonRss,
+        totalRssBytes: daemonRss + workerResources.workerRssBytes,
+      },
     };
   }
 

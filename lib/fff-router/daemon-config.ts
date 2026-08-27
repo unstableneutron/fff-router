@@ -8,12 +8,20 @@ import { expandHomePath } from "./home-path";
 import type { RouterConfig } from "./types";
 
 export const DEFAULT_DAEMON_HOST = "127.0.0.1";
-export const DAEMON_PROTOCOL_VERSION = "fff-router-v1";
+export const DAEMON_PROTOCOL_VERSION = "fff-router-v2";
 export const DEFAULT_DAEMON_PORT = 4319;
 export const DEFAULT_DAEMON_MCP_PATH = "/mcp";
 const DEFAULT_BACKEND_TOOL_TIMEOUT_MS = 30_000;
 const DEFAULT_SWEEP_INTERVAL_MS = 30_000;
 const DEFAULT_RESTART_BACKOFF_MS = 1_000;
+const DEFAULT_RESTART_BACKOFF_MAX_MS = 60_000;
+const DEFAULT_PROCESS_SAMPLE_INTERVAL_MS = 5_000;
+const DEFAULT_PROCESS_SHUTDOWN_GRACE_MS = 500;
+const DEFAULT_PROCESS_KILL_GRACE_MS = 1_000;
+const DEFAULT_WORKER_ORPHAN_IDLE_TIMEOUT_MS = 30 * 60 * 1_000;
+const DEFAULT_DAEMON_IDLE_TIMEOUT_MS = 30 * 60 * 1_000;
+const DEFAULT_MAX_WORKER_RSS_BYTES = 768 * 1_024 * 1_024;
+const DEFAULT_MAX_TOTAL_WORKER_RSS_BYTES = 2 * 1_024 * 1_024 * 1_024;
 const moduleDir = path.dirname(fileURLToPath(import.meta.url));
 
 export type DaemonConfig = {
@@ -39,11 +47,19 @@ export type DaemonFileConfig = {
   limits?: {
     maxWorkers?: number;
     maxNonGitWorkers?: number;
+    maxWorkerRssBytes?: number;
+    maxTotalWorkerRssBytes?: number;
   };
   runtime?: {
     toolTimeoutMs?: number;
     sweepIntervalMs?: number;
     restartBackoffMs?: number;
+    restartBackoffMaxMs?: number;
+    processSampleIntervalMs?: number;
+    processShutdownGraceMs?: number;
+    processKillGraceMs?: number;
+    workerOrphanIdleTimeoutMs?: number;
+    daemonIdleTimeoutMs?: number;
   };
 };
 
@@ -62,26 +78,7 @@ export type DaemonPaths = {
   stderrLogPath: string;
 };
 
-function packageVersion(): string {
-  const candidatePaths = [
-    path.resolve(moduleDir, "../../package.json"),
-    path.resolve(moduleDir, "../../../package.json"),
-  ];
-
-  for (const candidatePath of candidatePaths) {
-    if (!existsSync(candidatePath)) {
-      continue;
-    }
-    const parsed = JSON.parse(readFileSync(candidatePath, "utf8")) as { version?: unknown };
-    if (typeof parsed.version === "string" && parsed.version.length > 0) {
-      return parsed.version;
-    }
-  }
-
-  throw new Error("Unable to determine fff-router package version");
-}
-
-export const PACKAGE_VERSION = packageVersion();
+export const PACKAGE_VERSION = "2.0.0";
 // pnpm intentionally omits packageManager from packed manifests. Keep this
 // build-time constant aligned with package.json; package-manifest.test.ts
 // enforces the invariant.
@@ -130,7 +127,9 @@ export function getDaemonSourceFingerprint(
     args.daemonEntrypointPath ??
     env.FFF_ROUTER_DAEMON_BIN ??
     env.FFF_ROUTER_DAEMON_ENTRYPOINT ??
-    packagedDaemonEntrypointPath();
+    ((process.versions as Record<string, string | undefined>).perry
+      ? process.execPath
+      : packagedDaemonEntrypointPath());
   return hashFingerprint({
     packageVersion: PACKAGE_VERSION,
     daemonEntrypointPath,
@@ -169,11 +168,19 @@ export function getDefaultRouterConfig(): RouterConfig {
     limits: {
       maxWorkers: 12,
       maxNonGitWorkers: 4,
+      maxWorkerRssBytes: DEFAULT_MAX_WORKER_RSS_BYTES,
+      maxTotalWorkerRssBytes: DEFAULT_MAX_TOTAL_WORKER_RSS_BYTES,
     },
     runtime: {
       toolTimeoutMs: DEFAULT_BACKEND_TOOL_TIMEOUT_MS,
       sweepIntervalMs: DEFAULT_SWEEP_INTERVAL_MS,
       restartBackoffMs: DEFAULT_RESTART_BACKOFF_MS,
+      restartBackoffMaxMs: DEFAULT_RESTART_BACKOFF_MAX_MS,
+      processSampleIntervalMs: DEFAULT_PROCESS_SAMPLE_INTERVAL_MS,
+      processShutdownGraceMs: DEFAULT_PROCESS_SHUTDOWN_GRACE_MS,
+      processKillGraceMs: DEFAULT_PROCESS_KILL_GRACE_MS,
+      workerOrphanIdleTimeoutMs: DEFAULT_WORKER_ORPHAN_IDLE_TIMEOUT_MS,
+      daemonIdleTimeoutMs: DEFAULT_DAEMON_IDLE_TIMEOUT_MS,
     },
   };
 }
@@ -197,11 +204,19 @@ export type DefaultDaemonFileConfig = {
   limits: {
     maxWorkers: number;
     maxNonGitWorkers: number;
+    maxWorkerRssBytes: number;
+    maxTotalWorkerRssBytes: number;
   };
   runtime: {
     toolTimeoutMs: number;
     sweepIntervalMs: number;
     restartBackoffMs: number;
+    restartBackoffMaxMs: number;
+    processSampleIntervalMs: number;
+    processShutdownGraceMs: number;
+    processKillGraceMs: number;
+    workerOrphanIdleTimeoutMs: number;
+    daemonIdleTimeoutMs: number;
   };
 };
 
@@ -215,9 +230,28 @@ export function getDefaultDaemonFileConfig(): DefaultDaemonFileConfig {
     allowlist: [],
     warmRoots: [],
     ttl: { ...reload.router.ttl },
-    limits: { ...reload.router.limits },
+    limits: {
+      maxWorkers: reload.router.limits.maxWorkers,
+      maxNonGitWorkers: reload.router.limits.maxNonGitWorkers,
+      maxWorkerRssBytes: reload.router.limits.maxWorkerRssBytes ?? DEFAULT_MAX_WORKER_RSS_BYTES,
+      maxTotalWorkerRssBytes:
+        reload.router.limits.maxTotalWorkerRssBytes ?? DEFAULT_MAX_TOTAL_WORKER_RSS_BYTES,
+    },
     runtime: {
-      ...reload.router.runtime,
+      toolTimeoutMs: reload.router.runtime.toolTimeoutMs,
+      sweepIntervalMs: reload.router.runtime.sweepIntervalMs,
+      restartBackoffMs: reload.router.runtime.restartBackoffMs,
+      restartBackoffMaxMs:
+        reload.router.runtime.restartBackoffMaxMs ?? DEFAULT_RESTART_BACKOFF_MAX_MS,
+      processSampleIntervalMs:
+        reload.router.runtime.processSampleIntervalMs ?? DEFAULT_PROCESS_SAMPLE_INTERVAL_MS,
+      processShutdownGraceMs:
+        reload.router.runtime.processShutdownGraceMs ?? DEFAULT_PROCESS_SHUTDOWN_GRACE_MS,
+      processKillGraceMs: reload.router.runtime.processKillGraceMs ?? DEFAULT_PROCESS_KILL_GRACE_MS,
+      workerOrphanIdleTimeoutMs:
+        reload.router.runtime.workerOrphanIdleTimeoutMs ?? DEFAULT_WORKER_ORPHAN_IDLE_TIMEOUT_MS,
+      daemonIdleTimeoutMs:
+        reload.router.runtime.daemonIdleTimeoutMs ?? DEFAULT_DAEMON_IDLE_TIMEOUT_MS,
     },
   };
 }
@@ -343,8 +377,8 @@ function readOptionalMcpPath(value: unknown): string | undefined {
   if (parsed.includes("?") || parsed.includes("#")) {
     throw new Error("mcpPath must be a pathname without query or hash");
   }
-  if (parsed === "/health") {
-    throw new Error("mcpPath '/health' is reserved");
+  if (parsed === "/health" || parsed === "/control") {
+    throw new Error(`mcpPath '${parsed}' is reserved`);
   }
   return parsed;
 }
@@ -360,7 +394,7 @@ function readOptionalHost(value: unknown): string | undefined {
     normalized !== "::1" &&
     !(isIP(normalized) === 4 && normalized.startsWith("127."))
   ) {
-    throw new Error("fff-routerd v1 is machine-local; host must be localhost, 127.0.0.0/8, or ::1");
+    throw new Error("fff-routerd is machine-local; host must be localhost, 127.0.0.0/8, or ::1");
   }
   return host;
 }
@@ -532,9 +566,29 @@ function normalizeDaemonFileConfig(
   const limits = fileConfig.limits == null ? null : expectObject(fileConfig.limits, "limits");
   const runtime = fileConfig.runtime == null ? null : expectObject(fileConfig.runtime, "runtime");
   if (ttl) rejectUnknownKeys(ttl, ["gitMs", "nonGitMs"], "ttl");
-  if (limits) rejectUnknownKeys(limits, ["maxWorkers", "maxNonGitWorkers"], "limits");
+  if (limits) {
+    rejectUnknownKeys(
+      limits,
+      ["maxWorkers", "maxNonGitWorkers", "maxWorkerRssBytes", "maxTotalWorkerRssBytes"],
+      "limits",
+    );
+  }
   if (runtime) {
-    rejectUnknownKeys(runtime, ["toolTimeoutMs", "sweepIntervalMs", "restartBackoffMs"], "runtime");
+    rejectUnknownKeys(
+      runtime,
+      [
+        "toolTimeoutMs",
+        "sweepIntervalMs",
+        "restartBackoffMs",
+        "restartBackoffMaxMs",
+        "processSampleIntervalMs",
+        "processShutdownGraceMs",
+        "processKillGraceMs",
+        "workerOrphanIdleTimeoutMs",
+        "daemonIdleTimeoutMs",
+      ],
+      "runtime",
+    );
   }
 
   const normalizedEnv = { ...env, HOME: userHome(env) } as NodeJS.ProcessEnv;
@@ -553,10 +607,19 @@ function normalizeDaemonFileConfig(
     readOptionalPositiveInteger(limits?.maxWorkers, "limits.maxWorkers") ??
     defaults.limits.maxWorkers;
   const maxNonGitWorkers =
-    readOptionalPositiveInteger(limits?.maxNonGitWorkers, "limits.maxNonGitWorkers") ??
+    readOptionalNonNegativeInteger(limits?.maxNonGitWorkers, "limits.maxNonGitWorkers") ??
     defaults.limits.maxNonGitWorkers;
   if (maxNonGitWorkers > maxWorkers) {
     throw new Error("limits.maxNonGitWorkers must not exceed limits.maxWorkers");
+  }
+  const maxWorkerRssBytes =
+    readOptionalPositiveInteger(limits?.maxWorkerRssBytes, "limits.maxWorkerRssBytes") ??
+    defaults.limits.maxWorkerRssBytes;
+  const maxTotalWorkerRssBytes =
+    readOptionalPositiveInteger(limits?.maxTotalWorkerRssBytes, "limits.maxTotalWorkerRssBytes") ??
+    defaults.limits.maxTotalWorkerRssBytes;
+  if (maxTotalWorkerRssBytes < maxWorkerRssBytes) {
+    throw new Error("limits.maxTotalWorkerRssBytes must be at least limits.maxWorkerRssBytes");
   }
   const toolTimeoutMs =
     readOptionalNonNegativeInteger(runtime?.toolTimeoutMs, "runtime.toolTimeoutMs") ??
@@ -567,6 +630,33 @@ function normalizeDaemonFileConfig(
   const restartBackoffMs =
     readOptionalNonNegativeInteger(runtime?.restartBackoffMs, "runtime.restartBackoffMs") ??
     defaults.runtime.restartBackoffMs;
+  const restartBackoffMaxMs =
+    readOptionalNonNegativeInteger(runtime?.restartBackoffMaxMs, "runtime.restartBackoffMaxMs") ??
+    defaults.runtime.restartBackoffMaxMs;
+  if (restartBackoffMaxMs < restartBackoffMs) {
+    throw new Error("runtime.restartBackoffMaxMs must be at least runtime.restartBackoffMs");
+  }
+  const processSampleIntervalMs =
+    readOptionalNonNegativeInteger(
+      runtime?.processSampleIntervalMs,
+      "runtime.processSampleIntervalMs",
+    ) ?? defaults.runtime.processSampleIntervalMs;
+  const processShutdownGraceMs =
+    readOptionalNonNegativeInteger(
+      runtime?.processShutdownGraceMs,
+      "runtime.processShutdownGraceMs",
+    ) ?? defaults.runtime.processShutdownGraceMs;
+  const processKillGraceMs =
+    readOptionalNonNegativeInteger(runtime?.processKillGraceMs, "runtime.processKillGraceMs") ??
+    defaults.runtime.processKillGraceMs;
+  const workerOrphanIdleTimeoutMs =
+    readOptionalNonNegativeInteger(
+      runtime?.workerOrphanIdleTimeoutMs,
+      "runtime.workerOrphanIdleTimeoutMs",
+    ) ?? defaults.runtime.workerOrphanIdleTimeoutMs;
+  const daemonIdleTimeoutMs =
+    readOptionalNonNegativeInteger(runtime?.daemonIdleTimeoutMs, "runtime.daemonIdleTimeoutMs") ??
+    defaults.runtime.daemonIdleTimeoutMs;
 
   return {
     daemon: {
@@ -585,11 +675,19 @@ function normalizeDaemonFileConfig(
         limits: {
           maxWorkers,
           maxNonGitWorkers,
+          maxWorkerRssBytes,
+          maxTotalWorkerRssBytes,
         },
         runtime: {
           toolTimeoutMs,
           sweepIntervalMs,
           restartBackoffMs,
+          restartBackoffMaxMs,
+          processSampleIntervalMs,
+          processShutdownGraceMs,
+          processKillGraceMs,
+          workerOrphanIdleTimeoutMs,
+          daemonIdleTimeoutMs,
         },
       },
     },

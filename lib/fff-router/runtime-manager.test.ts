@@ -1,14 +1,15 @@
 import { describe, expect, test, vi } from "vitest";
 import { WorkerPool } from "./runtime-manager";
 import type { SearchBackendRuntime } from "./adapters/types";
+import type { WorkerResourceUsage } from "./types";
 
 type FakeRuntime = SearchBackendRuntime & {
   closed: boolean;
-  triggerClose: () => void;
+  triggerClose: (reason?: string) => void;
 };
 
-function runtime(id: string): FakeRuntime {
-  let closeHandler: (() => void) | undefined;
+function runtime(id: string, rssBytes?: number): FakeRuntime {
+  let closeHandler: ((reason?: string) => void) | undefined;
   return {
     id,
     closed: false,
@@ -21,9 +22,18 @@ function runtime(id: string): FakeRuntime {
         closeHandler = undefined;
       };
     },
-    triggerClose() {
-      closeHandler?.();
+    triggerClose(reason) {
+      closeHandler?.(reason);
     },
+    ...(rssBytes !== undefined
+      ? {
+          getResourceUsage: () => ({
+            sampledAt: 1,
+            rssBytes,
+            processCount: 1,
+          }),
+        }
+      : {}),
   };
 }
 
@@ -161,6 +171,111 @@ describe("WorkerPool", () => {
       }),
     ).toMatchObject({ ok: false, error: { code: "WORKER_LIMIT_REACHED" } });
     if (first.ok) await first.value.release();
+    await workers.closeAll();
+  });
+
+  test("evicts the largest idle worker when aggregate RSS exceeds the cap", async () => {
+    const workers = pool({ maxTotalWorkerRssBytes: 100 });
+    const firstRuntime = runtime("a", 80);
+    const secondRuntime = runtime("b", 70);
+    const first = await workers.acquire({
+      root: "/a",
+      rootType: "git",
+      ttlMs: 10_000,
+      start: async () => firstRuntime,
+    });
+    if (first.ok) await first.value.release();
+    const second = await workers.acquire({
+      root: "/b",
+      rootType: "git",
+      ttlMs: 10_000,
+      start: async () => secondRuntime,
+    });
+    if (second.ok) await second.value.release();
+
+    await vi.waitFor(() => expect(firstRuntime.closed).toBe(true));
+    expect(secondRuntime.closed).toBe(false);
+    expect(workers.getResourceSummary()).toMatchObject({
+      workerRssBytes: 70,
+      measuredWorkers: 1,
+    });
+    await workers.closeAll();
+  });
+
+  test("retains an immutable close reason and resource sample in dead diagnostics", async () => {
+    const workers = pool();
+    const capped = runtime("capped", 101);
+    const lease = await workers.acquire({
+      root: "/capped",
+      rootType: "git",
+      ttlMs: 10_000,
+      start: async () => capped,
+    });
+    if (lease.ok) await lease.value.release();
+
+    capped.triggerClose("worker RSS 101 exceeded 100 bytes for 2 samples");
+
+    expect(workers.getDiagnostics()[0]).toMatchObject({
+      state: "dead",
+      terminationReason: "worker RSS 101 exceeded 100 bytes for 2 samples",
+      resources: { rssBytes: 101, processCount: 1 },
+    });
+    await workers.closeAll();
+  });
+
+  test("retains shared supervisor telemetry when exit events lose their payload", async () => {
+    const workers = new WorkerPool<SearchBackendRuntime>({
+      maxWorkers: 1,
+      maxNonGitWorkers: 1,
+      sweepIntervalMs: 60_000,
+      restartBackoffMs: 100,
+    });
+    let closeHandler: ((reason?: string) => void) | undefined;
+    let resources: WorkerResourceUsage | null = {
+      sampledAt: 1,
+      rssBytes: 101,
+      processCount: 5,
+    };
+    const supervision = {
+      resources,
+      terminationReason: null as string | null,
+    };
+    const capped: SearchBackendRuntime = {
+      id: "capped",
+      supervision,
+      async close() {},
+      onClose(handler) {
+        closeHandler = handler;
+        return () => {
+          closeHandler = undefined;
+        };
+      },
+      getResourceUsage: () => resources,
+      getTerminationReason: () => undefined,
+    };
+    const lease = await workers.acquire({
+      root: "/capped",
+      rootType: "git",
+      ttlMs: 10_000,
+      start: async () => capped,
+    });
+    if (lease.ok) await lease.value.release();
+
+    supervision.terminationReason = "worker RSS 101 exceeded 100 bytes for 2 samples";
+    resources = null;
+    closeHandler?.();
+
+    const diagnostic = JSON.parse(JSON.stringify(workers.getDiagnostics()[0])) as Record<
+      string,
+      unknown
+    >;
+    expect(diagnostic).toMatchObject({
+      state: "dead",
+      lastUsedAt: expect.any(Number),
+      failureCount: 1,
+      terminationReason: "worker RSS 101 exceeded 100 bytes for 2 samples",
+      resources: { rssBytes: 101, processCount: 5 },
+    });
     await workers.closeAll();
   });
 });

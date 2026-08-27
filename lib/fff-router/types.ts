@@ -137,11 +137,22 @@ export type RouterConfig = {
   allowlistedNonGitPrefixes: AllowlistedPrefix[];
   warmRoots: string[];
   ttl: { gitMs: number; nonGitMs: number };
-  limits: { maxWorkers: number; maxNonGitWorkers: number };
+  limits: {
+    maxWorkers: number;
+    maxNonGitWorkers: number;
+    maxWorkerRssBytes?: number;
+    maxTotalWorkerRssBytes?: number;
+  };
   runtime: {
     toolTimeoutMs: number;
     sweepIntervalMs: number;
     restartBackoffMs: number;
+    restartBackoffMaxMs?: number;
+    processSampleIntervalMs?: number;
+    processShutdownGraceMs?: number;
+    processKillGraceMs?: number;
+    workerOrphanIdleTimeoutMs?: number;
+    daemonIdleTimeoutMs?: number;
   };
 };
 
@@ -168,11 +179,33 @@ export type WorkerDiagnostic = {
   lastErrorAt?: number;
   failureCount: number;
   retryAfter?: number;
+  resources?: WorkerResourceUsage;
+  terminationReason?: string;
 };
 
 export type RouterStatus = {
   workers: WorkerDiagnostic[];
   limits: RouterConfig["limits"];
+  resources?: {
+    sampledAt: number;
+    daemonRssBytes: number;
+    workerRssBytes: number;
+    totalRssBytes: number;
+    measuredWorkers: number;
+  };
+};
+
+export type WorkerResourceUsage = {
+  sampledAt: number;
+  rssBytes: number;
+  cpuTimeMs?: number;
+  threads?: number;
+  processCount?: number;
+};
+
+export type WorkerSupervisionTelemetry = {
+  resources: WorkerResourceUsage | null;
+  terminationReason: string | null;
 };
 
 export interface RouterService {

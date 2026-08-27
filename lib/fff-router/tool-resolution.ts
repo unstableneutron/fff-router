@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { constants as fsConstants, accessSync, existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { Readable } from "node:stream";
@@ -32,8 +32,8 @@ function managedInstallPath(env: NodeJS.ProcessEnv): string {
 
 function isExecutable(pathValue: string): boolean {
   try {
-    accessSync(pathValue, fsConstants.X_OK);
-    return true;
+    const stats = statSync(pathValue);
+    return stats.isFile() && (process.platform === "win32" || (stats.mode & 0o111) !== 0);
   } catch {
     return false;
   }
